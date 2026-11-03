@@ -61,4 +61,6 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
 (windowed and headless) work on desktop, and the player app builds for Android and iOS. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
-Licence: MIT OR Apache-2.0 (open question in the design).
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
