@@ -15,6 +15,10 @@ cargo run -p wp_cli -- --project examples/sandbox run      # opens a window; W/S
 ```
 
 To see what a scenario looks like at a moment, use `wp shot` and open the PNG.
+
+Live control: `wp serve` (JSON-RPC on stdin/stdout), `wp run --control 0` (a window plus a
+localhost port), or `wp mcp` (MCP server). Call `rpc.methods` first. Register the MCP server
+with Claude Code: `claude mcp add waypoint -- <repo>/target/debug/wp --project <game dir> mcp`.
 Render tests skip themselves when no GPU adapter exists.
 
 The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`.
@@ -34,6 +38,7 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
 | `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
 | `wp_platform` | Window, keyboard driving, fixed-timestep interactive loop (winit) |
+| `wp_control` | Control protocol: JSON-RPC 2.0 sessions (query, drive, step, snapshot, screenshot), TCP transport |
 | `waypoint` | `DefaultPlugins`, project loader, prelude |
 | `wp_cli` | The `wp` command and the error-code catalogue |
 
@@ -57,7 +62,8 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
 
 Done: ECS, scheduler, plugins, data + schemas, planar vehicle physics at 480 Hz, scenario tests,
 the wgpu renderer (procedural sky, gridded ground, blob shadows, lit instanced vehicles, 4× MSAA),
-`wp shot`, windowed `wp run` with keyboard driving, and
+`wp shot`, windowed `wp run` with keyboard driving, world snapshots, the control protocol
+(`wp serve`, `wp run --control`), the MCP server (`wp mcp`), and
 `wp new/check/schema/docs/run/test/systems/plugins/vehicle test`.
 Not yet: Android and iOS builds; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
-ABS and traction control; the control protocol and MCP server (M1).
+ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

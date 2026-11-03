@@ -125,7 +125,8 @@ pub fn prepare(
         )
     })?;
     let mut app = make_app();
-    app.world.insert_resource(SimRng::new(s.seed));
+    app.world
+        .insert_reflected_resource("SimRng", SimRng::new(s.seed));
     wp_world::apply_scene(&mut app.world, input.scene);
     let (pos, heading) = wp_world::spawn_transform(spawn);
     let player = wp_vehicle::spawn_vehicle(&mut app.world, input.vehicle, pos, heading);

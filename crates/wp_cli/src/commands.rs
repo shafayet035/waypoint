@@ -171,7 +171,10 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
   wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera, R reset, P pause
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
+  wp run --control <port>      also accept control-protocol requests on 127.0.0.1:<port> (0 = any free port)
   wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
+  wp serve [drive opts]        control protocol (JSON-RPC 2.0) on stdin/stdout, one request per line
+  wp mcp                       Model Context Protocol server on stdin/stdout (tools, resources, screenshots)
   wp test [filter]             run scenario tests; exit 1 if any fail
   wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
   wp systems                   resolved system schedule
@@ -181,7 +184,11 @@ Drive options (run and shot): --scenario NAME, or --scene PATH --spawn NAME --ve
   --throttle 0..1 --brake 0..1 --steer -1..1 --seed N
 
 Agent loop: edit a file → wp check --json → wp test --json → on failure, wp shot --scenario <name> --at <t>
-and look at the image → fix.
+and look at the image → fix. For live work, `wp serve` or `wp mcp`, then call rpc.methods.
+
+Control protocol methods: rpc.methods, sim.status, sim.step, sim.pause, sim.resume, sim.snapshot,
+sim.restore, world.entities, world.get, world.set, world.find, world.spawn, world.despawn,
+world.resources, input.set, vehicle.telemetry, render.screenshot.
 ";
 
 const DOCS_SCENARIO: &str = "\
@@ -260,29 +267,29 @@ pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
 // ---- wp run / wp shot --------------------------------------------------------
 
 /// What to drive: shared by `wp run` and `wp shot`.
-#[derive(clap::Args, Clone)]
+#[derive(clap::Args, Clone, Default)]
 pub struct DriveArgs {
     /// Use a scenario's scene, vehicle, spawn and driver instead of constant inputs.
     #[arg(long)]
-    scenario: Option<String>,
+    pub(crate) scenario: Option<String>,
     /// Scene path; defaults to game.toml start_scene.
     #[arg(long)]
-    scene: Option<String>,
+    pub(crate) scene: Option<String>,
     /// Spawn point; defaults to the scene's first.
     #[arg(long)]
-    spawn: Option<String>,
+    pub(crate) spawn: Option<String>,
     /// Vehicle name; defaults to the first vehicle.
     #[arg(long)]
-    vehicle: Option<String>,
+    pub(crate) vehicle: Option<String>,
     #[arg(long, default_value_t = 0.0)]
-    throttle: f32,
+    pub(crate) throttle: f32,
     #[arg(long, default_value_t = 0.0)]
-    brake: f32,
+    pub(crate) brake: f32,
     /// -1 (full right) to 1 (full left).
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
-    steer: f32,
+    pub(crate) steer: f32,
     #[arg(long, default_value_t = 0)]
-    seed: u64,
+    pub(crate) seed: u64,
 }
 
 #[derive(clap::Args)]
@@ -305,8 +312,17 @@ pub struct RunArgs {
     /// Close the window after this many real seconds (for smoke tests).
     #[arg(long)]
     exit_after: Option<f32>,
+    /// Accept control-protocol requests on 127.0.0.1:<port> while the window runs (0 = any free port).
+    #[arg(long)]
+    control: Option<u16>,
     #[command(flatten)]
     drive: DriveArgs,
+}
+
+#[derive(clap::Args)]
+pub struct ServeArgs {
+    #[command(flatten)]
+    pub(crate) drive: DriveArgs,
 }
 
 #[derive(clap::Args)]
@@ -391,7 +407,8 @@ fn setup_drive(ctx: &Ctx, project: &Project, args: &DriveArgs) -> Result<Drive, 
 
     let mut app = make_app();
     app.finish().map_err(|d| vec![d])?;
-    app.world.insert_resource(SimRng::new(args.seed));
+    app.world
+        .insert_reflected_resource("SimRng", SimRng::new(args.seed));
     waypoint::world::apply_scene(&mut app.world, scene);
     let (pos, heading) = waypoint::world::spawn_transform(spawn);
     let player = waypoint::vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
@@ -428,15 +445,26 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
 
     if !args.headless {
         let camera = camera_mode(&args.camera)?;
+        let control = match args.control {
+            Some(port) => {
+                let (rx, addr) = wp_control::tcp::listen(port).map_err(|d| vec![d])?;
+                eprintln!(
+                    "control protocol listening on {addr} (JSON-RPC 2.0, one request per line)"
+                );
+                Some(rx)
+            }
+            None => None,
+        };
+        let session = wp_control::Session::new(app, Some(player), vehicle_map(&project));
         let summary = wp_platform::run_windowed(
-            app,
-            Some(player),
+            session,
             wp_platform::WindowOptions {
                 title: format!("Waypoint · {}", project.game.value.name),
                 width: 1280,
                 height: 720,
                 camera,
                 exit_after_s: args.exit_after,
+                control,
             },
         )
         .map_err(|d| vec![d])?;
@@ -497,6 +525,51 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
             tel.position[1],
             tel.heading_deg
         );
+    }
+    Ok(0)
+}
+
+pub(crate) fn vehicle_map(project: &Project) -> std::collections::BTreeMap<String, VehicleDef> {
+    project
+        .vehicles
+        .iter()
+        .map(|(k, v)| (k.clone(), v.value.clone()))
+        .collect()
+}
+
+/// A control session for `drive`, used by `wp serve` and the MCP server.
+pub(crate) fn make_session(
+    ctx: &Ctx,
+    drive: &DriveArgs,
+) -> Result<wp_control::Session, Vec<Diagnostic>> {
+    let project = load_project(ctx)?;
+    let Drive { app, player, .. } = setup_drive(ctx, &project, drive)?;
+    Ok(wp_control::Session::new(
+        app,
+        Some(player),
+        vehicle_map(&project),
+    ))
+}
+
+/// `wp serve`: JSON-RPC 2.0 on stdin/stdout, one request per line. Nothing else
+/// is written to stdout, so any JSON-RPC client can talk to it.
+pub fn serve(ctx: &Ctx, args: &ServeArgs) -> CmdResult {
+    use std::io::{BufRead, Write};
+    let mut session = make_session(ctx, &args.drive)?;
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(resp) = session.handle_line(&line)
+            && writeln!(stdout, "{resp}")
+                .and_then(|_| stdout.flush())
+                .is_err()
+            {
+                break;
+            }
     }
     Ok(0)
 }

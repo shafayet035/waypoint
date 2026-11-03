@@ -71,7 +71,7 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         let mut world = World::new();
-        world.insert_resource(SimTime::default());
+        world.insert_reflected_resource("SimTime", SimTime::default());
         Self {
             world,
             schedule: Schedule::new(),

@@ -149,6 +149,86 @@ fn shot_writes_a_png_of_a_scenario() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Send JSON lines to a long-running `wp` subcommand and collect the responses.
+fn converse(dir: &Path, args: &[&str], requests: &[Value]) -> Vec<Value> {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_wp"))
+        .current_dir(dir)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        for r in requests {
+            writeln!(stdin, "{r}").unwrap();
+        }
+    }
+    let out = child.wait_with_output().unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn serve_speaks_json_rpc_and_replays_snapshots() {
+    let req = |id: u64, method: &str, params: Value| serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let r = converse(
+        &repo().join("examples/sandbox"),
+        &["serve"],
+        &[
+            req(
+                1,
+                "input.set",
+                serde_json::json!({ "throttle": 1.0, "steer": 0.2 }),
+            ),
+            req(2, "sim.snapshot", serde_json::json!({})),
+            req(3, "sim.step", serde_json::json!({ "seconds": 2 })),
+            req(4, "sim.restore", serde_json::json!({ "id": 0 })),
+            req(5, "sim.step", serde_json::json!({ "seconds": 2 })),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "sim.step" }),
+            req(6, "rpc.methods", serde_json::json!({})),
+            req(7, "world.get", serde_json::json!({ "entity": "42v0" })),
+        ],
+    );
+    assert_eq!(r.len(), 7, "the notification must not get a reply");
+    assert_eq!(r[2]["result"]["state_hash"], r[4]["result"]["state_hash"]);
+    assert_eq!(r[2]["result"]["tick"], 120);
+    assert!(r[5]["result"].as_array().unwrap().len() >= 15);
+    assert_eq!(r[6]["error"]["data"]["code"], "WP-K001");
+}
+
+#[test]
+fn mcp_lists_tools_and_runs_check() {
+    let r = converse(
+        &repo().join("examples/sandbox"),
+        &["mcp"],
+        &[
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } } }),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "check", "arguments": {} } }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "session_start", "arguments": { "throttle": 1.0 } } }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "session_call", "arguments": { "method": "sim.step", "params": { "ticks": 60 } } } }),
+        ],
+    );
+    assert_eq!(r.len(), 5);
+    assert_eq!(r[0]["result"]["protocolVersion"], "2025-06-18");
+    let tools: Vec<&str> = r[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(tools.contains(&"screenshot") && tools.contains(&"session_call"));
+    assert_eq!(r[2]["result"]["isError"], false);
+    let status: Value =
+        serde_json::from_str(r[4]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(status["tick"], 60);
+}
+
 #[test]
 fn bad_camera_is_a_coded_error() {
     let (code, v) = json(

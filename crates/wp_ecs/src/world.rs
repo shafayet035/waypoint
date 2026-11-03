@@ -2,6 +2,7 @@ use crate::entity::Entities;
 use crate::query::{Query, QueryParam};
 use crate::storage::{AnyStorage, Storage};
 use crate::{Component, Entity};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::any::{Any, TypeId};
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{BTreeMap, HashMap};
@@ -19,6 +20,29 @@ pub struct World {
     // Name → TypeId, iterated in name order for reflection.
     names: BTreeMap<&'static str, TypeId>,
     resources: HashMap<TypeId, RefCell<Box<dyn Any>>>,
+    // Resources that take part in snapshots, by name.
+    reflected: BTreeMap<&'static str, ResourceReflect>,
+}
+
+struct ResourceReflect {
+    get: fn(&World) -> Option<serde_json::Value>,
+    set: fn(&mut World, serde_json::Value) -> Result<(), String>,
+}
+
+/// The complete simulation state: entity allocator, every component (in
+/// storage order) and every reflected resource. Restoring a snapshot and
+/// ticking gives bit-identical results to the original run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldSnapshot {
+    entities: Entities,
+    components: BTreeMap<String, Vec<(Entity, serde_json::Value)>>,
+    resources: BTreeMap<String, serde_json::Value>,
+}
+
+impl WorldSnapshot {
+    pub fn entity_count(&self) -> usize {
+        self.entities.len()
+    }
 }
 
 impl World {
@@ -186,6 +210,93 @@ impl World {
         })
     }
 
+    /// Insert a resource that is included in snapshots under `name`.
+    pub fn insert_reflected_resource<R: Serialize + DeserializeOwned + 'static>(
+        &mut self,
+        name: &'static str,
+        r: R,
+    ) {
+        self.insert_resource(r);
+        self.reflected.insert(
+            name,
+            ResourceReflect {
+                get: |w| {
+                    w.get_resource::<R>()
+                        .map(|r| serde_json::to_value(&*r).expect("resource serializes"))
+                },
+                set: |w, v| {
+                    let r: R = serde_json::from_value(v).map_err(|e| e.to_string())?;
+                    w.insert_resource(r);
+                    Ok(())
+                },
+            },
+        );
+    }
+
+    /// Names of resources included in snapshots.
+    pub fn reflected_resource_names(&self) -> Vec<&'static str> {
+        self.reflected.keys().copied().collect()
+    }
+
+    pub fn get_resource_json(&self, name: &str) -> Option<serde_json::Value> {
+        self.reflected.get(name).and_then(|r| (r.get)(self))
+    }
+
+    // ---- snapshots ------------------------------------------------------
+
+    pub fn snapshot(&self) -> WorldSnapshot {
+        let mut components = BTreeMap::new();
+        for (name, id) in &self.names {
+            components.insert((*name).to_string(), self.storages[id].borrow().dump_json());
+        }
+        let mut resources = BTreeMap::new();
+        for (name, r) in &self.reflected {
+            if let Some(v) = (r.get)(self) {
+                resources.insert((*name).to_string(), v);
+            }
+        }
+        WorldSnapshot {
+            entities: self.entities.clone(),
+            components,
+            resources,
+        }
+    }
+
+    /// Replace all entities, components and reflected resources with `snap`.
+    /// Component types and resources must already be registered (plugins do this).
+    pub fn restore(&mut self, snap: &WorldSnapshot) -> Result<(), String> {
+        for name in snap.components.keys() {
+            if !self.names.contains_key(name.as_str()) {
+                return Err(format!(
+                    "snapshot has component `{name}`, which is not registered here"
+                ));
+            }
+        }
+        for name in snap.resources.keys() {
+            if !self.reflected.contains_key(name.as_str()) {
+                return Err(format!(
+                    "snapshot has resource `{name}`, which is not registered here"
+                ));
+            }
+        }
+        for s in self.storages.values() {
+            s.borrow_mut().clear();
+        }
+        self.entities = snap.entities.clone();
+        for (name, list) in &snap.components {
+            let id = self.names[name.as_str()];
+            let mut storage = self.storages[&id].borrow_mut();
+            for (e, v) in list {
+                storage.set_json(*e, v.clone())?;
+            }
+        }
+        for (name, v) in &snap.resources {
+            let set = self.reflected[name.as_str()].set;
+            set(self, v.clone())?;
+        }
+        Ok(())
+    }
+
     // ---- reflection -----------------------------------------------------
 
     /// Registered component names in sorted order.
@@ -347,6 +458,32 @@ mod tests {
         let a = w.spawn();
         w.insert(a, Pos(0.0, 0.0));
         w.query::<(&mut Pos, &Pos)>().for_each(|_, _| {});
+    }
+
+    #[test]
+    fn snapshot_restores_exact_state() {
+        let mut w = World::new();
+        w.insert_reflected_resource("Counter", 1u32);
+        let a = w.spawn();
+        let b = w.spawn();
+        w.insert(a, Pos(1.0, 1.0));
+        w.insert(b, Pos(2.0, 2.0));
+        w.insert(b, Vel(0.5, 0.0));
+        let snap = w.snapshot();
+        let before = w.state_hash();
+
+        w.despawn(a);
+        let c = w.spawn();
+        w.insert(c, Pos(9.0, 9.0));
+        *w.resource_mut::<u32>() = 7;
+        assert_ne!(w.state_hash(), before);
+
+        w.restore(&snap).unwrap();
+        assert_eq!(w.state_hash(), before);
+        assert_eq!(*w.resource::<u32>(), 1);
+        assert_eq!(w.query::<&Pos>().entities(), vec![a, b]);
+        // The allocator is restored too: the next spawn reuses nothing.
+        assert_eq!(w.spawn().index(), 2);
     }
 
     #[test]

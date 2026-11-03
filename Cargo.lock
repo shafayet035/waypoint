@@ -2816,9 +2816,28 @@ dependencies = [
  "serde",
  "serde_json",
  "waypoint",
+ "wp_control",
  "wp_platform",
  "wp_render",
  "wp_rhi",
+]
+
+[[package]]
+name = "wp_control"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
+ "wp_app",
+ "wp_core",
+ "wp_data",
+ "wp_ecs",
+ "wp_physics",
+ "wp_render",
+ "wp_rhi",
+ "wp_vehicle",
+ "wp_world",
 ]
 
 [[package]]
@@ -2868,7 +2887,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "winit",
- "wp_app",
+ "wp_control",
  "wp_core",
  "wp_ecs",
  "wp_physics",

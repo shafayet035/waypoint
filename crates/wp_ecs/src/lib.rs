@@ -36,7 +36,7 @@ pub use query::{Query, QueryParam};
 pub use schedule::{Schedule, ScheduleError, Stage, SystemBuilder, SystemInfo};
 #[doc(hidden)]
 pub use storage::Storage;
-pub use world::World;
+pub use world::{World, WorldSnapshot};
 
 use serde::{Serialize, de::DeserializeOwned};
 

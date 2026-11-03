@@ -123,12 +123,11 @@ impl Plugin for PhysicsPlugin {
         w.register::<Pose>();
         w.register::<Velocity>();
         w.register::<RigidBody>();
-        if !w.has_resource::<Gravity>() {
-            w.insert_resource(Gravity::default());
-        }
-        if !w.has_resource::<Ground>() {
-            w.insert_resource(Ground::default());
-        }
+        // Keep values a scene may already have set; register them for snapshots.
+        let gravity = w.remove_resource::<Gravity>().unwrap_or_default();
+        w.insert_reflected_resource("Gravity", gravity);
+        let ground = w.remove_resource::<Ground>().unwrap_or_default();
+        w.insert_reflected_resource("Ground", ground);
         app.add_system(Stage::Physics, "integrate_bodies", integrate_bodies)
             .reads::<RigidBody>()
             .writes::<Pose>()

@@ -70,6 +70,9 @@ impl<T> Storage<T> {
 /// Type-erased access used by the world for despawning and reflection.
 pub(crate) trait AnyStorage: Any {
     fn remove_entity(&mut self, e: Entity);
+    fn clear(&mut self);
+    /// (owner, value) pairs in dense (iteration) order.
+    fn dump_json(&self) -> Vec<(Entity, serde_json::Value)>;
     fn contains(&self, e: Entity) -> bool;
     fn get_json(&self, e: Entity) -> Option<serde_json::Value>;
     fn set_json(&mut self, e: Entity, v: serde_json::Value) -> Result<(), String>;
@@ -78,6 +81,23 @@ pub(crate) trait AnyStorage: Any {
 }
 
 impl<T: Component> AnyStorage for Storage<T> {
+    fn clear(&mut self) {
+        self.dense.clear();
+        self.owners.clear();
+        self.sparse.clear();
+    }
+    fn dump_json(&self) -> Vec<(Entity, serde_json::Value)> {
+        self.owners
+            .iter()
+            .zip(&self.dense)
+            .map(|(e, v)| {
+                (
+                    *e,
+                    serde_json::to_value(v).expect("component serializes to JSON"),
+                )
+            })
+            .collect()
+    }
     fn remove_entity(&mut self, e: Entity) {
         self.remove(e);
     }

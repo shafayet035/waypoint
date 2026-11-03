@@ -79,6 +79,41 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Point start_scene at a .scene.ron file, relative to the project root.",
     },
     ErrorDoc {
+        code: "WP-K001",
+        title: "The control request names an entity that does not exist",
+        fix: "Call world.entities for valid ids (strings like \"3v0\"), or omit `entity` to use the player.",
+    },
+    ErrorDoc {
+        code: "WP-K003",
+        title: "world.spawn names an unknown vehicle",
+        fix: "Use a vehicle name from the project's vehicles/ folder.",
+    },
+    ErrorDoc {
+        code: "WP-K004",
+        title: "No snapshot with that id, or it could not be restored",
+        fix: "Use an id returned by sim.snapshot in this session.",
+    },
+    ErrorDoc {
+        code: "WP-K005",
+        title: "A component value could not be set",
+        fix: "Read the current value with world.get and send the same shape; use merge: true to change single fields.",
+    },
+    ErrorDoc {
+        code: "WP-K006",
+        title: "sim.step asked for too many ticks at once",
+        fix: "Step at most 36000 ticks (10 minutes) per call.",
+    },
+    ErrorDoc {
+        code: "WP-K007",
+        title: "The entity lacks the component or is not a vehicle",
+        fix: "Check its components with world.get.",
+    },
+    ErrorDoc {
+        code: "WP-K010",
+        title: "The control port could not be opened",
+        fix: "Pick another port with --control <port>, or 0 for any free port.",
+    },
+    ErrorDoc {
         code: "WP-P001",
         title: "A window could not be opened",
         fix: "Run on a machine with a display, or use `wp run --headless` / `wp shot`.",

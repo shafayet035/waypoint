@@ -3,10 +3,12 @@
 //! The simulation always advances in whole 60 Hz ticks (so it stays
 //! deterministic); rendering runs at display rate and only reads the world.
 //! Controls: W/↑ throttle, S/↓ brake, A/← and D/→ steer, C camera,
-//! R reset, P pause, Esc quit.
+//! R reset, P pause, Esc quit. A control client (`wp run --control <port>`)
+//! can query and drive the same session while it runs.
 
 use serde::Serialize;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -14,13 +16,13 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
-use wp_app::App;
+use wp_control::{Session, tcp::Pending};
 use wp_core::Diagnostic;
 use wp_ecs::Entity;
 use wp_physics::{Pose, Velocity};
 use wp_render::{CameraMode, Renderer, extract};
 use wp_rhi::{Gpu, GpuInfo, wgpu};
-use wp_vehicle::{Vehicle, VehicleInput, VehicleLibrary};
+use wp_vehicle::{Vehicle, VehicleInput};
 
 pub struct WindowOptions {
     pub title: String,
@@ -29,39 +31,42 @@ pub struct WindowOptions {
     pub camera: CameraMode,
     /// Close automatically after this many real seconds (for smoke tests).
     pub exit_after_s: Option<f32>,
+    /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
+    pub control: Option<Receiver<Pending>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WindowSummary {
     pub frames: u64,
     pub ticks: u64,
+    pub control_requests: u64,
     pub real_seconds: f64,
     pub sim_seconds: f64,
     pub gpu: Option<GpuInfo>,
 }
 
-/// Run `app` in a window until the user closes it. `player` receives keyboard input.
+/// Run a session in a window until the user closes it. The session's player
+/// receives keyboard input; control requests are answered between frames.
 pub fn run_windowed(
-    app: App,
-    player: Option<Entity>,
-    opts: WindowOptions,
+    session: Session,
+    mut opts: WindowOptions,
 ) -> Result<WindowSummary, Diagnostic> {
     let event_loop = EventLoop::new().map_err(|e| {
         Diagnostic::error("WP-P001", format!("cannot open a window: {e}"))
             .help("use --headless on machines without a display")
     })?;
-    let reset = player.and_then(|p| snapshot(&app, p));
+    let reset = session.player.and_then(|p| snapshot(&session, p));
     let mut handler = Handler {
-        app,
-        player,
+        control: opts.control.take(),
+        camera: opts.camera,
+        session,
+        requests: 0,
         reset,
         opts,
         gfx: None,
         error: None,
         keys: Keys::default(),
         input: VehicleInput::default(),
-        camera: CameraMode::Chase,
-        paused: false,
         started: Instant::now(),
         last: Instant::now(),
         accumulator: 0.0,
@@ -69,7 +74,6 @@ pub fn run_windowed(
         ticks: 0,
         last_title: Instant::now(),
     };
-    handler.camera = handler.opts.camera;
     event_loop
         .run_app(&mut handler)
         .map_err(|e| Diagnostic::error("WP-P002", format!("window loop failed: {e}")))?;
@@ -79,8 +83,9 @@ pub fn run_windowed(
     Ok(WindowSummary {
         frames: handler.frames,
         ticks: handler.ticks,
+        control_requests: handler.requests,
         real_seconds: handler.started.elapsed().as_secs_f64(),
-        sim_seconds: handler.app.time().seconds(),
+        sim_seconds: handler.session.app.time().seconds(),
         gpu: handler.gfx.as_ref().map(|g| g.gpu.info()),
     })
 }
@@ -101,19 +106,24 @@ struct Keys {
     right: bool,
 }
 
+impl Keys {
+    fn any(&self) -> bool {
+        self.throttle || self.brake || self.left || self.right
+    }
+}
+
 /// Pose and part state to restore on R.
 type Snapshot = (Pose, Vehicle);
 
-fn snapshot(app: &App, e: Entity) -> Option<Snapshot> {
-    Some((
-        *app.world.get::<Pose>(e)?,
-        app.world.get::<Vehicle>(e)?.clone(),
-    ))
+fn snapshot(session: &Session, e: Entity) -> Option<Snapshot> {
+    let w = &session.app.world;
+    Some((*w.get::<Pose>(e)?, w.get::<Vehicle>(e)?.clone()))
 }
 
 struct Handler {
-    app: App,
-    player: Option<Entity>,
+    session: Session,
+    control: Option<Receiver<Pending>>,
+    requests: u64,
     reset: Option<Snapshot>,
     opts: WindowOptions,
     gfx: Option<Gfx>,
@@ -121,7 +131,6 @@ struct Handler {
     keys: Keys,
     input: VehicleInput,
     camera: CameraMode,
-    paused: bool,
     started: Instant,
     last: Instant,
     accumulator: f64,
@@ -177,7 +186,7 @@ impl Handler {
             KeyCode::KeyA | KeyCode::ArrowLeft => self.keys.left = down,
             KeyCode::KeyD | KeyCode::ArrowRight => self.keys.right = down,
             KeyCode::KeyC if down && !event.repeat => self.camera = self.camera.next(),
-            KeyCode::KeyP if down && !event.repeat => self.paused = !self.paused,
+            KeyCode::KeyP if down && !event.repeat => self.session.paused = !self.session.paused,
             KeyCode::KeyR if down && !event.repeat => self.reset_player(),
             KeyCode::Escape if down => event_loop.exit(),
             _ => {}
@@ -185,13 +194,14 @@ impl Handler {
     }
 
     fn reset_player(&mut self) {
-        let (Some(e), Some((pose, vehicle))) = (self.player, self.reset.clone()) else {
+        let (Some(e), Some((pose, vehicle))) = (self.session.player, self.reset.clone()) else {
             return;
         };
-        let w = &mut self.app.world;
+        let w = &mut self.session.app.world;
         w.insert(e, pose);
         w.insert(e, Velocity::default());
         w.insert(e, vehicle);
+        w.insert(e, VehicleInput::default());
         self.input = VehicleInput::default();
     }
 
@@ -213,22 +223,35 @@ impl Handler {
         self.input.steer = approach(self.input.steer, steer_target, rate);
     }
 
+    /// Answer every waiting control request before this frame's ticks.
+    fn serve_control(&mut self) {
+        let Some(rx) = &self.control else { return };
+        while let Ok(p) = rx.try_recv() {
+            self.requests += 1;
+            let _ = p.reply.send(self.session.handle_line(&p.line));
+        }
+    }
+
     fn frame(&mut self) {
         let now = Instant::now();
         let real_dt = (now - self.last).as_secs_f64().min(0.25);
         self.last = now;
-        let tick_dt = self.app.time().dt() as f64;
-        if !self.paused {
+        self.serve_control();
+        let tick_dt = self.session.app.time().dt() as f64;
+        if !self.session.paused {
             self.accumulator += real_dt;
             let mut steps = 0;
             while self.accumulator >= tick_dt && steps < 8 {
                 self.update_input(tick_dt as f32);
-                if let Some(e) = self.player
-                    && let Some(mut i) = self.app.world.get_mut::<VehicleInput>(e)
+                // The keyboard drives only while it is in use, so a control client can drive too.
+                let keyboard_active = self.keys.any() || self.input != VehicleInput::default();
+                if keyboard_active
+                    && let Some(e) = self.session.player
+                    && let Some(mut i) = self.session.app.world.get_mut::<VehicleInput>(e)
                 {
                     *i = self.input;
                 }
-                self.app.tick();
+                self.session.app.tick();
                 self.ticks += 1;
                 self.accumulator -= tick_dt;
                 steps += 1;
@@ -238,7 +261,7 @@ impl Handler {
             }
         }
 
-        let frame = extract(&self.app.world, self.camera);
+        let frame = extract(&self.session.app.world, self.camera);
         let Some(gfx) = self.gfx.as_mut() else { return };
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)
@@ -258,9 +281,10 @@ impl Handler {
 
         if self.last_title.elapsed().as_secs_f32() > 0.2 {
             self.last_title = Instant::now();
-            let status = self
-                .player
-                .and_then(|e| wp_vehicle::telemetry(&self.app.world, e))
+            let w = &self.session.app.world;
+            let player = self.session.player;
+            let status = player
+                .and_then(|e| wp_vehicle::telemetry(w, e))
                 .map(|t| {
                     format!(
                         "{:.0} km/h · gear {} · {:.0} rpm · lat {:+.2} g",
@@ -268,17 +292,14 @@ impl Handler {
                     )
                 })
                 .unwrap_or_default();
-            let model = self
-                .player
-                .and_then(|e| self.app.world.get::<Vehicle>(e).map(|v| v.model.clone()))
-                .filter(|m| {
-                    self.app
-                        .world
-                        .get_resource::<VehicleLibrary>()
-                        .is_some_and(|l| l.0.contains_key(m))
-                })
+            let model = player
+                .and_then(|e| w.get::<Vehicle>(e).map(|v| v.model.clone()))
                 .unwrap_or_default();
-            let paused = if self.paused { " · PAUSED" } else { "" };
+            let paused = if self.session.paused {
+                " · PAUSED"
+            } else {
+                ""
+            };
             gfx.window.set_title(&format!(
                 "{} · {model} · {status} · camera {:?}{paused}   [W/S drive, A/D steer, C camera, R reset, P pause]",
                 self.opts.title, self.camera

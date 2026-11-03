@@ -8,11 +8,11 @@ license.workspace = true
 [dependencies]
 wp_core.workspace = true
 wp_ecs.workspace = true
-wp_app.workspace = true
 wp_physics.workspace = true
 wp_vehicle.workspace = true
 wp_rhi.workspace = true
 wp_render.workspace = true
+wp_control.workspace = true
 winit.workspace = true
 serde.workspace = true
 

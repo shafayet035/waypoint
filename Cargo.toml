@@ -34,6 +34,7 @@ waypoint = { path = "crates/waypoint" }
 wp_rhi = { path = "crates/wp_rhi" }
 wp_render = { path = "crates/wp_render" }
 wp_platform = { path = "crates/wp_platform" }
+wp_control = { path = "crates/wp_control" }
 
 [profile.dev]
 opt-level = 1

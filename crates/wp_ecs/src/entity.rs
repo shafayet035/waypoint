@@ -43,7 +43,7 @@ impl std::str::FromStr for Entity {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Entities {
     generations: Vec<u32>,
     alive: Vec<bool>,

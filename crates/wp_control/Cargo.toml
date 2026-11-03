@@ -1,0 +1,25 @@
+[package]
+name = "wp_control"
+description = "The control protocol: JSON-RPC 2.0 sessions to query, drive, step, snapshot and screenshot a running simulation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_physics.workspace = true
+wp_vehicle.workspace = true
+wp_world.workspace = true
+wp_rhi.workspace = true
+wp_render.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+wp_data.workspace = true

@@ -18,6 +18,17 @@ cd my_game
 ../target/debug/wp run        # drive in a window: W/S throttle-brake, A/D steer, C camera, R reset
 ```
 
+## Use it from Claude Code (MCP)
+
+```sh
+cargo build
+claude mcp add waypoint -- "$PWD/target/debug/wp" --project "$PWD/examples/sandbox" mcp
+```
+
+Claude then gets tools to check and test the project, take screenshots, and drive a live
+simulation (`session_start`, `session_call` with control-protocol methods such as `sim.step`,
+`input.set`, `world.find`, `render.screenshot`).
+
 ## Status
 
 Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
