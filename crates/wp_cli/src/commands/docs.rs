@@ -9,7 +9,7 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
 
   wp new <dir>                 create a project from the sandbox template
   wp check                     validate all files (schemas + cross-references)
-  wp schema <type>             JSON Schema: game | vehicle | scene | scenario
+  wp schema <type>             JSON Schema: game | vehicle | trailer | road | scene | scenario
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
   wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera, R reset, P pause
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
@@ -19,6 +19,9 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp mcp                       Model Context Protocol server on stdin/stdout (tools, resources, screenshots)
   wp test [filter]             run scenario tests; exit 1 if any fail
   wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
+  wp import osm <file.osm> --name N [--drive-side right|left] [--lang en] [--force]
+                               OpenStreetMap → roads/N.road.ron + scenes/N.scene.ron (spawn \"start\");
+                               export an area at openstreetmap.org (Export → .osm). Keep the ODbL credit.
   wp systems                   resolved system schedule
   wp plugins                   loaded plugins in load order
 

@@ -140,7 +140,13 @@ impl DriverState {
             return stop;
         }
         let path = progress.path.clone();
-        let (s, lateral, _) = path.project(pose.position);
+        // Track progress near where we were, so a route that passes the same
+        // place twice (round a block and back) is followed in order.
+        let (s, lateral, _) = path.project_between(
+            pose.position,
+            progress.s - TRACK_BACK_M,
+            progress.s + TRACK_AHEAD_M,
+        );
         progress.s = s;
         progress.lateral = lateral;
         let remaining = path.length() - s;
@@ -150,7 +156,7 @@ impl DriverState {
         }
         let speed = forward_kmh.max(0.0) / 3.6;
         let front_axle = pose.position + pose.forward() * to_front_axle;
-        let steer = stanley_steering(&path, front_axle, pose.heading, speed);
+        let steer = stanley_steering(&path, front_axle, pose.heading, speed, s);
         let target = route_speed_kmh(&path, s, kmh, remaining);
         let (throttle, brake) = speed_control(&mut self.integral, target, forward_kmh, dt);
         VehicleInput {
@@ -270,14 +276,14 @@ fn plan_route(world: &World, position: Vec2, to_road: &str) -> RouteProgress {
         return fail("the scene has no road network".into());
     };
     let net = &roads.0;
-    let Some((lane, _, _)) = net.lane_at(position) else {
+    let Some((lane, start_s, _)) = net.lane_at(position) else {
         return fail("the vehicle is not on a road lane".into());
     };
     let Some(route) = net.route(lane, to_road) else {
         return fail(format!("no route to road `{to_road}`"));
     };
     // Drive to the middle of the last lane.
-    let mut path = net.route_path(&route);
+    let mut path = net.route_path(&route, start_s);
     if let Some(&last) = route.last() {
         let tail = net.lanes[last].path.length() / 2.0;
         path = path.trim(0.0, tail);
@@ -291,13 +297,27 @@ fn plan_route(world: &World, position: Vec2, to_road: &str) -> RouteProgress {
     }
 }
 
+/// How far behind and ahead of the last known progress a route follower
+/// looks for itself on the path, m.
+const TRACK_BACK_M: f32 = 5.0;
+const TRACK_AHEAD_M: f32 = 25.0;
+
 /// Stanley path tracking (Thrun et al., 2006): steer by the heading error at
 /// the front axle plus a cross-track term that fades with speed. Returns the
 /// front-wheel angle, rad, + left.
-pub fn stanley_steering(path: &Polyline, front_axle: Vec2, heading: f32, speed: f32) -> f32 {
+/// `near_s` is the vehicle's progress along the path; the front axle is
+/// projected onto the path just around it.
+pub fn stanley_steering(
+    path: &Polyline,
+    front_axle: Vec2,
+    heading: f32,
+    speed: f32,
+    near_s: f32,
+) -> f32 {
     const GAIN: f32 = 1.2;
     const SOFTENING: f32 = 1.0; // m/s, keeps the term finite at standstill
-    let (s, lateral, _) = path.project(front_axle);
+    let (s, lateral, _) =
+        path.project_between(front_axle, near_s - TRACK_BACK_M, near_s + TRACK_AHEAD_M);
     let (_, dir) = path.sample(s + 0.5);
     let heading_error = wrap(dir.y.atan2(dir.x) - heading);
     // `lateral` is + when the axle is left of the path: steer right to return.
@@ -476,11 +496,11 @@ mod tests {
     fn stanley_steers_back_towards_the_path() {
         let path = Polyline::new(vec![Vec2::ZERO, Vec2::new(100.0, 0.0)]);
         // Left of the path, pointing along it: steer right (negative).
-        assert!(stanley_steering(&path, Vec2::new(10.0, 1.0), 0.0, 10.0) < 0.0);
+        assert!(stanley_steering(&path, Vec2::new(10.0, 1.0), 0.0, 10.0, 10.0) < 0.0);
         // On the path but angled left: steer right to align.
-        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.2, 10.0) < 0.0);
+        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.2, 10.0, 10.0) < 0.0);
         // Perfectly on it: no steering.
-        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.0, 10.0).abs() < 1e-5);
+        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.0, 10.0, 10.0).abs() < 1e-5);
     }
 
     #[test]

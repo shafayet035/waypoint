@@ -128,6 +128,16 @@ pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// Serialise a value as pretty RON, the format project files use.
+pub fn to_ron<T: serde::Serialize>(value: &T) -> Result<String, Diagnostic> {
+    let config = ron::ser::PrettyConfig::new()
+        .escape_strings(false)
+        .depth_limit(6)
+        .indentor("  ".to_string());
+    ron::ser::to_string_pretty(value, config)
+        .map_err(|e| Diagnostic::error("WP-D004", format!("cannot write RON: {e}")))
+}
+
 /// The JSON Schema of a data type, as pretty JSON.
 pub fn schema_json<T: JsonSchema>() -> String {
     serde_json::to_string_pretty(&schemars::schema_for!(T)).expect("schema serializes")
@@ -193,5 +203,19 @@ mod tests {
     #[test]
     fn line_col_counts_from_one() {
         assert_eq!(line_col("ab\ncd", 3), (2, 1));
+    }
+
+    #[test]
+    fn to_ron_round_trips_unicode_and_quotes() {
+        #[derive(serde::Serialize, Deserialize, PartialEq, Debug)]
+        struct Road {
+            name: String,
+        }
+        let road = Road {
+            name: "গুলশান \"এভিনিউ\" \\ 1".to_string(),
+        };
+        let text = to_ron(&road).unwrap();
+        assert!(text.contains("গুলশান"), "written unescaped: {text}");
+        assert_eq!(parse_ron::<Road>("r.ron", &text).unwrap(), road);
     }
 }

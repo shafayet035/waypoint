@@ -39,7 +39,23 @@ pub struct Lane {
     pub speed_limit_kmh: f32,
     /// Lanes a vehicle can continue into from this lane's end.
     pub next: Vec<LaneId>,
+    /// Neighbouring lanes in the same direction a vehicle can change into
+    /// (empty on roads shorter than [`MIN_LANE_CHANGE_M`]).
+    pub changes: Vec<LaneId>,
 }
+
+/// Radius of the kerb at junction corners, m: turning paths are at least this
+/// plus half a lane, wider than a car's or bus's tightest turn.
+pub const KERB_RADIUS_M: f32 = 6.0;
+
+/// Junction paths tighter than this are not offered, m (a hatchback turns in
+/// about 5.5 m).
+const MIN_TURN_RADIUS_M: f32 = 5.0;
+
+/// Shortest lane on which a lane change is planned, m.
+pub const MIN_LANE_CHANGE_M: f32 = 30.0;
+/// Routing penalty for one lane change, s (it is slower and riskier than staying).
+const LANE_CHANGE_PENALTY_S: f32 = 4.0;
 
 /// A road's drawable geometry after trimming at junctions.
 #[derive(Clone, Debug)]
@@ -111,21 +127,13 @@ impl RoadNetwork {
             if ends.len() < 2 {
                 continue;
             }
-            let radius = ends
-                .iter()
-                .map(|(ri, _, _)| half_width(&full[*ri].0))
-                .fold(0.0, f32::max)
-                + 1.0;
-            let trim = if ends.len() == 2 {
-                // A bend: trim in proportion to how sharply the roads meet.
-                let straightness = (-ends[0].2.dot(ends[1].2)).clamp(-1.0, 1.0);
-                radius * (1.0 - straightness).min(1.0) + 0.2
-            } else {
-                radius
-            };
-            for (ri, starts_here, _) in ends {
+            let need = junction_clearance(ends, |ri| half_width(&full[ri].0));
+            // Junctions get a margin for the crossing; a bend between two
+            // roads only needs to clear the inside corner.
+            let margin = if ends.len() == 2 { 0.2 } else { 1.0 };
+            for (k, (ri, starts_here, _)) in ends.iter().enumerate() {
                 let len = full[*ri].1.length();
-                let t = trim.min(len * 0.45);
+                let t = (need[k] + margin).min(len * 0.45);
                 if *starts_here {
                     trim_start[*ri] = t;
                 } else {
@@ -148,6 +156,11 @@ impl RoadNetwork {
             } else {
                 (r.lanes_backward as f32 * w, r.lanes_forward as f32 * w)
             };
+            // A one-way road's line is the middle of its carriageway (as in
+            // OpenStreetMap), so shift its lanes to straddle it (+ = left).
+            let shift = (right_m - left_m) / 2.0
+                * (r.lanes_forward == 0 || r.lanes_backward == 0) as u8 as f32;
+            let (left_m, right_m) = (left_m + shift, right_m - shift);
             for i in 0..r.lanes_forward {
                 lanes.push(Lane {
                     name: format!("{}:f{i}", r.id),
@@ -156,10 +169,11 @@ impl RoadNetwork {
                         forward: true,
                         index: i,
                     },
-                    path: centre.offset(-side * (i as f32 + 0.5) * w),
+                    path: centre.offset(shift - side * (i as f32 + 0.5) * w),
                     width_m: w,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
+                    changes: Vec::new(),
                 });
             }
             for i in 0..r.lanes_backward {
@@ -170,10 +184,13 @@ impl RoadNetwork {
                         forward: false,
                         index: i,
                     },
-                    path: centre.offset(side * (i as f32 + 0.5) * w).reversed(),
+                    path: centre
+                        .offset(shift + side * (i as f32 + 0.5) * w)
+                        .reversed(),
                     width_m: w,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
+                    changes: Vec::new(),
                 });
             }
             roads.push(RoadGeometry {
@@ -182,6 +199,38 @@ impl RoadNetwork {
                 left_m,
                 right_m,
             });
+        }
+
+        // Lanes of each road, and lane changes between neighbours.
+        let mut road_lanes: Vec<Vec<LaneId>> = vec![Vec::new(); roads.len()];
+        for (id, lane) in lanes.iter().enumerate() {
+            if let LaneKind::Road { road, .. } = lane.kind {
+                road_lanes[road].push(id);
+            }
+        }
+        for ids in &road_lanes {
+            for &a in ids {
+                for &b in ids {
+                    if let (
+                        LaneKind::Road {
+                            forward: fa,
+                            index: ia,
+                            ..
+                        },
+                        LaneKind::Road {
+                            forward: fb,
+                            index: ib,
+                            ..
+                        },
+                    ) = (lanes[a].kind, lanes[b].kind)
+                        && fa == fb
+                        && ia.abs_diff(ib) == 1
+                        && lanes[a].path.length() >= MIN_LANE_CHANGE_M
+                    {
+                        lanes[a].changes.push(b);
+                    }
+                }
+            }
         }
 
         // Junction connectors.
@@ -209,8 +258,8 @@ impl RoadNetwork {
                 });
             }
             // Lanes arriving at / leaving this node.
-            let arriving: Vec<LaneId> = lane_ids_at(&lanes, &roads, ends, false);
-            let leaving: Vec<LaneId> = lane_ids_at(&lanes, &roads, ends, true);
+            let arriving: Vec<LaneId> = lane_ids_at(&lanes, &road_lanes, ends, false);
+            let leaving: Vec<LaneId> = lane_ids_at(&lanes, &road_lanes, ends, true);
             let mut k = 0;
             for &inn in &arriving {
                 for &out in &leaving {
@@ -268,6 +317,10 @@ impl RoadNetwork {
                     }
                     let a = lanes[inn].path.points.last().copied().unwrap_or(p);
                     let b = lanes[out].path.points.first().copied().unwrap_or(p);
+                    let path = connector(a, t_in, b, t_out, 10);
+                    if min_radius(&path) < MIN_TURN_RADIUS_M {
+                        continue; // tighter than a car can turn (a U-turn through a narrow median)
+                    }
                     let id = lanes.len();
                     let speed = lanes[inn].speed_limit_kmh.min(if turn == Turn::Straight {
                         50.0
@@ -277,10 +330,11 @@ impl RoadNetwork {
                     lanes.push(Lane {
                         name: format!("{}>{k}", def.nodes[node].id),
                         kind: LaneKind::Connector { node, turn },
-                        path: connector(a, t_in, b, t_out, 10),
+                        path,
                         width_m: lanes[inn].width_m,
                         speed_limit_kmh: speed,
                         next: vec![out],
+                        changes: Vec::new(),
                     });
                     lanes[inn].next.push(id);
                     k += 1;
@@ -317,6 +371,8 @@ impl RoadNetwork {
 
     /// Fastest lane sequence from `from` to any lane of road `to_road`
     /// (A* on travel time; straight-line distance at 50 km/h as the heuristic).
+    /// Consecutive lanes are joined by a connector or, on the same road, by a
+    /// lane change.
     pub fn route(&self, from: LaneId, to_road: &str) -> Option<Vec<LaneId>> {
         let goal_road = self.roads.iter().position(|r| r.def.id == to_road)?;
         let is_goal = |l: LaneId| matches!(self.lanes[l].kind, LaneKind::Road { road, .. } if road == goal_road);
@@ -363,8 +419,13 @@ impl RoadNetwork {
                 path.reverse();
                 return Some(path);
             }
-            for &n in &self.lanes[l].next {
-                let g = best[l] + cost(l);
+            let follow = self.lanes[l].next.iter().map(|&n| (n, cost(l)));
+            let change = self.lanes[l]
+                .changes
+                .iter()
+                .map(|&n| (n, LANE_CHANGE_PENALTY_S));
+            for (n, step) in follow.chain(change) {
+                let g = best[l] + step;
                 if g < best[n] {
                     best[n] = g;
                     came[n] = l;
@@ -375,11 +436,170 @@ impl RoadNetwork {
         None
     }
 
-    /// The centre path of a lane sequence, joined end to end.
-    pub fn route_path(&self, route: &[LaneId]) -> Polyline {
-        let parts: Vec<&Polyline> = route.iter().map(|&l| &self.lanes[l].path).collect();
-        Polyline::concat(&parts)
+    /// The largest set of lanes that can all reach each other (the largest
+    /// strongly connected component of the lane graph), in lane order. Good
+    /// spawn points live here: from them, every lane in the set is routable.
+    pub fn largest_connected(&self) -> Vec<LaneId> {
+        let n = self.lanes.len();
+        let succ = |l: LaneId| {
+            self.lanes[l]
+                .next
+                .iter()
+                .chain(&self.lanes[l].changes)
+                .copied()
+        };
+        let mut pred: Vec<Vec<LaneId>> = vec![Vec::new(); n];
+        for l in 0..n {
+            for m in succ(l) {
+                pred[m].push(l);
+            }
+        }
+        // Kosaraju: finish order on the graph, then components on its reverse.
+        let mut order = Vec::with_capacity(n);
+        let mut seen = vec![false; n];
+        for root in 0..n {
+            if seen[root] {
+                continue;
+            }
+            seen[root] = true;
+            let mut stack = vec![(root, succ(root).collect::<Vec<_>>())];
+            while let Some((l, rest)) = stack.last_mut() {
+                if let Some(m) = rest.pop() {
+                    if !seen[m] {
+                        seen[m] = true;
+                        stack.push((m, succ(m).collect()));
+                    }
+                } else {
+                    order.push(*l);
+                    stack.pop();
+                }
+            }
+        }
+        let mut comp = vec![usize::MAX; n];
+        let mut sizes = Vec::new();
+        for &root in order.iter().rev() {
+            if comp[root] != usize::MAX {
+                continue;
+            }
+            let c = sizes.len();
+            let mut size = 0;
+            let mut stack = vec![root];
+            comp[root] = c;
+            while let Some(l) = stack.pop() {
+                size += 1;
+                for &m in &pred[l] {
+                    if comp[m] == usize::MAX {
+                        comp[m] = c;
+                        stack.push(m);
+                    }
+                }
+            }
+            sizes.push(size);
+        }
+        let Some(big) = (0..sizes.len()).max_by_key(|&c| (sizes[c], usize::MAX - c)) else {
+            return Vec::new();
+        };
+        (0..n).filter(|&l| comp[l] == big).collect()
     }
+
+    /// The path a vehicle drives along a lane sequence, starting `start_s`
+    /// metres along the first lane. Lane changes blend smoothly into the next
+    /// lane, spread evenly over the rest of the road.
+    pub fn route_path(&self, route: &[LaneId], start_s: f32) -> Polyline {
+        let mut pts = Vec::new();
+        let mut i = 0;
+        while i < route.len() {
+            // A run of lanes on one road joined by lane changes.
+            let mut j = i;
+            while j + 1 < route.len() && self.lanes[route[j]].changes.contains(&route[j + 1]) {
+                j += 1;
+            }
+            let from_s = if i == 0 { start_s } else { 0.0 };
+            pts.extend(self.lane_change_path(&route[i..=j], from_s).points);
+            i = j + 1;
+        }
+        Polyline::new(pts)
+    }
+
+    /// Path along `run` (neighbouring lanes of one road), from `from_s` on the
+    /// first lane, changing lane `run.len() - 1` times with smoothstep blends.
+    fn lane_change_path(&self, run: &[LaneId], from_s: f32) -> Polyline {
+        let first = &self.lanes[run[0]].path;
+        let len0 = first.length();
+        let from_s = from_s.clamp(0.0, len0);
+        if run.len() == 1 {
+            return first.slice(from_s, len0);
+        }
+        // Position on lane `k` at the point level with `s` on the first lane.
+        let on = |k: usize, s: f32| {
+            let p = &self.lanes[run[k]].path;
+            p.sample(s * p.length() / len0.max(1e-3)).0
+        };
+        let changes = run.len() - 1;
+        let share = (len0 - from_s) / changes as f32;
+        let blend = (share * 0.9).min(60.0);
+        let n = (((len0 - from_s) / 1.0).ceil() as usize).max(2);
+        Polyline::new(
+            (0..=n)
+                .map(|k| {
+                    let s = from_s + (len0 - from_s) * k as f32 / n as f32;
+                    let x = ((s - from_s) / share).min(changes as f32 - 1e-4);
+                    let c = x.floor() as usize; // change in progress
+                    let local = (x - c as f32) * share; // m into this share
+                    let u = ((local - (share - blend) / 2.0) / blend).clamp(0.0, 1.0);
+                    let w = u * u * (3.0 - 2.0 * u);
+                    on(c, s).lerp(on(c + 1, s), w)
+                })
+                .collect(),
+        )
+    }
+}
+
+/// How far each road end at a node must be cut back so its edge clears its
+/// neighbours' edges. `ends` are (road, starts here, direction leaving the
+/// node); `half_width(road)` is the road's half width, m.
+///
+/// For roads at angle θ (counter-clockwise from road i to road
+/// j), their facing edges cross at distance (w_i·cosθ + w_j) / sinθ along road
+/// i: w_j at a right angle, more for sharp angles, less for wide ones. A kerb
+/// of radius R between them starts R·cot(θ/2) further out. Roads almost
+/// opposite each other (a straight continuation) never cross.
+fn junction_clearance(ends: &[(usize, bool, Vec2)], half_width: impl Fn(usize) -> f32) -> Vec<f32> {
+    let mut need = vec![0.0f32; ends.len()];
+    // Every ordered pair: wide roads can reach past a narrow one between them.
+    let pairs = (0..ends.len()).flat_map(|i| (0..ends.len()).map(move |j| (i, j)));
+    for (i, j) in pairs.filter(|(i, j)| i != j) {
+        let mut theta = ends[i].2.angle_to(ends[j].2);
+        if theta <= 0.0 {
+            theta += std::f32::consts::TAU;
+        }
+        if theta > 160f32.to_radians() {
+            continue;
+        }
+        let (wi, wj) = (half_width(ends[i].0), half_width(ends[j].0));
+        let (sin, cos) = theta.sin_cos();
+        // Then room for a rounded kerb between the two edges.
+        let kerb = KERB_RADIUS_M / (theta / 2.0).tan();
+        need[i] = need[i].max((wi * cos + wj) / sin + kerb);
+        need[j] = need[j].max((wj * cos + wi) / sin + kerb);
+    }
+    need
+}
+
+/// Tightest radius of a path, m, from the turn between consecutive segments.
+fn min_radius(path: &Polyline) -> f32 {
+    let p = &path.points;
+    (1..p.len().saturating_sub(1))
+        .map(|i| {
+            let (a, b) = (p[i] - p[i - 1], p[i + 1] - p[i]);
+            let turn = a.angle_to(b).abs();
+            if turn < 1e-6 {
+                f32::INFINITY
+            } else {
+                (a.length() + b.length()) / 2.0 / turn
+            }
+        })
+        .fold(f32::INFINITY, f32::min)
 }
 
 fn lane_count(def: &RoadDef, kind: LaneKind) -> u8 {
@@ -394,17 +614,14 @@ fn lane_count(def: &RoadDef, kind: LaneKind) -> u8 {
 /// node's road ends.
 fn lane_ids_at(
     lanes: &[Lane],
-    roads: &[RoadGeometry],
+    road_lanes: &[Vec<LaneId>],
     ends: &[(usize, bool, Vec2)],
     leaving: bool,
 ) -> Vec<LaneId> {
-    let _ = roads;
     let mut out = Vec::new();
     for (ri, starts_here, _) in ends {
-        for (id, lane) in lanes.iter().enumerate() {
-            if let LaneKind::Road { road, forward, .. } = lane.kind
-                && road == *ri
-            {
+        for &id in &road_lanes[*ri] {
+            if let LaneKind::Road { forward, .. } = lanes[id].kind {
                 // A forward lane starts at the road's `from` node.
                 let starts_at_node = forward == *starts_here;
                 if starts_at_node == leaving {
@@ -498,7 +715,7 @@ mod tests {
         assert_eq!(names.first(), Some(&"south:f0"));
         assert_eq!(names.last(), Some(&"east:f0"));
         assert_eq!(names.len(), 3, "{names:?}");
-        let path = net.route_path(&route);
+        let path = net.route_path(&route, 0.0);
         assert!(
             path.length() > 180.0 && path.length() < 220.0,
             "len {}",
@@ -540,5 +757,26 @@ mod tests {
         let (lane, _, _) = net.lane_at(Vec2::new(50.0, -1.75)).unwrap();
         assert_eq!(net.lanes[lane].name, "east:f0");
         assert!(net.lane_at(Vec2::new(50.0, 30.0)).is_none());
+    }
+
+    #[test]
+    fn junction_clearance_grows_for_sharp_angles() {
+        let w = |_| 7.0;
+        let at = |deg: f32| Vec2::from_angle(deg.to_radians());
+        // Crossroads: each end clears its neighbour's half width.
+        let cross = [
+            (0, true, at(0.0)),
+            (1, true, at(90.0)),
+            (2, true, at(180.0)),
+            (3, true, at(270.0)),
+        ];
+        for n in junction_clearance(&cross, w) {
+            assert!((n - 7.0 - KERB_RADIUS_M).abs() < 1e-3, "{n}");
+        }
+        // A sharp 60° fork needs far more room; a straight bend needs none.
+        let fork = [(0, true, at(0.0)), (1, true, at(60.0))];
+        assert!(junction_clearance(&fork, w)[0] > 12.0 + KERB_RADIUS_M);
+        let straight = [(0, true, at(0.0)), (1, true, at(179.0))];
+        assert_eq!(junction_clearance(&straight, w), vec![0.0, 0.0]);
     }
 }

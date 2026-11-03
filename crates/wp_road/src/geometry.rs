@@ -147,8 +147,18 @@ impl Polyline {
 
     /// Closest point: (arc length, signed lateral offset (+ left), distance).
     pub fn project(&self, p: Vec2) -> (f32, f32, f32) {
-        let mut best = (0.0, 0.0, f32::INFINITY);
+        self.project_between(p, f32::NEG_INFINITY, f32::INFINITY)
+    }
+
+    /// Like [`Polyline::project`], but only onto the part between arc lengths
+    /// `from` and `to`. Followers use this to track progress, so a path that
+    /// passes the same place twice does not make them jump ahead.
+    pub fn project_between(&self, p: Vec2, from: f32, to: f32) -> (f32, f32, f32) {
+        let mut best = (from.max(0.0), 0.0, f32::INFINITY);
         for i in 1..self.points.len() {
+            if self.lengths[i] < from || self.lengths[i - 1] > to {
+                continue;
+            }
             let (a, b) = (self.points[i - 1], self.points[i]);
             let ab = b - a;
             let len2 = ab.length_squared();

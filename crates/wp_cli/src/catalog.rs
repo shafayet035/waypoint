@@ -64,6 +64,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Look at the line and column given; `wp schema game` shows the expected fields.",
     },
     ErrorDoc {
+        code: "WP-D004",
+        title: "Data could not be written as RON",
+        fix: "This is an engine bug; report it with the command you ran.",
+    },
+    ErrorDoc {
         code: "WP-G001",
         title: "No game.toml found",
         fix: "Run inside a project, pass --project <dir>, or create one with `wp new <name>`.",
@@ -112,6 +117,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-K007",
         title: "The entity lacks the component or is not a vehicle",
         fix: "Check its components with world.get.",
+    },
+    ErrorDoc {
+        code: "WP-I001",
+        title: "Map data could not be imported",
+        fix: "Give an OSM XML file (.osm) containing highway=* ways and the nodes they use; export a small area from openstreetmap.org or the Overpass API.",
     },
     ErrorDoc {
         code: "WP-K010",

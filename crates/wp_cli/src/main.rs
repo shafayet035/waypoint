@@ -60,6 +60,30 @@ enum Cmd {
     /// Vehicle tools.
     #[command(subcommand)]
     Vehicle(VehicleCmd),
+    /// Import map data into the project.
+    #[command(subcommand)]
+    Import(ImportCmd),
+}
+
+#[derive(Subcommand)]
+enum ImportCmd {
+    /// OpenStreetMap XML (.osm) → roads/<name>.road.ron + scenes/<name>.scene.ron.
+    Osm {
+        /// The .osm file (openstreetmap.org Export, or an Overpass API query).
+        file: PathBuf,
+        /// Name of the road network and scene.
+        #[arg(long)]
+        name: String,
+        /// Which side traffic drives on: right or left.
+        #[arg(long, default_value = "right")]
+        drive_side: String,
+        /// Prefer road names in this language (`name:<lang>` tags), e.g. en.
+        #[arg(long)]
+        lang: Option<String>,
+        /// Overwrite existing files.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -98,6 +122,13 @@ fn main() {
         Cmd::Test { filter } => commands::test(&ctx, filter.as_deref()),
         Cmd::Systems => commands::systems(&ctx),
         Cmd::Plugins => commands::plugins(&ctx),
+        Cmd::Import(ImportCmd::Osm {
+            file,
+            name,
+            drive_side,
+            lang,
+            force,
+        }) => commands::import_osm(&ctx, &file, &name, &drive_side, lang.as_deref(), force),
         Cmd::Vehicle(VehicleCmd::Test { name, manoeuvre }) => {
             commands::vehicle_test(&ctx, &name, &manoeuvre)
         }

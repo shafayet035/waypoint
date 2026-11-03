@@ -295,3 +295,119 @@ fn schemas_are_valid_json() {
         );
     }
 }
+
+/// A 3 × 3 grid of two-way streets about 110 m apart, as OSM XML, with one
+/// node outside the bounds (clipped) and a footway (ignored).
+fn grid_osm() -> String {
+    let mut xml = String::from(
+        "<?xml version=\"1.0\"?>\n<osm version=\"0.6\">\n\
+         <bounds minlat=\"23.7995\" minlon=\"90.3995\" maxlat=\"23.8025\" maxlon=\"90.4025\"/>\n",
+    );
+    for r in 0..3 {
+        for c in 0..3 {
+            xml += &format!(
+                "<node id=\"{}\" lat=\"{}\" lon=\"{}\"/>\n",
+                10 + r * 3 + c,
+                23.800 + r as f64 * 0.001,
+                90.400 + c as f64 * 0.001
+            );
+        }
+    }
+    xml += "<node id=\"99\" lat=\"23.800\" lon=\"90.410\"/>\n";
+    for r in 0..3 {
+        let ids: Vec<i32> = (0..3).map(|c| 10 + r * 3 + c).collect();
+        let extra = if r == 0 { "<nd ref=\"99\"/>" } else { "" };
+        xml += &format!(
+            "<way id=\"{}\"><nd ref=\"{}\"/><nd ref=\"{}\"/><nd ref=\"{}\"/>{extra}\
+             <tag k=\"highway\" v=\"residential\"/><tag k=\"name\" v=\"Row {r}\"/></way>\n",
+            100 + r,
+            ids[0],
+            ids[1],
+            ids[2]
+        );
+    }
+    for c in 0..3 {
+        xml += &format!(
+            "<way id=\"{}\"><nd ref=\"{}\"/><nd ref=\"{}\"/><nd ref=\"{}\"/>\
+             <tag k=\"highway\" v=\"residential\"/></way>\n",
+            200 + c,
+            10 + c,
+            13 + c,
+            16 + c
+        );
+    }
+    xml += "<way id=\"300\"><nd ref=\"10\"/><nd ref=\"18\"/><tag k=\"highway\" v=\"footway\"/></way>\n</osm>\n";
+    xml
+}
+
+#[test]
+fn import_osm_then_drive_a_route() {
+    let dir = temp_dir("osm");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    std::fs::write(dir.join("grid.osm"), grid_osm()).unwrap();
+    let osm = dir.join("grid.osm");
+    let osm = osm.to_str().unwrap();
+
+    let (code, v) = json(
+        &game,
+        &[
+            "import",
+            "osm",
+            osm,
+            "--name",
+            "grid",
+            "--drive-side",
+            "left",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["drivable_ways"], 6, "the footway is skipped: {v}");
+    assert_eq!(v["clipped_to_bounds"], true);
+    assert_eq!(
+        v["roads"], 12,
+        "each street splits at the two crossings inside it"
+    );
+    assert_eq!(
+        v["connected_roads"], 12,
+        "a grid of two-way streets is fully connected"
+    );
+    let roads = std::fs::read_to_string(game.join("roads/grid.road.ron")).unwrap();
+    assert!(
+        roads.contains("© OpenStreetMap contributors"),
+        "ODbL attribution"
+    );
+    assert!(roads.contains("drive_side: Left"));
+
+    // Importing again needs --force.
+    let (code, v) = json(&game, &["import", "osm", osm, "--name", "grid"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-C001");
+
+    // The imported map is a valid scene that a route driver can cross.
+    std::fs::write(
+        game.join("tests/grid_route.scenario.ron"),
+        r#"(
+  scene: "scenes/grid.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "start", driver: FollowRoute(to_road: "w102_1", kmh: 40.0)),
+  duration_s: 120.0,
+  assert: [RouteFollowed(max_offset_m: 0.6), NoNaN, Deterministic],
+)"#,
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["test", "grid_route"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["passed"], true);
+
+    // Not OSM at all: a coded import error.
+    std::fs::write(dir.join("empty.osm"), "<osm></osm>").unwrap();
+    let empty = dir.join("empty.osm");
+    let (code, v) = json(
+        &game,
+        &["import", "osm", empty.to_str().unwrap(), "--name", "x"],
+    );
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-I001");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

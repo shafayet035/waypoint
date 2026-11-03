@@ -18,6 +18,20 @@ cd my_game
 ../target/debug/wp run        # drive in a window: W/S throttle-brake, A/D steer, C camera, R reset
 ```
 
+## Real streets from OpenStreetMap
+
+Export an area at [openstreetmap.org](https://www.openstreetmap.org) (Export → `.osm`), then:
+
+```sh
+wp import osm map.osm --name gulshan --drive-side left --lang en
+wp run --scene scenes/gulshan.scene.ron        # drive it
+```
+
+This writes `roads/gulshan.road.ron` (lanes, one-ways, speed limits and names from the map) and a
+scene with a spawn point on the connected part of the network. Map data © OpenStreetMap
+contributors, under the [ODbL](https://www.openstreetmap.org/copyright); the attribution is kept in
+the generated files and must ship with your game.
+
 ## Use it from Claude Code (MCP)
 
 ```sh
@@ -58,8 +72,13 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 
 ## Status
 
-Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
-(windowed and headless) work on desktop, and the player app builds for Android and iOS. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
+- **M0 (foundations):** simulation core, data formats, CLI, wgpu renderer (windowed and headless),
+  control protocol and MCP server; the player app builds for Android and iOS.
+- **M1 (realistic drive):** suspension, rollover, ABS, air brakes, a city bus, and ECE R13 braking tests.
+- **M2 (in progress):** semi-trailers and reverse docking, road networks with routing and lane
+  changes, and OpenStreetMap import. Next: OpenDRIVE import.
+
+See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
 ## License
 

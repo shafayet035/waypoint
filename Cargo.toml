@@ -20,6 +20,7 @@ wgpu = "30"
 winit = { version = "0.30", features = ["android-native-activity"] }
 pollster = "1"
 png = "0.18"
+quick-xml = "0.42"
 bytemuck = { version = "1", features = ["derive"] }
 
 wp_core = { path = "crates/wp_core" }

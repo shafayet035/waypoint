@@ -12,6 +12,7 @@ cargo run -p wp_cli -- --project examples/sandbox test
 cargo run -p wp_cli -- --project examples/sandbox vehicle test hatchback
 cargo run -p wp_cli -- --project examples/sandbox shot --scenario skidpad --at 10s --camera showcase
 cargo run -p wp_cli -- --project examples/sandbox run      # opens a window; W/S/A/D to drive
+cargo run -p wp_cli -- --project <game> import osm map.osm --name town --drive-side left
 ```
 
 To see what a scenario looks like at a moment, use `wp shot` and open the PNG.
@@ -96,6 +97,10 @@ and regulation-based validation tests (ECE R13 braking, EU turning circle).
 M2 (in progress): pin joints, semi-trailers, reverse gear, tractor unit, docks and a reversing
 driver; the docking gate test passes (`truck_docking`). Road networks with lanes, junctions, routing
 and road meshes; a Stanley route follower passes the town route test (`town_route`, ≤ 0.2 m off
-lane centre). Still to do in M2: OpenStreetMap / OpenDRIVE import; lane changes and lane-drop tapers.
+lane centre). Routes change lanes (smooth blends on roads ≥ 30 m); junction corners are trimmed
+geometrically with 6 m kerb returns. `wp import osm` turns OpenStreetMap data into a road network
+and scene (clipped to the export bounds, one-way carriageways centred, left/right traffic); on a
+real Dhaka export, routes to 127 of 145 roads drive within 0.8 m of the lane centre (the rest are dead
+ends at the map edge). Still to do in M2: OpenDRIVE import; lane-drop tapers.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

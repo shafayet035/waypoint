@@ -129,24 +129,20 @@ pub fn build_meshes(net: &RoadNetwork) -> RoadMeshes {
                 line(&mut m.markings, &c, 0.0, true);
             }
         }
-        // Lane lines within each direction (the centreline already sits at
-        // offset 0; one-way roads have their lanes from the left edge).
-        let left_lanes = (road.left_m / w).round() as i32;
-        let right_lanes = (road.right_m / w).round() as i32;
-        for k in 1..left_lanes {
-            line(&mut m.markings, &c, k as f32 * w, true);
-        }
-        for k in 1..right_lanes {
-            line(&mut m.markings, &c, -(k as f32) * w, true);
-        }
-        if !two_way {
-            // One-way: lane lines are measured from the left edge.
-            let n = d.total_lanes() as i32;
-            for k in 1..n {
-                let off = road.left_m - k as f32 * w;
-                if off.abs() > 0.01 {
-                    line(&mut m.markings, &c, off, true);
-                }
+        if two_way {
+            // Lane lines within each direction (the centre line sits at 0).
+            let left_lanes = (road.left_m / w).round() as i32;
+            let right_lanes = (road.right_m / w).round() as i32;
+            for k in 1..left_lanes {
+                line(&mut m.markings, &c, k as f32 * w, true);
+            }
+            for k in 1..right_lanes {
+                line(&mut m.markings, &c, -(k as f32) * w, true);
+            }
+        } else {
+            // One-way: the carriageway is centred, lanes measured from the left edge.
+            for k in 1..d.total_lanes() {
+                line(&mut m.markings, &c, road.left_m - k as f32 * w, true);
             }
         }
         line(&mut m.markings, &c, road.left_m - 0.3, false);
