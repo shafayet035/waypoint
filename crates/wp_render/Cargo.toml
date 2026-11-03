@@ -11,6 +11,7 @@ wp_ecs.workspace = true
 wp_physics.workspace = true
 wp_vehicle.workspace = true
 wp_world.workspace = true
+wp_road.workspace = true
 wp_rhi.workspace = true
 glam.workspace = true
 bytemuck.workspace = true

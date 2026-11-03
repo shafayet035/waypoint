@@ -22,7 +22,14 @@ pub struct SceneDef {
     /// Loading docks a trailer can be reversed into.
     #[serde(default)]
     pub docks: Vec<DockDef>,
+    /// Road network file (`roads/<name>.road.ron`), relative to the project root.
+    #[serde(default)]
+    pub roads: Option<String>,
 }
+
+/// The current scene's road network, built once when the scene is applied.
+#[derive(Clone, Debug)]
+pub struct Roads(pub std::sync::Arc<wp_road::RoadNetwork>);
 
 /// A loading dock. A docked trailer has its rear at `position` and faces
 /// `heading_deg` (pointing out of the dock, towards the yard).
@@ -163,7 +170,15 @@ impl Component for Player {
 }
 
 /// Apply a scene's ground settings to the world.
-pub fn apply_scene(world: &mut World, scene: &SceneDef) {
+pub fn apply_scene(world: &mut World, scene: &SceneDef, roads: Option<&wp_road::RoadNetworkDef>) {
+    match roads {
+        Some(def) => {
+            world.insert_resource(Roads(std::sync::Arc::new(wp_road::RoadNetwork::build(def))))
+        }
+        None => {
+            world.remove_resource::<Roads>();
+        }
+    }
     world.insert_resource(Ground {
         friction_scale: scene.ground.friction_scale,
     });

@@ -16,6 +16,8 @@ pub struct ScenarioInput<'a> {
     pub scenario: &'a ScenarioDef,
     pub scene: &'a SceneDef,
     pub vehicle: &'a VehicleDef,
+    /// The scene's road network, if it has one.
+    pub roads: Option<&'a wp_road::RoadNetworkDef>,
     /// Semi-trailer to couple to the player, if the scenario names one.
     pub trailer: Option<&'a wp_vehicle::TrailerDef>,
 }
@@ -88,6 +90,9 @@ struct Sample {
 
 struct Run {
     samples: Vec<Sample>,
+    /// Largest |offset| from the route centre while following it, whether it
+    /// finished, and why no route was found (if so).
+    route: Option<(f32, bool, Option<String>)>,
     docks: Vec<wp_world::DockDef>,
     /// World hash at every whole second.
     trace: Vec<String>,
@@ -155,7 +160,7 @@ pub fn prepare(
     let mut app = make_app();
     app.world
         .insert_reflected_resource("SimRng", SimRng::new(s.seed));
-    wp_world::apply_scene(&mut app.world, input.scene);
+    wp_world::apply_scene(&mut app.world, input.scene, input.roads);
     let (pos, heading) = wp_world::spawn_transform(spawn);
     let player = wp_vehicle::spawn_vehicle(&mut app.world, input.vehicle, pos, heading);
     if s.player.initial_kmh > 0.0 {
@@ -190,6 +195,9 @@ pub fn prepare(
         let t = w.resource::<SimTime>().seconds() as f32;
         let dt = w.resource::<SimTime>().dt();
         let input = driver.next(t, dt, w, player);
+        if let Some(progress) = driver.route_progress() {
+            w.insert_resource(progress.clone());
+        }
         if let Some(mut i) = w.get_mut::<VehicleInput>(player) {
             *i = input;
         }
@@ -217,6 +225,11 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     let mut last_pos = start_pos;
     let mut nan_at = None;
     let mut event_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let (mut route_worst, mut route_finished, mut route_error): (
+        Option<f32>,
+        bool,
+        Option<String>,
+    ) = (None, false, None);
     let mut event_log = Vec::new();
     for tick in 1..=ticks {
         let input_now = app
@@ -235,6 +248,11 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
                     event_log.push(v);
                 }
             }
+        }
+        if let Some(p) = app.world.get_resource::<crate::drivers::RouteProgress>() {
+            route_worst = Some(route_worst.unwrap_or(0.0).max(p.lateral.abs()));
+            route_finished = p.finished;
+            route_error = p.error.clone();
         }
         let tel = wp_vehicle::telemetry(&app.world, player).expect("player has telemetry");
         let pose = *app.world.get::<Pose>(player).expect("player has a pose");
@@ -287,6 +305,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     };
     Ok(Run {
         samples,
+        route: route_worst.map(|w| (w, route_finished, route_error)),
         docks: input.scene.docks.clone(),
         trace,
         final_hash: app.world.state_hash(),
@@ -521,6 +540,22 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
                 ),
             )
         }
+        Assertion::RouteFollowed { max_offset_m } => match &run.route {
+            None => (false, "the driver is not FollowRoute".into()),
+            Some((_, _, Some(err))) => (false, format!("no route: {err}")),
+            Some((worst, finished, None)) => (
+                *finished && worst <= max_offset_m && m.final_speed_kmh < 0.5,
+                format!(
+                    "{} the route, at most {worst:.2} m off the lane centre, {:.1} km/h at the end",
+                    if *finished {
+                        "finished"
+                    } else {
+                        "did not finish"
+                    },
+                    m.final_speed_kmh
+                ),
+            ),
+        },
         Assertion::NoNaN => (run.nan_at.is_none(), "all values finite".into()),
         Assertion::Deterministic => unreachable!("handled by run_scenario"),
     }

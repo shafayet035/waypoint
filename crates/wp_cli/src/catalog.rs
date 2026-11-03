@@ -119,6 +119,46 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Pick another port with --control <port>, or 0 for any free port.",
     },
     ErrorDoc {
+        code: "WP-N001",
+        title: "A road network node is defined twice",
+        fix: "Give every node a unique id.",
+    },
+    ErrorDoc {
+        code: "WP-N002",
+        title: "A road is defined twice",
+        fix: "Give every road a unique id.",
+    },
+    ErrorDoc {
+        code: "WP-N003",
+        title: "A road refers to a node that does not exist",
+        fix: "Add the node to `nodes`, or fix the road's from/to.",
+    },
+    ErrorDoc {
+        code: "WP-N004",
+        title: "A road starts and ends at the same node",
+        fix: "Split a loop into two roads with a node in between.",
+    },
+    ErrorDoc {
+        code: "WP-N005",
+        title: "A road has no lanes",
+        fix: "Set lanes_forward and/or lanes_backward to at least 1.",
+    },
+    ErrorDoc {
+        code: "WP-N006",
+        title: "A road dimension is out of range",
+        fix: "lane_width_m 2–6, speed_limit_kmh 5–200, sidewalk_m ≥ 0.",
+    },
+    ErrorDoc {
+        code: "WP-N007",
+        title: "An arc's radius is too small for its endpoints",
+        fix: "Use |radius_m| of at least half the distance between the nodes.",
+    },
+    ErrorDoc {
+        code: "WP-W005",
+        title: "A scene refers to a road network that does not exist",
+        fix: "Point `roads` at a roads/<name>.road.ron file, relative to the project root.",
+    },
+    ErrorDoc {
         code: "WP-P001",
         title: "A window could not be opened",
         fix: "Run on a machine with a display, or use `wp run --headless` / `wp shot`.",

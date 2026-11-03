@@ -45,6 +45,14 @@ pub enum Driver {
         #[serde(default)]
         steer: f32,
     },
+    /// Drive along the road network to road `to_road`: plan a route from the
+    /// lane the vehicle starts in, follow it at up to `kmh` (slower in bends
+    /// and below lane speed limits), and stop at the end of the route.
+    FollowRoute {
+        to_road: String,
+        #[serde(default = "default_route_kmh")]
+        kmh: f32,
+    },
     /// Reverse the towed trailer into a scene dock and stop with its rear at
     /// the bumpers. Needs `player.trailer`. `kmh` is the reversing speed.
     ReverseToDock {
@@ -94,6 +102,9 @@ pub enum Assertion {
     NoEvent(String),
     /// At least one vehicle event of this kind happens to the player.
     ExpectEvent(String),
+    /// A `FollowRoute` driver reached the end of its route, never straying more
+    /// than `max_offset_m` from the centre of its lanes.
+    RouteFollowed { max_offset_m: f32 },
     /// At the end, the trailer's rear is within `max_offset_m` of the dock
     /// point, its heading within `max_angle_deg` of the dock's, and it is stopped.
     Docked {
@@ -113,6 +124,10 @@ pub enum Assertion {
     NoNaN,
     /// A second run with the same seed produces identical state hashes.
     Deterministic,
+}
+
+fn default_route_kmh() -> f32 {
+    40.0
 }
 
 fn default_dock_kmh() -> f32 {
@@ -147,6 +162,9 @@ impl Assertion {
                 max_angle_deg,
             } => {
                 format!("Docked({dock}, ≤ {max_offset_m} m, ≤ {max_angle_deg}°)")
+            }
+            Self::RouteFollowed { max_offset_m } => {
+                format!("RouteFollowed(≤ {max_offset_m} m off lane centre)")
             }
             Self::NoNaN => "NoNaN".into(),
             Self::Deterministic => "Deterministic".into(),

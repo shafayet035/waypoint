@@ -9,8 +9,23 @@ use crate::def::Driver;
 use wp_core::glam::Vec2;
 use wp_ecs::{Entity, World};
 use wp_physics::{PinJoint, Pose};
+use wp_road::Polyline;
 use wp_vehicle::{Trailer, TrailerLibrary, Vehicle, VehicleInput, VehicleLibrary};
-use wp_world::DockDef;
+use wp_world::{DockDef, Roads};
+
+/// Progress of a `FollowRoute` driver, published as a world resource each
+/// tick so the runner and agents can see it.
+#[derive(Clone, Debug)]
+pub struct RouteProgress {
+    pub path: std::sync::Arc<Polyline>,
+    /// Distance along the route, m.
+    pub s: f32,
+    /// Signed distance from the route centre, m (+ left).
+    pub lateral: f32,
+    pub finished: bool,
+    /// Why no route could be planned, if so.
+    pub error: Option<String>,
+}
 
 /// Per-scenario driver state.
 pub struct DriverState {
@@ -20,6 +35,7 @@ pub struct DriverState {
     integral: f32,
     phase: DockPhase,
     pull_ups: u32,
+    route: Option<RouteProgress>,
 }
 
 /// The docking manoeuvre's state.
@@ -47,6 +63,7 @@ impl DriverState {
             integral: 0.0,
             phase: DockPhase::Reversing,
             pull_ups: 0,
+            route: None,
         }
     }
 
@@ -78,6 +95,69 @@ impl DriverState {
             Driver::ReverseToDock { kmh, .. } => {
                 self.reverse_to_dock(kmh, forward_kmh, dt, world, player)
             }
+            Driver::FollowRoute { to_road, kmh } => {
+                self.follow_route(&to_road, kmh, forward_kmh, dt, world, player)
+            }
+        }
+    }
+
+    /// The route driver's progress, if this is a route driver.
+    pub fn route_progress(&self) -> Option<&RouteProgress> {
+        self.route.as_ref()
+    }
+
+    fn follow_route(
+        &mut self,
+        to_road: &str,
+        kmh: f32,
+        forward_kmh: f32,
+        dt: f32,
+        world: &World,
+        player: Entity,
+    ) -> VehicleInput {
+        let stop = VehicleInput {
+            brake: 1.0,
+            ..Default::default()
+        };
+        let Some(pose) = world.get::<Pose>(player).map(|p| *p) else {
+            return stop;
+        };
+        let model = world.get::<Vehicle>(player).map(|v| v.model.clone());
+        let dims = model.and_then(|m| {
+            world.get_resource::<VehicleLibrary>().and_then(|l| {
+                l.0.get(&m)
+                    .map(|d| (d.cg_to_front_axle_m, d.steering.max_angle_deg.to_radians()))
+            })
+        });
+        let Some((to_front_axle, max_steer)) = dims else {
+            return stop;
+        };
+        if self.route.is_none() {
+            self.route = Some(plan_route(world, pose.position, to_road));
+        }
+        let progress = self.route.as_mut().expect("planned above");
+        if progress.error.is_some() {
+            return stop;
+        }
+        let path = progress.path.clone();
+        let (s, lateral, _) = path.project(pose.position);
+        progress.s = s;
+        progress.lateral = lateral;
+        let remaining = path.length() - s;
+        if remaining < 1.0 || progress.finished {
+            progress.finished = true;
+            return stop;
+        }
+        let speed = forward_kmh.max(0.0) / 3.6;
+        let front_axle = pose.position + pose.forward() * to_front_axle;
+        let steer = stanley_steering(&path, front_axle, pose.heading, speed);
+        let target = route_speed_kmh(&path, s, kmh, remaining);
+        let (throttle, brake) = speed_control(&mut self.integral, target, forward_kmh, dt);
+        VehicleInput {
+            throttle,
+            brake,
+            steer: (steer / max_steer).clamp(-1.0, 1.0),
+            reverse: false,
         }
     }
 
@@ -175,6 +255,75 @@ impl DriverState {
             }
         }
     }
+}
+
+/// Plan from the lane under `position` to road `to_road`.
+fn plan_route(world: &World, position: Vec2, to_road: &str) -> RouteProgress {
+    let fail = |e: String| RouteProgress {
+        path: std::sync::Arc::new(Polyline::default()),
+        s: 0.0,
+        lateral: 0.0,
+        finished: false,
+        error: Some(e),
+    };
+    let Some(roads) = world.get_resource::<Roads>() else {
+        return fail("the scene has no road network".into());
+    };
+    let net = &roads.0;
+    let Some((lane, _, _)) = net.lane_at(position) else {
+        return fail("the vehicle is not on a road lane".into());
+    };
+    let Some(route) = net.route(lane, to_road) else {
+        return fail(format!("no route to road `{to_road}`"));
+    };
+    // Drive to the middle of the last lane.
+    let mut path = net.route_path(&route);
+    if let Some(&last) = route.last() {
+        let tail = net.lanes[last].path.length() / 2.0;
+        path = path.trim(0.0, tail);
+    }
+    RouteProgress {
+        path: std::sync::Arc::new(path),
+        s: 0.0,
+        lateral: 0.0,
+        finished: false,
+        error: None,
+    }
+}
+
+/// Stanley path tracking (Thrun et al., 2006): steer by the heading error at
+/// the front axle plus a cross-track term that fades with speed. Returns the
+/// front-wheel angle, rad, + left.
+pub fn stanley_steering(path: &Polyline, front_axle: Vec2, heading: f32, speed: f32) -> f32 {
+    const GAIN: f32 = 1.2;
+    const SOFTENING: f32 = 1.0; // m/s, keeps the term finite at standstill
+    let (s, lateral, _) = path.project(front_axle);
+    let (_, dir) = path.sample(s + 0.5);
+    let heading_error = wrap(dir.y.atan2(dir.x) - heading);
+    // `lateral` is + when the axle is left of the path: steer right to return.
+    heading_error + (-GAIN * lateral / (speed + SOFTENING)).atan()
+}
+
+/// Target speed: the requested speed, limited by bends ahead (2.5 m/s²
+/// lateral, comfortable for passengers) and by the distance left to stop.
+pub fn route_speed_kmh(path: &Polyline, s: f32, kmh: f32, remaining: f32) -> f32 {
+    const LATERAL: f32 = 2.5;
+    const BRAKING: f32 = 2.0;
+    let mut v = kmh / 3.6;
+    let mut d = 0.0;
+    while d < 40.0 {
+        let (_, t0) = path.sample(s + d);
+        let (_, t1) = path.sample(s + d + 5.0);
+        let curvature = t0.angle_to(t1).abs() / 5.0;
+        if curvature > 1e-4 {
+            // Speed allowed at that bend, and what we can brake down to it from here.
+            let bend = (LATERAL / curvature).sqrt();
+            v = v.min((bend * bend + 2.0 * BRAKING * d).sqrt());
+        }
+        d += 5.0;
+    }
+    v = v.min((2.0 * BRAKING * (remaining - 1.0).max(0.0)).sqrt() + 0.3);
+    v * 3.6
 }
 
 /// PI speed control on km/h error. Returns (throttle, brake).
@@ -321,6 +470,17 @@ mod tests {
         // Symmetry: the mirrored situation gives the mirrored command.
         let m = dock_steering(&geo(-3.0, 0.0, 0.0), Vec2::ZERO, Vec2::X);
         assert!((d + m).abs() < 1e-5);
+    }
+
+    #[test]
+    fn stanley_steers_back_towards_the_path() {
+        let path = Polyline::new(vec![Vec2::ZERO, Vec2::new(100.0, 0.0)]);
+        // Left of the path, pointing along it: steer right (negative).
+        assert!(stanley_steering(&path, Vec2::new(10.0, 1.0), 0.0, 10.0) < 0.0);
+        // On the path but angled left: steer right to align.
+        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.2, 10.0) < 0.0);
+        // Perfectly on it: no steering.
+        assert!(stanley_steering(&path, Vec2::new(10.0, 0.0), 0.0, 10.0).abs() < 1e-5);
     }
 
     #[test]

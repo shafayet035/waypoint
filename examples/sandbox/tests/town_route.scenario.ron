@@ -1,0 +1,19 @@
+// M2 roads gate: plan a route on the lane graph and drive it — straight over
+// the crossroads, round the arc and the curve — staying near the lane centre
+// (a 1.76 m car in a 3.5 m lane has 0.87 m to spare each side).
+(
+  scene: "scenes/town.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "avenue_start",
+    driver: FollowRoute(to_road: "east_curve", kmh: 50.0),
+  ),
+  duration_s: 120.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.6),
+    NoEvent("WheelLift"),
+    NoNaN,
+    Deterministic,
+  ],
+)

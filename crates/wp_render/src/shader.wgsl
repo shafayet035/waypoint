@@ -69,9 +69,9 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
 
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let near = g.inv_view_proj * vec4<f32>(in.ndc, 0.0, 1.0);
-    let far = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
-    let dir = normalize(far.xyz / far.w - near.xyz / near.w);
+    // A point on the near plane (depth 1 with reversed-Z), seen from the camera.
+    let p = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
+    let dir = normalize(p.xyz / p.w - g.camera_pos.xyz);
     return vec4<f32>(tonemap(sky_color(dir)), 1.0);
 }
 
@@ -219,7 +219,9 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
 
     let sun = g.sun_color.rgb * g.sun_dir.w;
     let diffuse = in.color * (1.0 - metal) * (sun * ndl + ambient(n));
-    let env = sky_color(reflect(-v, n)) * fresnel * (1.0 - rough * 0.9);
+    // Rough surfaces scatter the sky reflection away: fade it with roughness².
+    let gloss = (1.0 - rough) * (1.0 - rough);
+    let env = sky_color(reflect(-v, n)) * fresnel * gloss;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
     col += in.color * in.material.z;
     col = apply_fog(col, in.world);

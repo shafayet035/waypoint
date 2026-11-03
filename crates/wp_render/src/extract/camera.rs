@@ -14,13 +14,14 @@ pub struct Camera {
 
 impl Camera {
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        // wgpu clip space matches DirectX: y up, depth 0..1.
+        // wgpu clip space matches DirectX: y up, depth 0..1. Reversed-Z with an
+        // infinite far plane: depth 1 at the near plane, 0 at the horizon, which
+        // keeps precision even for road markings centimetres above the asphalt.
         let view = glam::camera::rh::view::look_at_mat4(self.eye, self.target, self.up);
-        let proj = glam::camera::rh::proj::directx::perspective(
+        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(
             self.fov_y_deg.to_radians(),
             aspect,
             0.1,
-            3000.0,
         );
         proj * view
     }

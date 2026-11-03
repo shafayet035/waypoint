@@ -51,6 +51,18 @@ struct InstanceRaw {
     material: [f32; 4],
 }
 
+struct RoadCache {
+    network: usize,
+    layers: Vec<GpuMesh>,
+}
+
+/// Materials of the road layers, in `wp_road::RoadMeshes` order.
+const ROAD_MATERIALS: [([f32; 3], f32); 3] = [
+    ([0.045, 0.046, 0.05], 0.85), // asphalt
+    ([0.78, 0.78, 0.76], 0.55),   // markings
+    ([0.26, 0.255, 0.24], 0.9),   // sidewalks
+];
+
 struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -103,6 +115,10 @@ pub struct Renderer {
     wheel: GpuMesh,
     instances: wgpu::Buffer,
     instance_capacity: usize,
+    /// Road meshes for the current network (asphalt, markings, sidewalks),
+    /// rebuilt only when the network changes.
+    roads: Option<RoadCache>,
+    road_instances: wgpu::Buffer,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
 }
@@ -224,7 +240,7 @@ impl Renderer {
             "fs_ground",
             &[],
             true,
-            wgpu::CompareFunction::Less,
+            wgpu::CompareFunction::Greater,
             None,
         );
         let meshes_pipeline = pipeline(
@@ -233,10 +249,31 @@ impl Renderer {
             "fs_mesh",
             &[Some(vertex_layout), Some(instance_layout)],
             true,
-            wgpu::CompareFunction::Less,
+            wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
         );
 
+        let road_instances = {
+            let raw: Vec<InstanceRaw> = ROAD_MATERIALS
+                .iter()
+                .map(|(c, rough)| InstanceRaw {
+                    model: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                    normal: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                    ],
+                    color: [c[0], c[1], c[2], 1.0],
+                    material: [*rough, 0.0, 0.0, 0.0],
+                })
+                .collect();
+            buffer_init(
+                gpu,
+                "road instances",
+                bytemuck::cast_slice(&raw),
+                wgpu::BufferUsages::VERTEX,
+            )
+        };
         let instance_capacity = 256;
         let instances = Self::instance_buffer(gpu, instance_capacity);
         let (msaa, depth) = Self::attachments(gpu, format, width, height);
@@ -253,6 +290,8 @@ impl Renderer {
             wheel: GpuMesh::new(gpu, &mesh::wheel(), "wheel"),
             instances,
             instance_capacity,
+            roads: None,
+            road_instances,
             msaa,
             depth,
         }
@@ -372,6 +411,7 @@ impl Renderer {
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(&all));
         }
 
+        self.update_roads(gpu, frame);
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -392,7 +432,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0), // reversed-Z: 0 is the far plane
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -407,6 +447,22 @@ impl Renderer {
             pass.set_pipeline(&self.ground);
             pass.draw(0..6, 0..1);
             pass.set_pipeline(&self.meshes_pipeline);
+            if let Some(cache) = &self.roads {
+                let stride = std::mem::size_of::<InstanceRaw>() as u64;
+                for (k, mesh) in cache.layers.iter().enumerate() {
+                    if mesh.index_count == 0 {
+                        continue;
+                    }
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.road_instances
+                            .slice(k as u64 * stride..(k as u64 + 1) * stride),
+                    );
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            }
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             let mut first = 0u64;
             for (mesh, count) in [
@@ -428,6 +484,44 @@ impl Renderer {
             }
         }
         gpu.queue.submit([encoder.finish()]);
+    }
+}
+
+impl Renderer {
+    /// Build GPU meshes for the frame's road network if it changed.
+    fn update_roads(&mut self, gpu: &Gpu, frame: &FrameView) {
+        let Some(net) = &frame.roads else {
+            self.roads = None;
+            return;
+        };
+        let id = std::sync::Arc::as_ptr(net) as usize;
+        if self.roads.as_ref().is_some_and(|c| c.network == id) {
+            return;
+        }
+        let meshes = wp_road::build_meshes(net);
+        let layers = [&meshes.asphalt, &meshes.markings, &meshes.sidewalks]
+            .into_iter()
+            .map(|m| {
+                let data = mesh::MeshData {
+                    vertices: m
+                        .positions
+                        .iter()
+                        .zip(&m.normals)
+                        .map(|(p, n)| mesh::Vertex {
+                            position: *p,
+                            normal: *n,
+                            tint: 0.0,
+                        })
+                        .collect(),
+                    indices: m.indices.clone(),
+                };
+                GpuMesh::new(gpu, &data, "road")
+            })
+            .collect();
+        self.roads = Some(RoadCache {
+            network: id,
+            layers,
+        });
     }
 }
 

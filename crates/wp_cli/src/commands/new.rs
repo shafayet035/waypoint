@@ -22,6 +22,18 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../../examples/sandbox/trailers/semi_trailer.trailer.ron"),
     ),
     (
+        "roads/town.road.ron",
+        include_str!("../../../../examples/sandbox/roads/town.road.ron"),
+    ),
+    (
+        "scenes/town.scene.ron",
+        include_str!("../../../../examples/sandbox/scenes/town.scene.ron"),
+    ),
+    (
+        "tests/town_route.scenario.ron",
+        include_str!("../../../../examples/sandbox/tests/town_route.scenario.ron"),
+    ),
+    (
         "scenes/yard.scene.ron",
         include_str!("../../../../examples/sandbox/scenes/yard.scene.ron"),
     ),

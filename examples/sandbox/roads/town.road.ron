@@ -1,0 +1,31 @@
+// A small town: a 4-lane avenue (west–east) with sidewalks, a crossroads at
+// "centre", a loop to the north-east (straight, arc and curve), and a curved
+// link from "south" back to the avenue's west end. Right-hand traffic.
+// River Bend and Old Quarry Road continue the avenue's four lanes: lane drops
+// (tapers) are not modelled yet, so lane counts only change at junctions.
+(
+  name: "town",
+  drive_side: Right,
+  nodes: [
+    (id: "west", position: (-150.0, 0.0)),
+    (id: "centre", position: (0.0, 0.0)),
+    (id: "east", position: (150.0, 0.0)),
+    (id: "north", position: (0.0, 120.0)),
+    (id: "northeast", position: (150.0, 120.0)),
+    (id: "south", position: (0.0, -120.0)),
+  ],
+  roads: [
+    (id: "avenue_west", name: Some("Station Avenue"), from: "west", to: "centre",
+     lanes_forward: 2, lanes_backward: 2, sidewalk_m: 3.0),
+    (id: "avenue_east", name: Some("Station Avenue"), from: "centre", to: "east",
+     lanes_forward: 2, lanes_backward: 2, sidewalk_m: 3.0),
+    (id: "north_road", name: Some("Mill Road"), from: "centre", to: "north", sidewalk_m: 2.0),
+    (id: "top_road", name: Some("Park Lane"), from: "north", to: "northeast",
+     shape: Arc(radius_m: 110.0), speed_limit_kmh: 40.0),
+    (id: "east_curve", name: Some("River Bend"), from: "northeast", to: "east",
+     shape: Curve(through: [(195.0, 60.0)]), lanes_forward: 2, lanes_backward: 2, speed_limit_kmh: 40.0),
+    (id: "south_road", name: Some("Market Street"), from: "centre", to: "south", sidewalk_m: 2.0),
+    (id: "southwest_link", name: Some("Old Quarry Road"), from: "south", to: "west",
+     shape: Curve(through: [(-105.0, -95.0)]), lanes_forward: 2, lanes_backward: 2, speed_limit_kmh: 40.0),
+  ],
+)

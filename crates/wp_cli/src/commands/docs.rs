@@ -47,6 +47,7 @@ Scenario files: tests/<name>.scenario.ron  (full schema: wp schema scenario)
 Drivers
   Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0, steer: 0.0)])   keys hold until the next
   Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
+  FollowRoute(to_road: \"east_curve\", kmh: 50.0)  plans a lane route on the scene's road network and drives it
   ReverseToDock(dock: \"bay_1\", kmh: 3.0)       backs the towed trailer into a scene dock (pulls up to retry)
 
 Assertions
@@ -54,6 +55,7 @@ Assertions
   BrakingDistance(max_m: 36.7)    Mfdd(min_mps2: 5.0)    StoppedBy(s: 14.0)    TurningCircle(max_m: 25.0)
   MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)
   NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic
+  RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
 Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife.

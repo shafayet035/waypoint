@@ -296,7 +296,11 @@ impl Handler {
         } else if accelerate > 0.5 && slow < 0.5 && forward_kmh > -1.0 {
             self.input.reverse = false;
         }
-        let (throttle, brake) = if self.input.reverse { (slow, accelerate) } else { (accelerate, slow) };
+        let (throttle, brake) = if self.input.reverse {
+            (slow, accelerate)
+        } else {
+            (accelerate, slow)
+        };
         self.input.throttle = approach(self.input.throttle, throttle, 3.0);
         self.input.brake = approach(self.input.brake, brake, 5.0);
         let (steer_target, rate) = match (k.left, k.right, touch_steer) {

@@ -13,6 +13,7 @@ wp_data.workspace = true
 wp_physics.workspace = true
 wp_vehicle.workspace = true
 wp_world.workspace = true
+wp_road.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

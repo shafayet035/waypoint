@@ -55,6 +55,8 @@ pub struct FrameView {
     pub environment: Environment,
     pub items: Vec<DrawItem>,
     pub shadows: Vec<BlobShadow>,
+    /// The scene's road network; the renderer builds and caches its meshes.
+    pub roads: Option<std::sync::Arc<wp_road::RoadNetwork>>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -139,5 +141,6 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
         environment: Environment::default(),
         items,
         shadows,
+        roads: world.get_resource::<wp_world::Roads>().map(|r| r.0.clone()),
     }
 }

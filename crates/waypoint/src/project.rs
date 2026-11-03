@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use wp_core::{Diagnostic, Diagnostics};
 use wp_data::{Loaded, find_files, load_ron, load_toml};
+use wp_road::RoadNetworkDef;
 use wp_test::ScenarioDef;
 use wp_vehicle::{TrailerDef, VehicleDef};
 use wp_world::SceneDef;
@@ -53,6 +54,8 @@ pub struct Project {
     pub scenarios: BTreeMap<String, Loaded<ScenarioDef>>,
     /// By trailer name.
     pub trailers: BTreeMap<String, Loaded<TrailerDef>>,
+    /// Road networks by path relative to the root.
+    pub roads: BTreeMap<String, Loaded<RoadNetworkDef>>,
     /// Files that exist but failed to parse, so references to them can say so.
     pub failed: Vec<String>,
 }
@@ -61,6 +64,7 @@ pub const VEHICLE_EXT: &str = ".vehicle.ron";
 pub const SCENE_EXT: &str = ".scene.ron";
 pub const SCENARIO_EXT: &str = ".scenario.ron";
 pub const TRAILER_EXT: &str = ".trailer.ron";
+pub const ROAD_EXT: &str = ".road.ron";
 
 fn stem<'a>(path: &'a str, ext: &str) -> &'a str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -136,6 +140,18 @@ impl Project {
             }
         }
 
+        let mut roads = BTreeMap::new();
+        for path in find_files(root, ROAD_EXT) {
+            match load_ron::<RoadNetworkDef>(root, &path).inspect_err(|_| failed.push(path.clone()))
+            {
+                Ok(r) => {
+                    diags.extend(RoadNetworkDef::validate(&r));
+                    roads.insert(path, r);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
         let mut scenes = BTreeMap::new();
         for path in find_files(root, SCENE_EXT) {
             match load_ron::<SceneDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
@@ -165,6 +181,7 @@ impl Project {
             scenes,
             scenarios,
             trailers,
+            roads,
             failed,
         };
         diags.extend(project.check_references());
@@ -185,6 +202,22 @@ impl Project {
                     )
                     .help(format!("known scenes: {}", list(self.scenes.keys()))),
             );
+        }
+        for scene in self.scenes.values() {
+            if let Some(path) = &scene.value.roads
+                && !self.roads.contains_key(path)
+            {
+                let why = if self.failed.contains(path) {
+                    "failed to load"
+                } else {
+                    "does not exist"
+                };
+                out.push(
+                    scene
+                        .error_at("WP-W005", "roads", format!("road network `{path}` {why}"))
+                        .help(format!("known road files: {}", list(self.roads.keys()))),
+                );
+            }
         }
         for sc in self.scenarios.values() {
             let s = &sc.value;
@@ -306,13 +339,24 @@ impl Project {
             Some(t) => Some(&self.trailers.get(t)?.value),
             None => None,
         };
+        let scene = &self.scenes.get(&s.scene)?.value;
         Some(wp_test::ScenarioInput {
             name,
             scenario: s,
-            scene: &self.scenes.get(&s.scene)?.value,
+            roads: self.scene_roads(scene),
+            scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,
         })
+    }
+
+    /// The road network a scene refers to, if any (and if it loaded).
+    pub fn scene_roads(&self, scene: &SceneDef) -> Option<&RoadNetworkDef> {
+        scene
+            .roads
+            .as_ref()
+            .and_then(|p| self.roads.get(p))
+            .map(|r| &r.value)
     }
 
     pub fn disabled_plugins(&self) -> &[String] {

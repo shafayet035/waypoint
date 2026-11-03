@@ -44,10 +44,11 @@ pub fn schema(_ctx: &Ctx, kind: &str) -> CmdResult {
         "scene" => schema_json::<SceneDef>(),
         "scenario" => schema_json::<ScenarioDef>(),
         "trailer" => schema_json::<waypoint::vehicle::TrailerDef>(),
+        "road" => schema_json::<waypoint::road::RoadNetworkDef>(),
         other => {
             return Err(cli_error(
                 format!("unknown schema type `{other}`"),
-                "types: game, vehicle, trailer, scene, scenario",
+                "types: game, vehicle, trailer, road, scene, scenario",
             ));
         }
     };

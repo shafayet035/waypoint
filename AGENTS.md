@@ -41,6 +41,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_data` | RON/TOML loading with line-accurate errors, JSON Schema export |
 | `wp_physics` | Planar rigid bodies, `Pose`, `Velocity`, `RigidBody`, `Ground` |
 | `wp_vehicle` | `.vehicle.ron`/`.trailer.ron`, validation, `VehiclePlugin` + `TrailerPlugin`, tyres, drivetrain, brakes, suspension |
+| `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
 | `wp_world` | `.scene.ron`, spawn points, `Name`, `Player` |
 | `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
@@ -93,7 +94,8 @@ M1 (realistic drive): suspension roll/pitch, tipping and rollover, sliding frict
 brakes, speed governor, vehicle events (`events.poll`, `NoEvent`/`ExpectEvent`), a 12 m city bus,
 and regulation-based validation tests (ECE R13 braking, EU turning circle).
 M2 (in progress): pin joints, semi-trailers, reverse gear, tractor unit, docks and a reversing
-driver; the docking gate test passes (`truck_docking`). Still to do in M2: road network and
-OpenStreetMap / OpenDRIVE import.
+driver; the docking gate test passes (`truck_docking`). Road networks with lanes, junctions, routing
+and road meshes; a Stanley route follower passes the town route test (`town_route`, ≤ 0.2 m off
+lane centre). Still to do in M2: OpenStreetMap / OpenDRIVE import; lane changes and lane-drop tapers.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

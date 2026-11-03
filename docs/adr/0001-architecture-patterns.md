@@ -21,7 +21,7 @@ depends on anything not listed for it.
 | Layer | Crates | May use |
 | --- | --- | --- |
 | 0 Foundation | `wp_core`, `wp_ecs`, `wp_app`, `wp_data` | layer 0 |
-| 1 Simulation | `wp_physics`, `wp_world`, `wp_vehicle` | layers 0–1 |
+| 1 Simulation | `wp_physics`, `wp_road`, `wp_world`, `wp_vehicle` | layers 0–1 |
 | 2 Verification | `wp_test` | layers 0–2 |
 | 3 Presentation | `wp_rhi`, `wp_render` | layers 0–1, 3 |
 | 4 Agent interface | `wp_control` | layers 0–1, 3–4 |

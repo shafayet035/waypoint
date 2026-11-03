@@ -29,6 +29,7 @@ wp_data = { path = "crates/wp_data" }
 wp_physics = { path = "crates/wp_physics" }
 wp_vehicle = { path = "crates/wp_vehicle" }
 wp_world = { path = "crates/wp_world" }
+wp_road = { path = "crates/wp_road" }
 wp_test = { path = "crates/wp_test" }
 waypoint = { path = "crates/waypoint" }
 wp_rhi = { path = "crates/wp_rhi" }
