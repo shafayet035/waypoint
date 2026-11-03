@@ -4,6 +4,7 @@
 //! and loads projects ([`project::Project`]): a folder with `game.toml`,
 //! `vehicles/*.vehicle.ron`, `scenes/*.scene.ron` and `tests/*.scenario.ron`.
 
+pub mod drive;
 pub mod project;
 
 pub use wp_app as app;
@@ -26,6 +27,7 @@ impl PluginGroup for DefaultPlugins {
             Box::new(wp_physics::PhysicsPlugin),
             Box::new(wp_world::WorldPlugin),
             Box::new(wp_vehicle::VehiclePlugin),
+            Box::new(wp_vehicle::TrailerPlugin),
         ]
     }
 }
@@ -48,45 +50,12 @@ pub fn start(
     scenario: Option<&str>,
     seed: u64,
 ) -> Result<(App, wp_ecs::Entity), wp_core::Diagnostic> {
-    use wp_core::Diagnostic;
-    let make_app = || make_app(project.disabled_plugins());
-    if let Some(name) = scenario {
-        let input = project.scenario_input(name).ok_or_else(|| {
-            Diagnostic::error("WP-C001", format!("unknown scenario `{name}`")).help(format!(
-                "scenarios: {}",
-                project
-                    .scenarios
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })?;
-        return wp_test::prepare(&input, &make_app);
-    }
-    let scene = &project.scenes[&project.game.value.start_scene].value;
-    let vehicle = project.vehicles.values().next().ok_or_else(|| {
-        Diagnostic::error("WP-G011", "the project has no vehicles")
-            .help("add a vehicles/<name>.vehicle.ron file")
-    })?;
-    let spawn = scene.spawns.first().ok_or_else(|| {
-        Diagnostic::error(
-            "WP-W004",
-            format!("scene `{}` has no spawn points", scene.name),
-        )
-        .help("add an entry to `spawns`")
-    })?;
-    let mut app = make_app();
-    app.finish()?;
-    app.world
-        .insert_reflected_resource("SimRng", wp_core::SimRng::new(seed));
-    wp_world::apply_scene(&mut app.world, scene);
-    let (pos, heading) = wp_world::spawn_transform(spawn);
-    let player = wp_vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
-    app.world
-        .insert(player, wp_world::Name(vehicle.value.name.clone()));
-    app.world.insert(player, wp_world::Player);
-    Ok((app, player))
+    let spec = drive::DriveSpec {
+        scenario: scenario.map(str::to_string),
+        seed,
+        ..Default::default()
+    };
+    spec.build(project).map(|d| (d.app, d.player))
 }
 
 pub mod prelude {

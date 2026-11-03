@@ -22,7 +22,9 @@ use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
-pub use trailer::{Trailer, TrailerDef, TrailerLibrary, spawn_trailer, trailer_dynamics};
+pub use trailer::{
+    Trailer, TrailerDef, TrailerLibrary, TrailerPlugin, spawn_trailer, trailer_dynamics,
+};
 
 /// Wheel order used everywhere: front-left, front-right, rear-left, rear-right.
 pub const WHEEL_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
@@ -260,22 +262,9 @@ impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
         app.world.register::<Vehicle>();
         app.world.register::<VehicleInput>();
-        app.world.register::<Trailer>();
         if !app.world.has_resource::<VehicleLibrary>() {
             app.world.insert_resource(VehicleLibrary::default());
         }
-        if !app.world.has_resource::<TrailerLibrary>() {
-            app.world.insert_resource(TrailerLibrary::default());
-        }
-        // Trailers first: they set the tractor's kingpin load for this substep.
-        app.add_system(Stage::Physics, "trailer_dynamics", trailer_dynamics)
-            .before("vehicle_dynamics")
-            .reads::<Pose>()
-            .reads::<Velocity>()
-            .writes::<Trailer>()
-            .writes::<RigidBody>()
-            .writes::<Vehicle>()
-            .reads_resource("TrailerLibrary");
         app.add_event::<VehicleEvent>("VehicleEvent");
         app.add_system(Stage::Physics, "vehicle_dynamics", vehicle_dynamics)
             .before("integrate_velocities")

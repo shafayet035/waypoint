@@ -129,6 +129,33 @@ impl TrailerDef {
     }
 }
 
+/// Semi-trailers: coupling, axle loads, tyres and brakes. Needs `vehicle`.
+pub struct TrailerPlugin;
+
+impl wp_app::Plugin for TrailerPlugin {
+    fn name(&self) -> &'static str {
+        "trailer"
+    }
+    fn dependencies(&self) -> Vec<&'static str> {
+        vec!["vehicle"]
+    }
+    fn build(&self, app: &mut wp_app::App) {
+        app.world.register::<Trailer>();
+        if !app.world.has_resource::<TrailerLibrary>() {
+            app.world.insert_resource(TrailerLibrary::default());
+        }
+        // Trailers first: they set the tractor's kingpin load for this substep.
+        app.add_system(wp_ecs::Stage::Physics, "trailer_dynamics", trailer_dynamics)
+            .before("vehicle_dynamics")
+            .reads::<Pose>()
+            .reads::<Velocity>()
+            .writes::<Trailer>()
+            .writes::<RigidBody>()
+            .writes::<Vehicle>()
+            .reads_resource("TrailerLibrary");
+    }
+}
+
 /// Runtime state of a trailer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trailer {

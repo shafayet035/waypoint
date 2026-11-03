@@ -1,6 +1,11 @@
 # wp_vehicle
 
-The vehicle model, stepped in `dynamics::vehicle_dynamics` each physics substep (480 Hz):
+Two plugins: `VehiclePlugin` and `TrailerPlugin` (trailer.rs, needs `vehicle`). The vehicle step
+(`dynamics.rs`) is an orchestrator, `step_vehicle`, over named phases: `update_steering`,
+`measure_acceleration`, `update_body_motion`, `wheel_loads`, `update_drivetrain`, `update_brakes`,
+`tyre_forces`, `add_body_forces`. Keep their order: it is part of determinism.
+
+Each physics substep (480 Hz):
 steering → body roll/pitch (damped springs) → wheel loads (longitudinal + lateral transfer) →
 tipping about the outer wheels → drivetrain and automatic gearbox (shifts on road speed, speed
 governor) → brakes (hydraulic or air: reservoir, compressor, chamber lag) → per wheel: sliding

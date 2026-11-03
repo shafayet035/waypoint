@@ -40,18 +40,25 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_app` | `App`, `Plugin`, plugin dependency resolution |
 | `wp_data` | RON/TOML loading with line-accurate errors, JSON Schema export |
 | `wp_physics` | Planar rigid bodies, `Pose`, `Velocity`, `RigidBody`, `Ground` |
-| `wp_vehicle` | `.vehicle.ron`, validation, brush tyres, engine, gearbox, brakes, aero |
+| `wp_vehicle` | `.vehicle.ron`/`.trailer.ron`, validation, `VehiclePlugin` + `TrailerPlugin`, tyres, drivetrain, brakes, suspension |
 | `wp_world` | `.scene.ron`, spawn points, `Name`, `Player` |
-| `wp_test` | `.scenario.ron`, drivers, assertions, the scenario runner |
+| `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
 | `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
 | `wp_platform` | Window, keyboard driving, fixed-timestep interactive loop (winit) |
 | `wp_player` | `waypoint-player`: plays a project in a window; the app shipped to iOS/Android |
 | `wp_control` | Control protocol: JSON-RPC 2.0 sessions (query, drive, step, snapshot, screenshot), TCP transport |
-| `waypoint` | `DefaultPlugins`, project loader, prelude |
+| `waypoint` | `DefaultPlugins`, project loader, `drive` (shared session setup), prelude |
 | `wp_cli` | The `wp` command and the error-code catalogue |
 
 `examples/sandbox` is a complete project and also the template for `wp new`.
+
+## Architecture
+
+Read `docs/adr/0001-architecture-patterns.md`. In short: layered crates (enforced by
+`crates/waypoint/tests/architecture.rs`), ECS with data-oriented design, one feature per plugin,
+ports and adapters at the edges (platforms, GPU, agent transports), typed events, pure functions
+for the maths with thin systems around them, and data files with schemas for content.
 
 ## Rules that keep the engine trustworthy
 
@@ -64,6 +71,8 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
   Rendering only reads the world (`wp_render::extract`); it must never change simulation state.
 - **Data first.** A new vehicle, scene or test should need a file, not code. New data fields get
   doc comments (they become schema descriptions) and units in their names.
+- **Refactors** must keep every scenario's `final_hash` identical (`wp test --json`): that proves
+  behaviour did not change. Rendering refactors: compare `wp shot` PNGs byte for byte.
 - **Physics changes** must keep `examples/sandbox` scenarios passing and `wp vehicle test` plausible.
   Hatchback: about 8.5 s to 100 km/h, about 41 m to stop from 100 km/h (ABS), 0.74 g on the skidpad,
   11 m turning circle. City bus: about 11 s to 50 km/h, 22 m from 60 km/h, 21 m turning circle.

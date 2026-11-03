@@ -107,6 +107,7 @@ pub(crate) fn tyre_contact(
     (fx, fy, kin_long)
 }
 
+/// Everything a phase needs besides the vehicle's own state.
 struct Ctx<'a> {
     def: &'a VehicleDef,
     dt: f32,
@@ -115,6 +116,23 @@ struct Ctx<'a> {
     entity: String,
 }
 
+/// The body roll model, needed again for load transfer and tipping.
+struct RollModel {
+    sprung_mass: f32,
+    unsprung_mass: f32,
+    stiffness: f32,
+    damping: f32,
+    inertia: f32,
+}
+
+/// What the drivetrain delivers this substep.
+struct Drivetrain {
+    driven: [bool; 4],
+    wheel_torque: f32,
+}
+
+/// One substep for one vehicle: each phase reads the state the previous ones
+/// left, in this order (the order is part of the simulation's determinism).
 fn step_vehicle(
     ctx: &Ctx,
     veh: &mut Vehicle,
@@ -124,32 +142,58 @@ fn step_vehicle(
     body: &mut RigidBody,
     events: &mut Vec<VehicleEvent>,
 ) {
-    let (def, dt, g) = (ctx.def, ctx.dt, ctx.g);
-    let m = def.mass_kg;
-    let a = def.cg_to_front_axle_m;
-    let b = def.rear_axle_from_cg();
-    let len = def.wheelbase_m;
-    let h = def.cg_height_m;
-    let track = def.track_width_m;
-    let radius = def.wheel.radius_m;
-    let peak_mu = def.tyre.friction * ctx.surface;
-
-    // Steering, rate-limited.
-    let target = input.steer.clamp(-1.0, 1.0) * def.steering.max_angle_deg.to_radians();
-    let max_step = def.steering.rate_deg_per_s.to_radians() * dt;
-    veh.steer_angle += (target - veh.steer_angle).clamp(-max_step, max_step);
-
+    update_steering(ctx, veh, input);
     let v_local = pose.to_local(vel.linear);
-    let yaw_rate = vel.angular;
-    // Acceleration measured from the velocity change over the last substep: it
-    // includes everything that moved the body (tyres, a trailer's pull, joints).
+    let (ax, ay) = measure_acceleration(ctx, veh, pose, vel);
+    let roll = update_body_motion(ctx, veh, ax, ay);
+    let loads = wheel_loads(ctx, veh, &roll, ax, ay, events);
+    let drive = update_drivetrain(ctx, veh, input, v_local, events);
+    let brake_torque = update_brakes(ctx, veh, input, events);
+    let (force, moment) = tyre_forces(
+        ctx,
+        veh,
+        v_local,
+        vel.angular,
+        &loads,
+        &drive,
+        &brake_torque,
+        events,
+    );
+    let (force, moment) = add_body_forces(ctx, veh, v_local, vel.angular, force, moment);
+    body.apply_force(pose.to_world(force));
+    body.apply_torque(moment);
+}
+
+/// Rate-limited steering towards the driver's input.
+fn update_steering(ctx: &Ctx, veh: &mut Vehicle, input: &VehicleInput) {
+    let def = ctx.def;
+    let target = input.steer.clamp(-1.0, 1.0) * def.steering.max_angle_deg.to_radians();
+    let max_step = def.steering.rate_deg_per_s.to_radians() * ctx.dt;
+    veh.steer_angle += (target - veh.steer_angle).clamp(-max_step, max_step);
+}
+
+/// Acceleration measured from the velocity change over the last substep: it
+/// includes everything that moved the body (tyres, a trailer's pull, joints).
+/// Returns the filtered body-frame (ax, ay).
+fn measure_acceleration(ctx: &Ctx, veh: &mut Vehicle, pose: &Pose, vel: &Velocity) -> (f32, f32) {
+    let dt = ctx.dt;
     let a_world = (vel.linear - veh.prev_velocity) / dt;
     veh.prev_velocity = vel.linear;
     let alpha = dt / (ACCEL_FILTER_S + dt);
     veh.accel_local += (pose.to_local(a_world) - veh.accel_local) * alpha;
-    let (ax, ay) = (veh.accel_local.x, veh.accel_local.y);
+    (veh.accel_local.x, veh.accel_local.y)
+}
 
-    // ---- Suspension: body roll and pitch as damped springs ----------------
+/// Body roll and pitch as damped springs about the roll and pitch axes.
+fn update_body_motion(ctx: &Ctx, veh: &mut Vehicle, ax: f32, ay: f32) -> RollModel {
+    let (def, dt, g) = (ctx.def, ctx.dt, ctx.g);
+    let (m, h, len, track, radius) = (
+        def.mass_kg,
+        def.cg_height_m,
+        def.wheelbase_m,
+        def.track_width_m,
+        def.wheel.radius_m,
+    );
     let susp = &def.suspension;
     let ms = m * SPRUNG_SHARE;
     let mu_mass = m - ms;
@@ -173,8 +217,36 @@ fn step_vehicle(
     let pitch_acc = (-ms * ax * hs - k_pitch * veh.pitch - c_pitch * veh.pitch_rate) / i_pitch;
     veh.pitch_rate += pitch_acc * dt;
     veh.pitch += veh.pitch_rate * dt;
+    RollModel {
+        sprung_mass: ms,
+        unsprung_mass: mu_mass,
+        stiffness: k_roll,
+        damping: c_roll,
+        inertia: i_roll,
+    }
+}
 
-    // ---- Wheel loads -----------------------------------------------------
+/// Vertical load on each wheel (FL, FR, RL, RR): static share, longitudinal and
+/// lateral transfer, a coupled trailer's kingpin load, and tipping about the
+/// outer wheels. Sends WheelLift/WheelLanded/RolledOver events.
+fn wheel_loads(
+    ctx: &Ctx,
+    veh: &mut Vehicle,
+    roll: &RollModel,
+    ax: f32,
+    ay: f32,
+    events: &mut Vec<VehicleEvent>,
+) -> [f32; 4] {
+    let (def, dt, g) = (ctx.def, ctx.dt, ctx.g);
+    let (m, h, len, track, radius) = (
+        def.mass_kg,
+        def.cg_height_m,
+        def.wheelbase_m,
+        def.track_width_m,
+        def.wheel.radius_m,
+    );
+    let b = def.rear_axle_from_cg();
+    let susp = &def.suspension;
     let front_axle = (m * g * b / len - m * ax * h / len).max(0.0);
     let rear_axle = (m * g - front_axle).max(0.0);
     // A semi-trailer's kingpin load sits on the fifth wheel, between the axles.
@@ -188,8 +260,9 @@ fn step_vehicle(
     };
     // Lateral transfer: through the springs (from roll) and through the roll
     // centre and unsprung mass (instant). Positive moves load to the right.
-    let elastic = k_roll * veh.roll + c_roll * veh.roll_rate;
-    let geometric = ms * ay * susp.roll_center_height_m + mu_mass * ay * radius;
+    let elastic = roll.stiffness * veh.roll + roll.damping * veh.roll_rate;
+    let geometric =
+        roll.sprung_mass * ay * susp.roll_center_height_m + roll.unsprung_mass * ay * radius;
     let static_front = b / len;
     let front_transfer = (elastic * susp.front_roll_share + geometric * static_front) / track;
     let rear_transfer =
@@ -212,7 +285,7 @@ fn step_vehicle(
         veh.tip_rate = 0.0;
     }
     if veh.tip_angle > 0.0 {
-        let i_tip = i_roll + m * (h * h + half * half);
+        let i_tip = roll.inertia + m * (h * h + half * half);
         let (sn, cs) = veh.tip_angle.sin_cos();
         let a_eff = if veh.rolled_over {
             0.0
@@ -268,17 +341,20 @@ fn step_vehicle(
             w.lifted = lifted;
         }
     }
+    loads
+}
 
-    let half_track = track / 2.0;
-    let positions = [
-        Vec2::new(a, half_track),
-        Vec2::new(a, -half_track),
-        Vec2::new(-b, half_track),
-        Vec2::new(-b, -half_track),
-    ];
-    let steer = [veh.steer_angle, veh.steer_angle, 0.0, 0.0];
-
-    // ---- Drivetrain: open differential, automatic gearbox ----------------
+/// Engine, automatic gearbox (shifting on road speed) and open differential.
+/// Returns which wheels are driven and the torque each receives.
+fn update_drivetrain(
+    ctx: &Ctx,
+    veh: &mut Vehicle,
+    input: &VehicleInput,
+    v_local: Vec2,
+    events: &mut Vec<VehicleEvent>,
+) -> Drivetrain {
+    let (def, dt) = (ctx.def, ctx.dt);
+    let radius = def.wheel.radius_m;
     let driven = match def.drive {
         Drive::Front => [true, true, false, false],
         Drive::Rear => [false, false, true, true],
@@ -321,7 +397,7 @@ fn step_vehicle(
     } else {
         0.0
     };
-    let wheel_drive_torque = engine_torque * ratio * def.gearbox.efficiency / n_driven.max(1.0);
+    let wheel_torque = engine_torque * ratio * def.gearbox.efficiency / n_driven.max(1.0);
 
     // Shift on road speed, not wheel speed, so wheelspin cannot cause hunting.
     let road_rpm = v_local.x.max(0.0) / radius * ratio * 60.0 / std::f32::consts::TAU;
@@ -342,13 +418,25 @@ fn step_vehicle(
             });
         }
     }
+    Drivetrain {
+        driven,
+        wheel_torque,
+    }
+}
 
-    // ---- Brakes: pedal → (air system) → per-wheel torque → ABS -------------
+/// Pedal → (air system) → brake torque per wheel, before ABS.
+fn update_brakes(
+    ctx: &Ctx,
+    veh: &mut Vehicle,
+    input: &VehicleInput,
+    events: &mut Vec<VehicleEvent>,
+) -> [f32; 4] {
+    let def = ctx.def;
     let pedal = input.brake.clamp(0.0, 1.0);
     let brake_fraction = match (&def.brakes.air, veh.air.as_mut()) {
         (Some(air), Some(state)) => {
             let was_ok = state.reservoir_bar >= air.warning_bar;
-            let f = parts::air_brake_step(state, air, pedal, dt);
+            let f = parts::air_brake_step(state, air, pedal, ctx.dt);
             if was_ok && state.reservoir_bar < air.warning_bar {
                 events.push(VehicleEvent::LowAirPressure {
                     entity: ctx.entity.clone(),
@@ -363,10 +451,35 @@ fn step_vehicle(
     let brake = brake_fraction * def.brakes.max_torque_nm;
     let front_brake = brake * def.brakes.front_bias / 2.0;
     let rear_brake = brake * (1.0 - def.brakes.front_bias) / 2.0;
-    let brake_torque = [front_brake, front_brake, rear_brake, rear_brake];
-    let speed = v_local.length();
+    [front_brake, front_brake, rear_brake, rear_brake]
+}
 
-    // ---- Tyres ------------------------------------------------------------
+/// Every tyre: slip, force, ABS valve and wheel spin. Returns the summed
+/// body-frame force and yaw moment, and sends AbsEngaged/AbsReleased.
+#[allow(clippy::too_many_arguments)]
+fn tyre_forces(
+    ctx: &Ctx,
+    veh: &mut Vehicle,
+    v_local: Vec2,
+    yaw_rate: f32,
+    loads: &[f32; 4],
+    drive: &Drivetrain,
+    brake_torque: &[f32; 4],
+    events: &mut Vec<VehicleEvent>,
+) -> (Vec2, f32) {
+    let (def, dt) = (ctx.def, ctx.dt);
+    let (a, b) = (def.cg_to_front_axle_m, def.rear_axle_from_cg());
+    let radius = def.wheel.radius_m;
+    let peak_mu = def.tyre.friction * ctx.surface;
+    let half_track = def.track_width_m / 2.0;
+    let positions = [
+        Vec2::new(a, half_track),
+        Vec2::new(a, -half_track),
+        Vec2::new(-b, half_track),
+        Vec2::new(-b, -half_track),
+    ];
+    let steer = [veh.steer_angle, veh.steer_angle, 0.0, 0.0];
+    let speed = v_local.length();
     let mut force = Vec2::ZERO;
     let mut moment = 0.0;
     let mut abs_any = false;
@@ -386,12 +499,16 @@ fn step_vehicle(
         } else {
             w.abs_factor = 1.0;
         }
-        let drive = if driven[i] { wheel_drive_torque } else { 0.0 };
+        let torque = if drive.driven[i] {
+            drive.wheel_torque
+        } else {
+            0.0
+        };
         let resist =
             brake_torque[i] * w.abs_factor + def.tyre.rolling_resistance * loads[i] * radius;
         w.omega = parts::step_wheel(
             w.omega,
-            drive,
+            torque,
             fx * radius,
             resist,
             def.wheel.inertia_kgm2,
@@ -417,8 +534,21 @@ fn step_vehicle(
             }
         });
     }
+    (force, moment)
+}
 
-    // On its side, the body scrapes along the ground.
+/// Forces on the body itself: scraping along the ground once rolled over, and
+/// aerodynamic drag.
+fn add_body_forces(
+    ctx: &Ctx,
+    veh: &Vehicle,
+    v_local: Vec2,
+    yaw_rate: f32,
+    mut force: Vec2,
+    mut moment: f32,
+) -> (Vec2, f32) {
+    let (def, g) = (ctx.def, ctx.g);
+    let (m, len) = (def.mass_kg, def.wheelbase_m);
     if veh.rolled_over {
         let speed = v_local.length();
         const BODY_FRICTION: f32 = 0.5;
@@ -426,12 +556,8 @@ fn step_vehicle(
         moment +=
             -BODY_FRICTION * m * g * yaw_rate * len / (yaw_rate.abs() * len).max(0.5) * len / 4.0;
     }
-
-    // Aerodynamic drag.
     force += -0.5 * AIR_DENSITY * def.aero.drag_area_m2 * v_local.length() * v_local;
-
-    body.apply_force(pose.to_world(force));
-    body.apply_torque(moment);
+    (force, moment)
 }
 
 #[cfg(test)]
