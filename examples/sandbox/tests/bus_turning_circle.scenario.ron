@@ -1,0 +1,16 @@
+// EU rule for buses and coaches: turning on full lock, the vehicle must stay
+// within a 12.5 m outer radius (25 m circle). Measured at the outer front wheel.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "city_bus",
+    spawn: "skidpad",
+    driver: Cruise(kmh: 6.0, steer: 1.0),
+  ),
+  duration_s: 75.0,
+  assert: [
+    TurningCircle(max_m: 25.0),
+    NoNaN,
+  ],
+)

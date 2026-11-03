@@ -61,10 +61,26 @@ pub struct InputKey {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Assertion {
-    /// Speed reaches `kmh` no later than `within_s` seconds.
-    ReachSpeed { kmh: f32, within_s: f32 },
+    /// Speed reaches `kmh` no later than `within_s` seconds (and, if set, no
+    /// sooner than `not_before_s`, to catch implausibly fast vehicles).
+    ReachSpeed {
+        kmh: f32,
+        within_s: f32,
+        #[serde(default)]
+        not_before_s: f32,
+    },
     /// From the first full brake application to standstill, the car travels at most `max_m`.
     BrakingDistance { max_m: f32 },
+    /// Mean fully developed deceleration (UN ECE R13 Annex 4) of the first full
+    /// brake application is at least this, m/s² (M1 cars 6.43, M3 buses 5.0).
+    Mfdd { min_mps2: f32 },
+    /// The outer front wheel's path while circling fits in this diameter, m
+    /// (EU rule for buses and trucks: 25 m).
+    TurningCircle { max_m: f32 },
+    /// No vehicle event of this kind happens to the player (e.g. "WheelLift").
+    NoEvent(String),
+    /// At least one vehicle event of this kind happens to the player.
+    ExpectEvent(String),
     /// The vehicle is stopped (below 0.5 km/h) by `s` seconds and stays stopped.
     StoppedBy { s: f32 },
     /// Speed never exceeds this, km/h.
@@ -82,7 +98,14 @@ pub enum Assertion {
 impl Assertion {
     pub fn describe(&self) -> String {
         match self {
-            Self::ReachSpeed { kmh, within_s } => {
+            Self::ReachSpeed {
+                kmh,
+                within_s,
+                not_before_s,
+            } if *not_before_s > 0.0 => {
+                format!("ReachSpeed({kmh} km/h in {not_before_s}–{within_s} s)")
+            }
+            Self::ReachSpeed { kmh, within_s, .. } => {
                 format!("ReachSpeed({kmh} km/h within {within_s} s)")
             }
             Self::BrakingDistance { max_m } => format!("BrakingDistance(≤ {max_m} m)"),
@@ -90,6 +113,10 @@ impl Assertion {
             Self::MaxSpeed(k) => format!("MaxSpeed({k} km/h)"),
             Self::MaxLateralG(g) => format!("MaxLateralG({g} g)"),
             Self::SteadyLateralG { min, max } => format!("SteadyLateralG({min}–{max} g)"),
+            Self::Mfdd { min_mps2 } => format!("Mfdd(≥ {min_mps2} m/s²)"),
+            Self::TurningCircle { max_m } => format!("TurningCircle(≤ {max_m} m)"),
+            Self::NoEvent(k) => format!("NoEvent({k})"),
+            Self::ExpectEvent(k) => format!("ExpectEvent({k})"),
             Self::NoNaN => "NoNaN".into(),
             Self::Deterministic => "Deterministic".into(),
         }
@@ -116,6 +143,19 @@ impl ScenarioDef {
                 )
                 .help("add at least NoNaN, e.g. assert: [NoNaN]"),
             );
+        }
+        for a in &s.assert {
+            if let Assertion::NoEvent(k) | Assertion::ExpectEvent(k) = a
+                && !wp_vehicle::VehicleEvent::KINDS.contains(&k.as_str())
+            {
+                out.push(
+                    file.error_at("WP-S017", "assert", format!("unknown event kind `{k}`"))
+                        .help(format!(
+                            "kinds: {}",
+                            wp_vehicle::VehicleEvent::KINDS.join(", ")
+                        )),
+                );
+            }
         }
         if let Driver::Script(keys) = &s.player.driver {
             if keys.windows(2).any(|w| w[1].at_s < w[0].at_s) {

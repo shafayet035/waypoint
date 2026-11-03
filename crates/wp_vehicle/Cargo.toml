@@ -17,3 +17,5 @@ schemars.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]

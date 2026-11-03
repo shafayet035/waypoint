@@ -179,6 +179,15 @@ pub struct BodyShape {
 }
 
 pub fn body_shape(def: &VehicleDef) -> BodyShape {
+    if let Some(b) = &def.body {
+        let front = def.cg_to_front_axle_m + b.front_overhang_m;
+        return BodyShape {
+            front,
+            rear: front - b.length_m,
+            width: b.width_m,
+            height: b.height_m,
+        };
+    }
     let r = def.wheel.radius_m;
     BodyShape {
         front: def.cg_to_front_axle_m + r * 1.6 + 0.2,
@@ -273,14 +282,30 @@ fn vehicle_items(
     let b = def.rear_axle_from_cg();
     let half_track = def.track_width_m / 2.0;
     let sill = r * 1.25;
-    let belt = sill + (shape.height - sill) * 0.45;
+    // Tall vehicles (buses) get a low waistline and a long glasshouse.
+    let tall = shape.height > 2.2;
+    let belt = sill + (shape.height - sill) * if tall { 0.3 } else { 0.45 };
+
+    // Whole vehicle tipping about its outer wheels, then the body rolling and
+    // pitching on its springs about the roll centre.
+    let d = if veh.tip_dir >= 0.0 { 1.0 } else { -1.0 };
+    let base = base
+        * Mat4::from_translation(Vec3::new(0.0, -d * half_track, 0.0))
+        * Mat4::from_rotation_x(d * veh.tip_angle)
+        * Mat4::from_translation(Vec3::new(0.0, d * half_track, 0.0));
+    let pivot = Vec3::new(0.0, 0.0, def.suspension.roll_center_height_m);
+    let body = base
+        * Mat4::from_translation(pivot)
+        * Mat4::from_rotation_x(veh.roll)
+        * Mat4::from_rotation_y(veh.pitch)
+        * Mat4::from_translation(-pivot);
 
     let mut box_at = |min: Vec3, max: Vec3, color: Vec3, rough: f32, metal: f32, emissive: f32| {
         let center = (min + max) * 0.5;
         let size = max - min;
         items.push(DrawItem {
             mesh: MeshId::Cube,
-            transform: base * Mat4::from_translation(center) * Mat4::from_scale(size),
+            transform: body * Mat4::from_translation(center) * Mat4::from_scale(size),
             color,
             roughness: rough,
             metallic: metal,
@@ -324,8 +349,11 @@ fn vehicle_items(
         0.0,
         0.0,
     );
-    let cabin_front = a - r * 1.3;
-    let cabin_rear = shape.rear + 0.3;
+    let (cabin_front, cabin_rear) = if tall {
+        (shape.front - 0.08, shape.rear + 0.2)
+    } else {
+        (a - r * 1.3, shape.rear + 0.3)
+    };
     box_at(
         Vec3::new(cabin_rear, -hw + 0.07, belt),
         Vec3::new(cabin_front, hw - 0.07, shape.height - 0.06),

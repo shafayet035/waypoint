@@ -5,7 +5,8 @@ This folder is a Waypoint game. Everything is plain text; there is no editor.
 ## Layout
 
 - `game.toml`: name, version, `start_scene`, and `[plugins] disabled`.
-- `vehicles/*.vehicle.ron`: one vehicle per file. Units are in field names.
+- `vehicles/*.vehicle.ron`: one vehicle per file. Units are in field names. Here: `hatchback`
+  (front-drive car with ABS) and `city_bus` (12 m bus: air brakes, ABS, 80 km/h governor).
 - `scenes/*.scene.ron`: ground settings and named spawn points.
 - `tests/*.scenario.ron`: headless tests with a driver and assertions.
 
@@ -29,3 +30,7 @@ This folder is a Waypoint game. Everything is plain text; there is no editor.
   so a test that passes once passes every time.
 - Physics limits: with tyre friction 1.0, about 39 m to stop from 100 km/h and about 1 g of grip.
   If a test asks for better than physics allows, change the test, not the physics.
+- The `bus_*` and `car_brake_100` tests check regulation limits (UN ECE R13 braking, EU turning
+  circle). Keep them passing when you tune those vehicles.
+- Vehicle events (GearShift, AbsEngaged, WheelLift, LowAirPressure, RolledOver, ...) can be asserted
+  with `NoEvent("...")` / `ExpectEvent("...")`, and polled live with `events.poll`.

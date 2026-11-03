@@ -32,6 +32,12 @@ pub struct VehicleDef {
     pub brakes: BrakeDef,
     pub steering: SteeringDef,
     pub aero: AeroDef,
+    /// Body roll and pitch. Defaults suit a passenger car.
+    #[serde(default)]
+    pub suspension: SuspensionDef,
+    /// Outer body dimensions for drawing. Derived from the chassis if absent.
+    #[serde(default)]
+    pub body: Option<BodyDef>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -62,6 +68,14 @@ pub struct TyreDef {
     pub relaxation_length_m: f32,
     /// Rolling resistance coefficient (0.008–0.015 for cars).
     pub rolling_resistance: f32,
+    /// Friction while fully sliding, as a share of peak friction (0.7–0.8 dry).
+    /// Below 1.0 a locked wheel stops worse than one held at peak slip, which is why ABS helps.
+    #[serde(default = "default_sliding_ratio")]
+    pub sliding_friction_ratio: f32,
+}
+
+fn default_sliding_ratio() -> f32 {
+    0.75
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -75,6 +89,9 @@ pub struct EngineDef {
     /// Engine-braking torque at redline with the throttle closed, N·m.
     #[serde(default = "default_engine_brake")]
     pub engine_brake_nm: f32,
+    /// Speed governor: throttle is cut above this road speed, km/h (buses and trucks).
+    #[serde(default)]
+    pub governed_speed_kmh: Option<f32>,
 }
 
 fn default_engine_brake() -> f32 {
@@ -103,6 +120,69 @@ pub struct BrakeDef {
     pub max_torque_nm: f32,
     /// Share of brake torque on the front axle, 0–1.
     pub front_bias: f32,
+    /// Anti-lock braking: releases a wheel that starts to lock and reapplies it.
+    #[serde(default)]
+    pub abs: bool,
+    /// Compressed-air brakes (buses, trucks). Absent means hydraulic brakes with no lag.
+    #[serde(default)]
+    pub air: Option<AirBrakeDef>,
+}
+
+/// An air brake system: compressor → reservoir → brake chambers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AirBrakeDef {
+    /// Governor cut-out pressure of the reservoir, bar (typically 8–10).
+    pub reservoir_max_bar: f32,
+    /// Chamber pressure that gives max_torque_nm, bar (typically 6–8).
+    pub chamber_full_bar: f32,
+    /// Time for chamber pressure to reach about 63% of the demand, s (0.15–0.4).
+    pub response_time_s: f32,
+    /// Compressor refill rate with the engine running, bar/s.
+    pub compressor_bar_per_s: f32,
+    /// Reservoir pressure lost per bar of chamber pressure applied (chamber/reservoir volume, 0.02–0.15).
+    pub consumption_ratio: f32,
+    /// Below this reservoir pressure a low-air warning event is raised, bar.
+    pub warning_bar: f32,
+}
+
+/// Body roll and pitch, as springs and dampers about the roll and pitch axes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuspensionDef {
+    /// Body roll per g of lateral acceleration, degrees (cars 3–6, buses 5–8).
+    pub roll_gradient_deg_per_g: f32,
+    /// Body pitch per g of braking or acceleration, degrees (1.5–4).
+    pub pitch_gradient_deg_per_g: f32,
+    /// Damping as a share of critical damping (0.2–0.7).
+    pub damping_ratio: f32,
+    /// Height of the roll axis above the ground, m.
+    pub roll_center_height_m: f32,
+    /// Share of roll stiffness on the front axle, 0–1 (more front → more understeer).
+    pub front_roll_share: f32,
+}
+
+impl Default for SuspensionDef {
+    fn default() -> Self {
+        Self {
+            roll_gradient_deg_per_g: 4.5,
+            pitch_gradient_deg_per_g: 2.5,
+            damping_ratio: 0.35,
+            roll_center_height_m: 0.12,
+            front_roll_share: 0.6,
+        }
+    }
+}
+
+/// Outer body size, for drawing and (later) collision.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BodyDef {
+    pub length_m: f32,
+    pub width_m: f32,
+    pub height_m: f32,
+    /// From the front bumper back to the front axle, m.
+    pub front_overhang_m: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -174,10 +254,17 @@ impl VehicleDef {
                 .help("measure from the front axle backwards to the centre of mass"),
             );
         }
-        if v.track_width_m > 0.0 && v.cg_height_m > v.track_width_m / 2.0 {
+        // Static stability factor: below the tyre friction the vehicle tips
+        // before it slides (true for some trucks and coaches when laden).
+        let ssf = v.track_width_m / (2.0 * v.cg_height_m.max(1e-3));
+        if v.track_width_m > 0.0 && ssf < v.tyre.friction {
             out.push(
-                file.warning_at("WP-V070", "cg_height_m", "centre of mass is high for the track width; the vehicle may roll over in corners")
-                    .expected(format!("cg_height_m below track_width_m / 2 ({:.2})", v.track_width_m / 2.0)),
+                file.warning_at("WP-V070", "cg_height_m", "this vehicle would roll over before its tyres slide")
+                    .expected(format!(
+                        "static stability factor track_width_m / (2 × cg_height_m) = {ssf:.2} at least the tyre friction ({})",
+                        v.tyre.friction
+                    ))
+                    .help("check cg_height_m and track_width_m; if they are right, expect WheelLift events in hard corners"),
             );
         }
         if !(v.tyre.friction > 0.0 && v.tyre.friction <= 3.0) {
@@ -315,6 +402,80 @@ impl VehicleDef {
         if v.aero.drag_area_m2 < 0.0 {
             out.push(file.error_at("WP-V060", "drag_area_m2", "drag area cannot be negative"));
         }
+        out.extend(validate_extras(file));
         out
     }
+}
+
+fn validate_extras(file: &Loaded<VehicleDef>) -> Vec<Diagnostic> {
+    let v = &file.value;
+    let mut out = Vec::new();
+    if !(0.3..=1.0).contains(&v.tyre.sliding_friction_ratio) {
+        out.push(
+            file.error_at(
+                "WP-V030",
+                "sliding_friction_ratio",
+                "sliding friction ratio is out of range",
+            )
+            .expected(format!(
+                "0.3 ≤ sliding_friction_ratio ≤ 1.0, found {}",
+                v.tyre.sliding_friction_ratio
+            )),
+        );
+    }
+    if let Some(g) = v.engine.governed_speed_kmh
+        && !(g > 5.0 && g <= 400.0)
+    {
+        out.push(
+            file.error_at(
+                "WP-V022",
+                "governed_speed_kmh",
+                "governed speed is out of range",
+            )
+            .expected("5 < governed_speed_kmh ≤ 400"),
+        );
+    }
+    if let Some(a) = &v.brakes.air {
+        let ok = a.reservoir_max_bar > 0.0
+            && a.chamber_full_bar > 0.0
+            && a.chamber_full_bar <= a.reservoir_max_bar
+            && a.response_time_s > 0.0
+            && a.response_time_s <= 2.0
+            && a.compressor_bar_per_s >= 0.0
+            && (0.0..=1.0).contains(&a.consumption_ratio)
+            && a.warning_bar >= 0.0
+            && a.warning_bar < a.reservoir_max_bar;
+        if !ok {
+            out.push(
+                file.error_at("WP-V041", "air", "air brake settings are inconsistent")
+                    .expected("0 < chamber_full_bar ≤ reservoir_max_bar, 0 < response_time_s ≤ 2, 0 ≤ consumption_ratio ≤ 1, warning_bar < reservoir_max_bar"),
+            );
+        }
+    }
+    let s = &v.suspension;
+    if !(s.roll_gradient_deg_per_g > 0.0 && s.roll_gradient_deg_per_g <= 20.0)
+        || !(s.pitch_gradient_deg_per_g > 0.0 && s.pitch_gradient_deg_per_g <= 20.0)
+        || !(s.damping_ratio > 0.0 && s.damping_ratio <= 2.0)
+        || !(0.0..=1.0).contains(&s.front_roll_share)
+        || s.roll_center_height_m < 0.0
+        || s.roll_center_height_m >= v.cg_height_m
+    {
+        out.push(
+            file.error_at("WP-V080", "suspension", "suspension settings are out of range")
+                .expected(format!(
+                    "gradients in (0, 20] deg/g, damping_ratio in (0, 2], front_roll_share in 0..1, 0 ≤ roll_center_height_m < cg_height_m ({})",
+                    v.cg_height_m
+                )),
+        );
+    }
+    if let Some(b) = &v.body
+        && (!(b.length_m > v.wheelbase_m && b.width_m > 0.0 && b.height_m > v.cg_height_m)
+            || !(b.front_overhang_m >= 0.0 && b.front_overhang_m + v.wheelbase_m < b.length_m))
+    {
+        out.push(
+                file.error_at("WP-V090", "body", "body dimensions do not fit the chassis")
+                    .expected("length_m > wheelbase_m + front_overhang_m, height_m > cg_height_m, width_m > 0"),
+            );
+    }
+    out
 }

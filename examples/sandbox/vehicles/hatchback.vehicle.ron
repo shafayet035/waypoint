@@ -15,6 +15,7 @@
     stiffness_per_load: 16.0,
     relaxation_length_m: 0.35,
     rolling_resistance: 0.012,
+    sliding_friction_ratio: 0.75,
   ),
   engine: (
     idle_rpm: 850.0,
@@ -29,7 +30,14 @@
     shift_up_rpm: 6000.0,
     shift_down_rpm: 2200.0,
   ),
-  brakes: (max_torque_nm: 4500.0, front_bias: 0.68),
+  brakes: (max_torque_nm: 4500.0, front_bias: 0.68, abs: true),
   steering: (max_angle_deg: 35.0, rate_deg_per_s: 180.0),
   aero: (drag_area_m2: 0.65),
+  suspension: (
+    roll_gradient_deg_per_g: 4.5,
+    pitch_gradient_deg_per_g: 2.5,
+    damping_ratio: 0.35,
+    roll_center_height_m: 0.12,
+    front_roll_share: 0.6,
+  ),
 )

@@ -64,8 +64,10 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
   Rendering only reads the world (`wp_render::extract`); it must never change simulation state.
 - **Data first.** A new vehicle, scene or test should need a file, not code. New data fields get
   doc comments (they become schema descriptions) and units in their names.
-- **Physics changes** must keep `examples/sandbox` scenarios and `wp vehicle test hatchback`
-  plausible: about 8–10 s to 100 km/h, about 38–40 m to stop from 100 km/h, about 0.74 g on the skidpad.
+- **Physics changes** must keep `examples/sandbox` scenarios passing and `wp vehicle test` plausible.
+  Hatchback: about 8.5 s to 100 km/h, about 41 m to stop from 100 km/h (ABS), 0.74 g on the skidpad,
+  11 m turning circle. City bus: about 11 s to 50 km/h, 22 m from 60 km/h, 21 m turning circle.
+  The bus and car braking tests encode UN ECE R13 limits; they are the M1 gate.
 
 ## M0 status
 
@@ -78,5 +80,8 @@ Android: the APK builds, installs and runs on the Android 16 emulator (arm64) at
 touch controls and the control protocol over `adb forward` are verified there.
 iOS: the player app builds, links and signs for the simulator and builds for devices; it has not
 been launched yet (no simulator runtime installed here).
-Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
+M1 (realistic drive): suspension roll/pitch, tipping and rollover, sliding friction, ABS, air
+brakes, speed governor, vehicle events (`events.poll`, `NoEvent`/`ExpectEvent`), a 12 m city bus,
+and regulation-based validation tests (ECE R13 braking, EU turning circle).
+Not yet: testing on physical phones; running on an iOS simulator; trailers and articulation (M2); vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

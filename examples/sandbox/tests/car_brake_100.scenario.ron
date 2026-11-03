@@ -1,0 +1,21 @@
+// UN ECE R13-H Type-0 test for category M1 (cars): full brake from 100 km/h.
+// Limits: stopping distance ≤ 0.1·v + 0.0060·v² = 70 m, MFDD ≥ 6.43 m/s².
+// ABS must engage, and no wheel may lift.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "start",
+    initial_kmh: 100.0,
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 10.0,
+  assert: [
+    BrakingDistance(max_m: 70.0),
+    Mfdd(min_mps2: 6.43),
+    ExpectEvent("AbsEngaged"),
+    NoEvent("WheelLift"),
+    NoNaN,
+  ],
+)

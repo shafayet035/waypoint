@@ -1,0 +1,59 @@
+// A 12 m two-axle diesel city bus, half laden (about 40 passengers).
+// Typical figures for this class: 7.7 L engine, 220 kW and 1200 N·m, 6-speed
+// automatic, 275/70 R22.5 tyres, air disc brakes with ABS, air suspension,
+// speed governed to 80 km/h. Not modelled on any one manufacturer's bus.
+(
+  name: "city_bus",
+  mass_kg: 15000.0,
+  yaw_inertia_kgm2: 190000.0,
+  cg_height_m: 1.2,
+  wheelbase_m: 5.9,
+  cg_to_front_axle_m: 3.65,
+  track_width_m: 2.05,
+  drive: Rear,
+  wheel: (radius_m: 0.48, inertia_kgm2: 18.0),
+  tyre: (
+    friction: 0.8,
+    stiffness_per_load: 10.0,
+    relaxation_length_m: 0.6,
+    rolling_resistance: 0.007,
+    sliding_friction_ratio: 0.75,
+  ),
+  engine: (
+    idle_rpm: 600.0,
+    redline_rpm: 2400.0,
+    torque_curve: [(800.0, 900.0), (1100.0, 1200.0), (1600.0, 1200.0), (2000.0, 1000.0), (2300.0, 850.0)],
+    engine_brake_nm: 250.0,
+    governed_speed_kmh: Some(80.0),
+  ),
+  gearbox: (
+    ratios: [3.36, 1.91, 1.42, 1.0, 0.72, 0.62],
+    final_drive: 5.74,
+    efficiency: 0.88,
+    shift_up_rpm: 1900.0,
+    shift_down_rpm: 1000.0,
+  ),
+  brakes: (
+    max_torque_nm: 60000.0,
+    front_bias: 0.45,
+    abs: true,
+    air: Some((
+      reservoir_max_bar: 10.0,
+      chamber_full_bar: 8.0,
+      response_time_s: 0.3,
+      compressor_bar_per_s: 0.25,
+      consumption_ratio: 0.06,
+      warning_bar: 5.5,
+    )),
+  ),
+  steering: (max_angle_deg: 38.0, rate_deg_per_s: 120.0),
+  aero: (drag_area_m2: 5.5),
+  suspension: (
+    roll_gradient_deg_per_g: 6.0,
+    pitch_gradient_deg_per_g: 2.0,
+    damping_ratio: 0.4,
+    roll_center_height_m: 0.7,
+    front_roll_share: 0.5,
+  ),
+  body: Some((length_m: 12.0, width_m: 2.55, height_m: 3.1, front_overhang_m: 2.7)),
+)

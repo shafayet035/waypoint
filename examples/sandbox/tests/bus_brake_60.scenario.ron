@@ -1,0 +1,23 @@
+// UN ECE R13 Type-0 test for category M3 (buses): full brake from 60 km/h.
+// Limits: stopping distance ≤ 0.15·v + v²/130 = 36.7 m, and mean fully developed
+// deceleration (MFDD) ≥ 5.0 m/s². Distance includes the air-brake response time.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "city_bus",
+    spawn: "start",
+    initial_kmh: 60.0,
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 12.0,
+  assert: [
+    BrakingDistance(max_m: 36.7),
+    Mfdd(min_mps2: 5.0),
+    StoppedBy(s: 6.0),
+    NoEvent("WheelLift"),
+    NoEvent("LowAirPressure"),
+    NoNaN,
+    Deterministic,
+  ],
+)

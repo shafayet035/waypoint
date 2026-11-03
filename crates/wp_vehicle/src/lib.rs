@@ -2,35 +2,25 @@
 //!
 //! A vehicle entity has [`Pose`], [`Velocity`] and [`RigidBody`] from
 //! `wp_physics`, plus [`Vehicle`] (part state) and [`VehicleInput`] (driver
-//! controls). Each physics substep, [`vehicle_dynamics`] computes wheel loads,
-//! tyre slip, tyre forces, engine and brake torques, and adds the resulting
-//! force and yaw moment to the rigid body.
+//! controls). Each physics substep, [`dynamics::vehicle_dynamics`] runs body
+//! roll and pitch, wheel loads, steering, drivetrain, brakes (hydraulic or air,
+//! with optional ABS), tyre slip and forces, and adds the resulting force and
+//! yaw moment to the rigid body. Notable moments are sent as [`VehicleEvent`]s.
 
 pub mod def;
+pub mod dynamics;
 pub mod parts;
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use wp_app::{App, Plugin};
-use wp_core::SimTime;
 use wp_ecs::{Component, Entity, Stage, World};
-use wp_physics::{Gravity, Ground, Pose, RigidBody, Velocity};
+use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 
-pub use def::{Drive, VehicleDef};
-
-/// Air density at sea level, kg/m³.
-const AIR_DENSITY: f32 = 1.225;
-/// Added to |vx| in the slip equations so they stay stable at standstill, m/s.
-const SLIP_DAMPING_SPEED: f32 = 0.5;
-/// Below this speed a contact-patch damper settles the tyres, m/s.
-const LOW_SPEED_DAMPING_BELOW: f32 = 3.0;
-/// Contact-patch damping per newton of load, N·s/m per N.
-const CONTACT_DAMPING_PER_LOAD: f32 = 1.5;
-/// Seconds between automatic gear changes.
-const SHIFT_COOLDOWN_S: f32 = 0.6;
-/// Time constant of the acceleration filter used for load transfer, s.
-const ACCEL_FILTER_S: f32 = 0.03;
+pub use def::{AirBrakeDef, BodyDef, Drive, SuspensionDef, VehicleDef};
+pub use dynamics::vehicle_dynamics;
+pub use parts::AirState;
 
 /// Wheel order used everywhere: front-left, front-right, rear-left, rear-right.
 pub const WHEEL_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
@@ -49,6 +39,16 @@ pub struct WheelState {
     pub load: f32,
     /// Tyre force in the wheel frame (x forward, y left), N.
     pub force: Vec2,
+    /// ABS valve opening: 1 = full brake pressure, 0 = released.
+    #[serde(default = "one")]
+    pub abs_factor: f32,
+    /// True while the wheel carries no load (lifted off the ground).
+    #[serde(default)]
+    pub lifted: bool,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Runtime state of a vehicle's parts.
@@ -65,6 +65,33 @@ pub struct Vehicle {
     pub shift_timer: f32,
     /// Filtered body-frame acceleration (x forward, y left), m/s².
     pub accel_local: Vec2,
+    /// Body roll, rad; positive leans to the right (left side up).
+    #[serde(default)]
+    pub roll: f32,
+    #[serde(default)]
+    pub roll_rate: f32,
+    /// Body pitch, rad; positive is nose down.
+    #[serde(default)]
+    pub pitch: f32,
+    #[serde(default)]
+    pub pitch_rate: f32,
+    /// True while ABS is modulating any wheel.
+    #[serde(default)]
+    pub abs_active: bool,
+    /// Air brake pressures, for vehicles with air brakes.
+    #[serde(default)]
+    pub air: Option<AirState>,
+    /// Tipping about the outer wheels, rad (0 = all wheels down, π/2 = on its side).
+    #[serde(default)]
+    pub tip_angle: f32,
+    #[serde(default)]
+    pub tip_rate: f32,
+    /// +1 tipping to the right, −1 to the left.
+    #[serde(default)]
+    pub tip_dir: f32,
+    /// Set once the vehicle has tipped over.
+    #[serde(default)]
+    pub rolled_over: bool,
 }
 
 impl Component for Vehicle {
@@ -72,15 +99,31 @@ impl Component for Vehicle {
 }
 
 impl Vehicle {
-    pub fn new(model: &str, idle_rpm: f32) -> Self {
+    pub fn new(def: &VehicleDef) -> Self {
         Self {
-            model: model.to_string(),
-            wheels: Default::default(),
+            model: def.name.clone(),
+            wheels: std::array::from_fn(|_| WheelState {
+                abs_factor: 1.0,
+                ..Default::default()
+            }),
             steer_angle: 0.0,
             gear: 1,
-            engine_rpm: idle_rpm,
+            engine_rpm: def.engine.idle_rpm,
             shift_timer: 0.0,
             accel_local: Vec2::ZERO,
+            roll: 0.0,
+            roll_rate: 0.0,
+            pitch: 0.0,
+            pitch_rate: 0.0,
+            abs_active: false,
+            air: def.brakes.air.as_ref().map(|a| AirState {
+                reservoir_bar: a.reservoir_max_bar,
+                chamber_bar: 0.0,
+            }),
+            tip_angle: 0.0,
+            tip_rate: 0.0,
+            tip_dir: 0.0,
+            rolled_over: false,
         }
     }
 }
@@ -98,6 +141,65 @@ pub struct VehicleInput {
 
 impl Component for VehicleInput {
     const NAME: &'static str = "VehicleInput";
+}
+
+/// Something worth knowing happened to a vehicle. Sent during physics,
+/// readable after the tick (control protocol: `events.poll`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum VehicleEvent {
+    GearShift {
+        entity: String,
+        from: u8,
+        to: u8,
+    },
+    AbsEngaged {
+        entity: String,
+    },
+    AbsReleased {
+        entity: String,
+    },
+    WheelLift {
+        entity: String,
+        wheel: String,
+    },
+    WheelLanded {
+        entity: String,
+        wheel: String,
+    },
+    LowAirPressure {
+        entity: String,
+        bar: f32,
+    },
+    /// The centre of mass passed over the outer wheels: the vehicle is on its side.
+    RolledOver {
+        entity: String,
+        roll_deg: f32,
+    },
+}
+
+impl VehicleEvent {
+    pub const KINDS: [&'static str; 7] = [
+        "GearShift",
+        "AbsEngaged",
+        "AbsReleased",
+        "WheelLift",
+        "WheelLanded",
+        "LowAirPressure",
+        "RolledOver",
+    ];
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::GearShift { .. } => "GearShift",
+            Self::AbsEngaged { .. } => "AbsEngaged",
+            Self::AbsReleased { .. } => "AbsReleased",
+            Self::WheelLift { .. } => "WheelLift",
+            Self::WheelLanded { .. } => "WheelLanded",
+            Self::LowAirPressure { .. } => "LowAirPressure",
+            Self::RolledOver { .. } => "RolledOver",
+        }
+    }
 }
 
 /// All vehicle definitions available to the simulation, by name.
@@ -119,6 +221,7 @@ impl Plugin for VehiclePlugin {
         if !app.world.has_resource::<VehicleLibrary>() {
             app.world.insert_resource(VehicleLibrary::default());
         }
+        app.add_event::<VehicleEvent>("VehicleEvent");
         app.add_system(Stage::Physics, "vehicle_dynamics", vehicle_dynamics)
             .before("integrate_bodies")
             .reads::<VehicleInput>()
@@ -126,7 +229,8 @@ impl Plugin for VehiclePlugin {
             .reads::<Velocity>()
             .writes::<Vehicle>()
             .writes::<RigidBody>()
-            .reads_resource("VehicleLibrary");
+            .reads_resource("VehicleLibrary")
+            .writes_resource("Events<VehicleEvent>");
     }
 }
 
@@ -143,7 +247,7 @@ pub fn spawn_vehicle(world: &mut World, def: &VehicleDef, position: Vec2, headin
     world.insert(e, Pose { position, heading });
     world.insert(e, Velocity::default());
     world.insert(e, RigidBody::new(def.mass_kg, def.yaw_inertia_kgm2));
-    world.insert(e, Vehicle::new(&def.name, def.engine.idle_rpm));
+    world.insert(e, Vehicle::new(def));
     world.insert(e, VehicleInput::default());
     e
 }
@@ -182,203 +286,6 @@ pub fn set_rolling_speed(world: &mut World, e: Entity, speed: f32) {
     }
 }
 
-/// One physics substep for every vehicle.
-pub fn vehicle_dynamics(world: &mut World) {
-    let dt = world.resource::<SimTime>().physics_dt();
-    let g = world.resource::<Gravity>().0;
-    let surface = world
-        .get_resource::<Ground>()
-        .map(|gr| gr.friction_scale)
-        .unwrap_or(1.0);
-    let library = world.resource::<VehicleLibrary>();
-    world
-        .query::<(
-            &mut Vehicle,
-            &VehicleInput,
-            &Pose,
-            &Velocity,
-            &mut RigidBody,
-        )>()
-        .for_each(|_, (veh, input, pose, vel, body)| {
-            if let Some(def) = library.0.get(&veh.model) {
-                step_vehicle(def, veh, input, pose, vel, body, dt, g, surface);
-            }
-        });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn step_vehicle(
-    def: &VehicleDef,
-    veh: &mut Vehicle,
-    input: &VehicleInput,
-    pose: &Pose,
-    vel: &Velocity,
-    body: &mut RigidBody,
-    dt: f32,
-    g: f32,
-    surface: f32,
-) {
-    let m = def.mass_kg;
-    let a = def.cg_to_front_axle_m;
-    let b = def.rear_axle_from_cg();
-    let len = def.wheelbase_m;
-    let h = def.cg_height_m;
-    let half_track = def.track_width_m / 2.0;
-    let radius = def.wheel.radius_m;
-    let mu = def.tyre.friction * surface;
-
-    // Steering, rate-limited.
-    let target = input.steer.clamp(-1.0, 1.0) * def.steering.max_angle_deg.to_radians();
-    let max_step = def.steering.rate_deg_per_s.to_radians() * dt;
-    veh.steer_angle += (target - veh.steer_angle).clamp(-max_step, max_step);
-
-    // Body-frame motion.
-    let v_local = pose.to_local(vel.linear);
-    let yaw_rate = vel.angular;
-
-    // Wheel loads with longitudinal and lateral transfer from filtered acceleration.
-    let ax = veh.accel_local.x;
-    let ay = veh.accel_local.y;
-    let front_axle = (m * g * b / len - m * ax * h / len).max(0.0);
-    let rear_axle = (m * g - front_axle).max(0.0);
-    let split = |axle: f32| {
-        let d = axle * ay * h / (g * def.track_width_m);
-        ((axle - d) / 2.0, (axle + d) / 2.0) // (left, right): left turn (+ay) loads the right side
-    };
-    let (fl, fr) = split(front_axle);
-    let (rl, rr) = split(rear_axle);
-    let loads = [fl.max(0.0), fr.max(0.0), rl.max(0.0), rr.max(0.0)];
-    let positions = [
-        Vec2::new(a, half_track),
-        Vec2::new(a, -half_track),
-        Vec2::new(-b, half_track),
-        Vec2::new(-b, -half_track),
-    ];
-    let steer = [veh.steer_angle, veh.steer_angle, 0.0, 0.0];
-
-    // Drivetrain: open differential, automatic gearbox.
-    let driven = match def.drive {
-        Drive::Front => [true, true, false, false],
-        Drive::Rear => [false, false, true, true],
-        Drive::All => [true; 4],
-    };
-    let n_driven = driven.iter().filter(|d| **d).count() as f32;
-    let gears = &def.gearbox.ratios;
-    veh.gear = veh.gear.clamp(1, gears.len().max(1) as u8);
-    let ratio = gears.get(veh.gear as usize - 1).copied().unwrap_or(1.0) * def.gearbox.final_drive;
-    let avg_omega: f32 = (0..4)
-        .filter(|&i| driven[i])
-        .map(|i| veh.wheels[i].omega)
-        .sum::<f32>()
-        / n_driven.max(1.0);
-    let rpm_from_wheels = avg_omega * ratio * 60.0 / std::f32::consts::TAU;
-    let engine = &def.engine;
-    veh.engine_rpm = rpm_from_wheels.max(engine.idle_rpm).min(engine.redline_rpm);
-    let throttle = input.throttle.clamp(0.0, 1.0);
-    let engine_torque = if rpm_from_wheels >= engine.redline_rpm {
-        0.0
-    } else if throttle > 0.02 {
-        parts::curve_torque(&engine.torque_curve, veh.engine_rpm) * throttle
-    } else if rpm_from_wheels > engine.idle_rpm {
-        -engine.engine_brake_nm * (rpm_from_wheels / engine.redline_rpm)
-    } else {
-        0.0
-    };
-    let wheel_drive_torque = engine_torque * ratio * def.gearbox.efficiency / n_driven.max(1.0);
-
-    // Shift on road speed, not wheel speed, so wheelspin cannot cause gear hunting
-    // (the way a real gearbox controller cross-checks wheel speeds).
-    let road_rpm = v_local.x.max(0.0) / radius * ratio * 60.0 / std::f32::consts::TAU;
-    veh.shift_timer = (veh.shift_timer - dt).max(0.0);
-    if veh.shift_timer == 0.0 {
-        if road_rpm > def.gearbox.shift_up_rpm && (veh.gear as usize) < gears.len() {
-            veh.gear += 1;
-            veh.shift_timer = SHIFT_COOLDOWN_S;
-        } else if road_rpm < def.gearbox.shift_down_rpm && veh.gear > 1 {
-            veh.gear -= 1;
-            veh.shift_timer = SHIFT_COOLDOWN_S;
-        }
-    }
-
-    // Brakes.
-    let brake = input.brake.clamp(0.0, 1.0) * def.brakes.max_torque_nm;
-    let front_brake = brake * def.brakes.front_bias / 2.0;
-    let rear_brake = brake * (1.0 - def.brakes.front_bias) / 2.0;
-    let brake_torque = [front_brake, front_brake, rear_brake, rear_brake];
-
-    // Tyres.
-    let relax = def.tyre.relaxation_length_m;
-    let mut force = Vec2::ZERO;
-    let mut moment = 0.0;
-    for i in 0..4 {
-        let p = positions[i];
-        let contact_vel = v_local + Vec2::new(-yaw_rate * p.y, yaw_rate * p.x);
-        let wheel_rot = Vec2::from_angle(steer[i]);
-        let vt = Vec2::from_angle(-steer[i]).rotate(contact_vel);
-        let w = &mut veh.wheels[i];
-
-        // Relaxation length shrinks near standstill (down to 10%) so little
-        // carcass wind-up is stored when the car stops.
-        let relax_eff = relax * (vt.x.abs() / LOW_SPEED_DAMPING_BELOW).clamp(0.1, 1.0);
-        let damping_speed = vt.x.abs() + SLIP_DAMPING_SPEED;
-        w.slip_ratio += ((w.omega * radius - vt.x) - damping_speed * w.slip_ratio) * dt / relax_eff;
-        w.slip_tan += (vt.y - damping_speed * w.slip_tan) * dt / relax_eff;
-
-        (w.slip_ratio, w.slip_tan) =
-            parts::cap_slip(mu, def.tyre.stiffness_per_load, w.slip_ratio, w.slip_tan);
-
-        let (mut fx, mut fy) = parts::brush_tyre(
-            loads[i],
-            mu,
-            def.tyre.stiffness_per_load,
-            w.slip_ratio,
-            w.slip_tan,
-        );
-        // Near standstill, damp contact-patch sliding so a stopped car settles
-        // instead of rocking on its tyres. Fades out by LOW_SPEED_DAMPING_BELOW.
-        let fade = (1.0 - vt.x.abs() / LOW_SPEED_DAMPING_BELOW).max(0.0);
-        if fade > 0.0 {
-            let c = CONTACT_DAMPING_PER_LOAD * loads[i] * fade;
-            fx += c * (w.omega * radius - vt.x);
-            fy -= c * vt.y;
-            let limit = mu * loads[i];
-            let f = (fx * fx + fy * fy).sqrt();
-            if f > limit {
-                fx *= limit / f;
-                fy *= limit / f;
-            }
-        }
-        let drive = if driven[i] { wheel_drive_torque } else { 0.0 };
-        let resist = brake_torque[i] + def.tyre.rolling_resistance * loads[i] * radius;
-        w.omega = parts::step_wheel(
-            w.omega,
-            drive,
-            fx * radius,
-            resist,
-            def.wheel.inertia_kgm2,
-            dt,
-        );
-        w.angle = (w.angle + w.omega * dt).rem_euclid(std::f32::consts::TAU);
-        w.load = loads[i];
-        w.force = Vec2::new(fx, fy);
-
-        let fb = wheel_rot.rotate(w.force);
-        force += fb;
-        moment += p.x * fb.y - p.y * fb.x;
-    }
-
-    // Aerodynamic drag.
-    let speed = v_local.length();
-    force += -0.5 * AIR_DENSITY * def.aero.drag_area_m2 * speed * v_local;
-
-    // Filtered acceleration drives next substep's load transfer.
-    let alpha = dt / (ACCEL_FILTER_S + dt);
-    veh.accel_local += (force / m - veh.accel_local) * alpha;
-
-    body.apply_force(pose.to_world(force));
-    body.apply_torque(moment);
-}
-
 /// A snapshot of what a driver or test cares about.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Telemetry {
@@ -395,6 +302,15 @@ pub struct Telemetry {
     pub steer_deg: f32,
     pub position: [f32; 2],
     pub heading_deg: f32,
+    /// Body roll (positive leans right) and pitch (positive nose down), degrees.
+    pub roll_deg: f32,
+    pub pitch_deg: f32,
+    pub abs_active: bool,
+    /// Air reservoir pressure, bar (air brakes only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub air_reservoir_bar: Option<f32>,
+    /// Wheel loads FL, FR, RL, RR, newtons.
+    pub wheel_loads_n: [f32; 4],
 }
 
 pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
@@ -413,5 +329,10 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         steer_deg: veh.steer_angle.to_degrees(),
         position: pose.position.to_array(),
         heading_deg: pose.heading_deg(),
+        roll_deg: (veh.roll + veh.tip_angle * veh.tip_dir).to_degrees(),
+        pitch_deg: veh.pitch.to_degrees(),
+        abs_active: veh.abs_active,
+        air_reservoir_bar: veh.air.map(|a| a.reservoir_bar),
+        wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),
     })
 }

@@ -46,6 +46,10 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../examples/sandbox/vehicles/hatchback.vehicle.ron"),
     ),
     (
+        "vehicles/city_bus.vehicle.ron",
+        include_str!("../../../examples/sandbox/vehicles/city_bus.vehicle.ron"),
+    ),
+    (
         "scenes/flat.scene.ron",
         include_str!("../../../examples/sandbox/scenes/flat.scene.ron"),
     ),
@@ -56,6 +60,22 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
     (
         "tests/skidpad.scenario.ron",
         include_str!("../../../examples/sandbox/tests/skidpad.scenario.ron"),
+    ),
+    (
+        "tests/car_brake_100.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/car_brake_100.scenario.ron"),
+    ),
+    (
+        "tests/bus_brake_60.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/bus_brake_60.scenario.ron"),
+    ),
+    (
+        "tests/bus_acceleration.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/bus_acceleration.scenario.ron"),
+    ),
+    (
+        "tests/bus_turning_circle.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/bus_turning_circle.scenario.ron"),
     ),
     (
         "AGENTS.md",
@@ -188,7 +208,7 @@ and look at the image → fix. For live work, `wp serve` or `wp mcp`, then call 
 
 Control protocol methods: rpc.methods, sim.status, sim.step, sim.pause, sim.resume, sim.snapshot,
 sim.restore, world.entities, world.get, world.set, world.find, world.spawn, world.despawn,
-world.resources, input.set, vehicle.telemetry, render.screenshot.
+world.resources, input.set, vehicle.telemetry, events.poll, render.screenshot.
 ";
 
 const DOCS_SCENARIO: &str = "\
@@ -207,8 +227,15 @@ Drivers
   Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
 
 Assertions
-  ReachSpeed(kmh: 100.0, within_s: 11.0)    BrakingDistance(max_m: 45.0)     StoppedBy(s: 14.0)
-  MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)   NoNaN   Deterministic
+  ReachSpeed(kmh: 50.0, within_s: 15.0, not_before_s: 8.0)   (not_before_s is optional)
+  BrakingDistance(max_m: 36.7)    Mfdd(min_mps2: 5.0)    StoppedBy(s: 14.0)    TurningCircle(max_m: 25.0)
+  MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)
+  NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic
+
+Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver.
+Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) from 60 km/h
+≤ 0.15v + v²/130 = 36.7 m and MFDD ≥ 5.0 m/s²; cars (M1, R13-H) from 100 km/h ≤ 70 m and
+MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.
 
 Runs are headless at 60 Hz gameplay / 480 Hz physics, and bit-identical for the same build and seed.
 ";
@@ -217,11 +244,15 @@ const DOCS_VEHICLE: &str = "\
 Vehicle files: vehicles/<name>.vehicle.ron  (full schema with units: wp schema vehicle)
 
 Units are in field names (mass_kg, radius_m, drag_area_m2). Model: brush tyres with relaxation
-length and load transfer, torque-curve engine, automatic gearbox, open differential, per-axle brakes,
-aerodynamic drag. Check behaviour with `wp vehicle test <name>`:
-  accel_0_100   time from rest to 100 km/h
-  brake_100_0   stopping distance from 100 km/h (≈ 39 m is the limit for friction 1.0)
-  skidpad       steady lateral g at 40 km/h with fixed steering
+length and sliding friction, body roll and pitch on springs, tipping about the outer wheels,
+torque-curve engine with optional speed governor, automatic gearbox, open differential, brakes
+(hydraulic, or air with reservoir, compressor and chamber lag) with optional ABS, aerodynamic drag.
+Optional sections: suspension, body, brakes.air, brakes.abs, engine.governed_speed_kmh.
+Check behaviour with `wp vehicle test <name>` (100 km/h tests are skipped for governed vehicles):
+  accel_0_50 / accel_0_100   time from rest
+  brake_60_0 / brake_100_0   stopping distance and ECE R13 MFDD
+  skidpad                    steady lateral g at 40 km/h with fixed steering
+  turning_circle             diameter of the outer front wheel's path on full lock
 ";
 
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
@@ -795,7 +826,14 @@ pub fn plugins(ctx: &Ctx) -> CmdResult {
 
 // ---- wp vehicle test --------------------------------------------------------
 
-pub const MANOEUVRES: [&str; 3] = ["accel_0_100", "brake_100_0", "skidpad"];
+pub const MANOEUVRES: [&str; 6] = [
+    "accel_0_50",
+    "accel_0_100",
+    "brake_60_0",
+    "brake_100_0",
+    "skidpad",
+    "turning_circle",
+];
 
 fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
     let player = |initial_kmh: f32, driver: Driver| PlayerDef {
@@ -810,27 +848,36 @@ fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
         brake,
         steer: 0.0,
     };
-    let (player, duration_s, assert) = match name {
-        "accel_0_100" => (
+    let accel = |kmh: f32| {
+        (
             player(0.0, Driver::Script(vec![key(0.0, 1.0, 0.0)])),
-            40.0,
+            60.0,
             vec![
                 Assertion::ReachSpeed {
-                    kmh: 100.0,
-                    within_s: 40.0,
+                    kmh,
+                    within_s: 60.0,
+                    not_before_s: 0.0,
                 },
                 Assertion::NoNaN,
             ],
-        ),
-        "brake_100_0" => (
-            player(100.0, Driver::Script(vec![key(0.0, 0.0, 1.0)])),
-            15.0,
+        )
+    };
+    let brake = |kmh: f32| {
+        (
+            player(kmh, Driver::Script(vec![key(0.0, 0.0, 1.0)])),
+            20.0,
             vec![
                 Assertion::BrakingDistance { max_m: 1000.0 },
-                Assertion::StoppedBy { s: 15.0 },
+                Assertion::StoppedBy { s: 20.0 },
                 Assertion::NoNaN,
             ],
-        ),
+        )
+    };
+    let (player, duration_s, assert) = match name {
+        "accel_0_50" => accel(50.0),
+        "accel_0_100" => accel(100.0),
+        "brake_60_0" => brake(60.0),
+        "brake_100_0" => brake(100.0),
         "skidpad" => (
             player(
                 0.0,
@@ -842,6 +889,18 @@ fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
             30.0,
             vec![Assertion::NoNaN],
         ),
+        // Full lock at walking pace: the path of the outer front wheel.
+        "turning_circle" => (
+            player(
+                0.0,
+                Driver::Cruise {
+                    kmh: 6.0,
+                    steer: 1.0,
+                },
+            ),
+            75.0,
+            vec![Assertion::NoNaN],
+        ),
         _ => return None,
     };
     Some(ScenarioDef {
@@ -851,6 +910,17 @@ fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
         duration_s,
         assert,
     })
+}
+
+/// Manoeuvres that make sense for this vehicle (a bus governed to 80 km/h
+/// cannot do the 100 km/h tests).
+fn default_manoeuvres(def: &VehicleDef) -> Vec<&'static str> {
+    let fast = def.engine.governed_speed_kmh.is_none_or(|g| g > 105.0);
+    MANOEUVRES
+        .iter()
+        .copied()
+        .filter(|m| fast || !m.contains("100"))
+        .collect()
 }
 
 pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
@@ -866,7 +936,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
         })?
         .value;
     let names: Vec<&str> = if which == "all" {
-        MANOEUVRES.to_vec()
+        default_manoeuvres(vehicle)
     } else if MANOEUVRES.contains(&which) {
         vec![which]
     } else {
@@ -897,27 +967,39 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
         };
         let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         all_ok &= r.passed;
+        let x = &r.metrics;
         let (label, value) = match m {
+            "accel_0_50" => (
+                "time to 50 km/h",
+                x.time_to_50_kmh_s.map(|t| format!("{t:.2} s")),
+            ),
             "accel_0_100" => (
                 "time to 100 km/h",
-                r.metrics.time_to_100_kmh_s.map(|t| format!("{t:.2} s")),
+                x.time_to_100_kmh_s.map(|t| format!("{t:.2} s")),
             ),
-            "brake_100_0" => (
+            "brake_60_0" | "brake_100_0" => (
                 "stopping distance",
-                r.metrics.braking_distance_m.map(|d| format!("{d:.1} m")),
+                x.braking_distance_m.map(|d| match x.mfdd_mps2 {
+                    Some(a) => format!("{d:.1} m, MFDD {a:.2} m/s²"),
+                    None => format!("{d:.1} m"),
+                }),
+            ),
+            "turning_circle" => (
+                "turning circle",
+                x.turning_circle_m.map(|d| format!("{d:.1} m diameter")),
             ),
             _ => (
                 "steady lateral",
                 Some(format!(
                     "{:.3} g (peak {:.3} g)",
-                    r.metrics.steady_lateral_g, r.metrics.max_lateral_g
+                    x.steady_lateral_g, x.max_lateral_g
                 )),
             ),
         };
         let value = value.unwrap_or_else(|| "not reached".into());
         if !ctx.json {
             println!(
-                "{m:<12} {label:<18} {value}{}",
+                "{m:<15} {label:<18} {value}{}",
                 if r.passed { "" } else { "   ✗ see --json" }
             );
         }

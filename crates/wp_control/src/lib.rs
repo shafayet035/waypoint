@@ -93,7 +93,12 @@ pub const METHODS: &[(&str, &str, &str)] = &[
     (
         "vehicle.telemetry",
         "{entity?}",
-        "Speed, g-forces, gear, rpm, steering, position, heading.",
+        "Speed, g-forces, gear, rpm, steering, position, heading, roll, pitch, ABS, air pressure, wheel loads.",
+    ),
+    (
+        "events.poll",
+        "{kind?: string}",
+        "Vehicle events since the last poll (GearShift, AbsEngaged, WheelLift, LowAirPressure, RolledOver, ...), with tick and time.",
     ),
     (
         "render.screenshot",
@@ -145,8 +150,15 @@ pub struct Session {
     /// Vehicles `world.spawn` can create, by name.
     pub vehicles: BTreeMap<String, VehicleDef>,
     snapshots: Vec<WorldSnapshot>,
+    /// Events collected after each tick, until `events.poll` takes them.
+    events: std::collections::VecDeque<Value>,
+    /// Events dropped because nobody polled (the buffer keeps the newest).
+    events_dropped: u64,
     gpu: Option<wp_rhi::Gpu>,
 }
+
+/// Most events kept between polls.
+const EVENT_BUFFER: usize = 10_000;
 
 /// Longest single `sim.step`: 10 simulated minutes.
 const MAX_STEP_TICKS: u64 = 36_000;
@@ -159,7 +171,32 @@ impl Session {
             paused: false,
             vehicles,
             snapshots: Vec::new(),
+            events: std::collections::VecDeque::new(),
+            events_dropped: 0,
             gpu: None,
+        }
+    }
+
+    /// Advance one tick and collect its events. Every front end should tick
+    /// through this so `events.poll` sees everything.
+    pub fn tick(&mut self) {
+        self.app.tick();
+        let time = self.app.time();
+        if let Some(evs) = self
+            .app
+            .world
+            .get_resource::<wp_ecs::Events<wp_vehicle::VehicleEvent>>()
+        {
+            for e in evs.iter() {
+                let mut v = serde_json::to_value(e).unwrap();
+                v["tick"] = json!(time.tick);
+                v["t"] = json!(time.seconds());
+                self.events.push_back(v);
+            }
+        }
+        while self.events.len() > EVENT_BUFFER {
+            self.events.pop_front();
+            self.events_dropped += 1;
         }
     }
 
@@ -247,6 +284,16 @@ impl Session {
                 Ok(serde_json::to_value(t).unwrap())
             }
             "render.screenshot" => self.screenshot(params),
+            "events.poll" => {
+                let kind = params.get("kind").and_then(Value::as_str);
+                let all: Vec<Value> = self.events.drain(..).collect();
+                let events: Vec<Value> = all
+                    .into_iter()
+                    .filter(|e| kind.is_none_or(|k| e["kind"] == k))
+                    .collect();
+                let dropped = std::mem::take(&mut self.events_dropped);
+                Ok(json!({ "events": events, "dropped": dropped }))
+            }
             other => Err(RpcError {
                 code: -32601,
                 message: format!("unknown method `{other}`; call rpc.methods for the list"),
@@ -297,7 +344,9 @@ impl Session {
             )
             .into());
         }
-        self.app.run_ticks(ticks);
+        for _ in 0..ticks {
+            self.tick();
+        }
         Ok(self.status())
     }
 

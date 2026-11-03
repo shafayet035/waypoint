@@ -1,0 +1,18 @@
+// Full throttle from rest. A half-laden 12 m diesel city bus typically needs
+// 10–15 s to reach 50 km/h; the governor must hold it at 80 km/h.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "city_bus",
+    spawn: "start",
+    driver: Script([(at_s: 0.0, throttle: 1.0)]),
+  ),
+  duration_s: 70.0,
+  assert: [
+    ReachSpeed(kmh: 50.0, within_s: 15.0, not_before_s: 8.0),
+    ReachSpeed(kmh: 75.0, within_s: 60.0),
+    MaxSpeed(82.0),
+    NoNaN,
+  ],
+)

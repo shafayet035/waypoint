@@ -270,8 +270,33 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: "WP-V070",
-        title: "Centre of mass is high for the track width (warning)",
-        fix: "Check cg_height_m; above track_width_m / 2 the vehicle may roll over before it slides.",
+        title: "The vehicle would roll over before its tyres slide (warning)",
+        fix: "Check cg_height_m and track_width_m: the static stability factor track / (2 × cg height) is below the tyre friction.",
+    },
+    ErrorDoc {
+        code: "WP-V022",
+        title: "Governed speed is out of range",
+        fix: "Set governed_speed_kmh between 5 and 400, or remove it.",
+    },
+    ErrorDoc {
+        code: "WP-V041",
+        title: "Air brake settings are inconsistent",
+        fix: "Need 0 < chamber_full_bar ≤ reservoir_max_bar, 0 < response_time_s ≤ 2, consumption_ratio in 0..1, warning_bar < reservoir_max_bar.",
+    },
+    ErrorDoc {
+        code: "WP-V080",
+        title: "Suspension settings are out of range",
+        fix: "Gradients in (0, 20] deg/g, damping_ratio in (0, 2], front_roll_share 0..1, roll centre below the centre of mass.",
+    },
+    ErrorDoc {
+        code: "WP-V090",
+        title: "Body dimensions do not fit the chassis",
+        fix: "length_m must exceed wheelbase_m + front_overhang_m, and height_m must exceed cg_height_m.",
+    },
+    ErrorDoc {
+        code: "WP-S017",
+        title: "Unknown event kind in an assertion",
+        fix: "Use one of: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver.",
     },
     ErrorDoc {
         code: "WP-W001",

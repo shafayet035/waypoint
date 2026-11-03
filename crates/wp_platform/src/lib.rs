@@ -324,7 +324,7 @@ impl Handler {
                 {
                     *i = self.input;
                 }
-                self.session.app.tick();
+                self.session.tick();
                 self.ticks += 1;
                 self.accumulator -= tick_dt;
                 steps += 1;

@@ -67,6 +67,63 @@ pub fn cap_slip(
     (kappa, sy * (1.0 + kappa))
 }
 
+/// Friction available when the contact patch slides.
+///
+/// `slide` is the kinematic combined slip |V_slip| / max(|v|, 1 m/s). Up to the
+/// point where the brush model saturates the tyre keeps its peak friction;
+/// beyond it friction falls towards `peak × sliding_ratio` (a locked wheel).
+pub fn sliding_friction(peak: f32, sliding_ratio: f32, stiffness_per_load: f32, slide: f32) -> f32 {
+    let saturation = 3.0 * peak / stiffness_per_load.max(1e-3);
+    let excess = (slide - saturation).max(0.0);
+    peak * (sliding_ratio + (1.0 - sliding_ratio) * (-excess / 0.25).exp())
+}
+
+/// Thresholds of the ABS controller: release a wheel when its slip passes
+/// `RELEASE`, reapply when it recovers above `REAPPLY` (both negative = braking).
+pub const ABS_RELEASE_SLIP: f32 = -0.18;
+pub const ABS_REAPPLY_SLIP: f32 = -0.10;
+
+/// One step of a per-wheel ABS valve. `factor` scales brake torque (0 = fully
+/// released, 1 = full pressure). Returns the new factor.
+pub fn abs_step(factor: f32, slip: f32, braking: bool, speed: f32, dt: f32) -> f32 {
+    if !braking || speed < 1.5 {
+        return 1.0;
+    }
+    if slip < ABS_RELEASE_SLIP {
+        (factor - 30.0 * dt).max(0.0) // dump pressure in about 1/30 s
+    } else if slip > ABS_REAPPLY_SLIP {
+        (factor + 6.0 * dt).min(1.0) // rebuild over about 1/6 s
+    } else {
+        factor
+    }
+}
+
+/// Air brake pressures, bar.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AirState {
+    pub reservoir_bar: f32,
+    pub chamber_bar: f32,
+}
+
+/// Advance an air brake system by `dt` for a pedal `demand` in 0..1. Returns
+/// the brake fraction (chamber pressure / full-application pressure).
+pub fn air_brake_step(
+    state: &mut AirState,
+    air: &crate::def::AirBrakeDef,
+    demand: f32,
+    dt: f32,
+) -> f32 {
+    let target = (demand.clamp(0.0, 1.0) * air.chamber_full_bar).min(state.reservoir_bar);
+    let before = state.chamber_bar;
+    state.chamber_bar += (target - state.chamber_bar) * (dt / (air.response_time_s + dt));
+    if state.chamber_bar > before {
+        state.reservoir_bar -= (state.chamber_bar - before) * air.consumption_ratio;
+    }
+    state.reservoir_bar =
+        (state.reservoir_bar + air.compressor_bar_per_s * dt).min(air.reservoir_max_bar);
+    (state.chamber_bar / air.chamber_full_bar).clamp(0.0, 1.0)
+}
+
 /// Linear interpolation on a (rpm, torque) curve, clamped at both ends.
 pub fn curve_torque(curve: &[(f32, f32)], rpm: f32) -> f32 {
     match curve {
@@ -142,6 +199,62 @@ mod tests {
         assert!(fx < 0.0 && fy < 0.0);
         // Small slips are untouched.
         assert_eq!(cap_slip(1.0, 16.0, 0.01, 0.02), (0.01, 0.02));
+    }
+
+    #[test]
+    fn sliding_loses_friction_only_past_the_peak() {
+        assert_eq!(sliding_friction(1.0, 0.75, 16.0, 0.1), 1.0);
+        let locked = sliding_friction(1.0, 0.75, 16.0, 1.0);
+        assert!((locked - 0.75).abs() < 0.02, "locked μ = {locked}");
+    }
+
+    #[test]
+    fn abs_releases_and_reapplies() {
+        let dt = 1.0 / 480.0;
+        let mut f = 1.0;
+        for _ in 0..20 {
+            f = abs_step(f, -0.4, true, 20.0, dt);
+        }
+        assert!(f < 0.01, "should have released, f = {f}");
+        for _ in 0..100 {
+            f = abs_step(f, -0.02, true, 20.0, dt);
+        }
+        assert!(f > 0.99);
+        assert_eq!(abs_step(0.2, -0.5, false, 20.0, dt), 1.0);
+    }
+
+    #[test]
+    fn air_brakes_lag_and_consume_air() {
+        let air = crate::def::AirBrakeDef {
+            reservoir_max_bar: 10.0,
+            chamber_full_bar: 8.0,
+            response_time_s: 0.3,
+            compressor_bar_per_s: 0.0,
+            consumption_ratio: 0.1,
+            warning_bar: 5.5,
+        };
+        let mut st = AirState {
+            reservoir_bar: 10.0,
+            chamber_bar: 0.0,
+        };
+        let dt = 1.0 / 480.0;
+        let mut frac = 0.0;
+        for _ in 0..(0.3 / dt) as usize {
+            frac = air_brake_step(&mut st, &air, 1.0, dt);
+        }
+        assert!(
+            (0.55..0.7).contains(&frac),
+            "63% after one time constant, got {frac}"
+        );
+        for _ in 0..2000 {
+            frac = air_brake_step(&mut st, &air, 1.0, dt);
+        }
+        assert!(frac > 0.99);
+        assert!(
+            (st.reservoir_bar - 9.2).abs() < 0.01,
+            "8 bar × 0.1 consumed, left {}",
+            st.reservoir_bar
+        );
     }
 
     #[test]
