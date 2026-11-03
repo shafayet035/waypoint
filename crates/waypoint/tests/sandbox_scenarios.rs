@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use waypoint::project::Project;
-use waypoint::test::{ScenarioInput, run_scenario};
+use waypoint::test::run_scenario;
 
 #[test]
 fn sandbox_scenarios_pass() {
@@ -13,13 +13,8 @@ fn sandbox_scenarios_pass() {
     let project = project.unwrap();
     assert!(!project.scenarios.is_empty());
     for (name, sc) in &project.scenarios {
-        let s = &sc.value;
-        let input = ScenarioInput {
-            name,
-            scenario: s,
-            scene: &project.scenes[&s.scene].value,
-            vehicle: &project.vehicles[&s.player.vehicle].value,
-        };
+        let _ = sc;
+        let input = project.scenario_input(name).expect("scenario inputs exist");
         let report =
             run_scenario(&input, &|| waypoint::make_app(project.disabled_plugins())).unwrap();
         println!("{}", serde_json_pretty(&report));

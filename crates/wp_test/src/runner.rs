@@ -15,6 +15,8 @@ pub struct ScenarioInput<'a> {
     pub scenario: &'a ScenarioDef,
     pub scene: &'a SceneDef,
     pub vehicle: &'a VehicleDef,
+    /// Semi-trailer to couple to the player, if the scenario names one.
+    pub trailer: Option<&'a wp_vehicle::TrailerDef>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +156,19 @@ pub fn prepare(
     }
     app.world.insert(player, Name(input.vehicle.name.clone()));
     app.world.insert(player, Player);
+    if let Some(tdef) = input.trailer {
+        let t = wp_vehicle::spawn_trailer(&mut app.world, tdef, player).ok_or_else(|| {
+            Diagnostic::error(
+                "WP-S019",
+                format!(
+                    "vehicle `{}` has no fifth wheel to couple `{}` to",
+                    input.vehicle.name, tdef.name
+                ),
+            )
+            .help("add hitch: Some((ahead_of_rear_axle_m: 0.5)) to the vehicle")
+        })?;
+        app.world.insert(t, Name(tdef.name.clone()));
+    }
 
     let mut driver = DriverState::new(s.player.driver.clone());
     app.add_system(Stage::Agents, "scenario_driver", move |w| {
@@ -266,15 +281,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
 }
 
 fn event_entity(e: &VehicleEvent) -> &str {
-    match e {
-        VehicleEvent::GearShift { entity, .. }
-        | VehicleEvent::AbsEngaged { entity }
-        | VehicleEvent::AbsReleased { entity }
-        | VehicleEvent::WheelLift { entity, .. }
-        | VehicleEvent::WheelLanded { entity, .. }
-        | VehicleEvent::LowAirPressure { entity, .. }
-        | VehicleEvent::RolledOver { entity, .. } => entity,
-    }
+    e.entity()
 }
 
 fn steady_lateral_g(samples: &[Sample]) -> f32 {
@@ -503,6 +510,7 @@ impl DriverState {
                     throttle: k.throttle,
                     brake: k.brake,
                     steer: k.steer,
+                    reverse: k.reverse,
                 })
                 .unwrap_or_default(),
             Driver::Cruise { kmh, steer } => {
@@ -519,6 +527,7 @@ impl DriverState {
                     throttle,
                     brake,
                     steer: *steer,
+                    reverse: false,
                 }
             }
         }

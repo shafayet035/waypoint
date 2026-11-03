@@ -10,6 +10,7 @@
 pub mod def;
 pub mod dynamics;
 pub mod parts;
+pub mod trailer;
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
@@ -18,9 +19,10 @@ use wp_app::{App, Plugin};
 use wp_ecs::{Component, Entity, Stage, World};
 use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 
-pub use def::{AirBrakeDef, BodyDef, Drive, SuspensionDef, VehicleDef};
+pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
+pub use trailer::{Trailer, TrailerDef, TrailerLibrary, spawn_trailer, trailer_dynamics};
 
 /// Wheel order used everywhere: front-left, front-right, rear-left, rear-right.
 pub const WHEEL_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
@@ -92,6 +94,18 @@ pub struct Vehicle {
     /// Set once the vehicle has tipped over.
     #[serde(default)]
     pub rolled_over: bool,
+    /// Reverse gear engaged.
+    #[serde(default)]
+    pub reverse: bool,
+    /// Velocity at the previous substep (world frame), for measuring acceleration.
+    #[serde(default)]
+    pub prev_velocity: Vec2,
+    /// Vertical load from a coupled semi-trailer's kingpin, N (written by the trailer).
+    #[serde(default)]
+    pub hitch_load_n: f32,
+    /// Brake application 0–1 after the air system: what a coupled trailer's brakes receive.
+    #[serde(default)]
+    pub brake_fraction: f32,
 }
 
 impl Component for Vehicle {
@@ -124,6 +138,10 @@ impl Vehicle {
             tip_rate: 0.0,
             tip_dir: 0.0,
             rolled_over: false,
+            reverse: false,
+            prev_velocity: Vec2::ZERO,
+            hitch_load_n: 0.0,
+            brake_fraction: 0.0,
         }
     }
 }
@@ -137,6 +155,9 @@ pub struct VehicleInput {
     pub brake: f32,
     /// −1 (full right) to 1 (full left).
     pub steer: f32,
+    /// Request reverse gear. Engages (or disengages) only below 2 km/h.
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 impl Component for VehicleInput {
@@ -176,10 +197,15 @@ pub enum VehicleEvent {
         entity: String,
         roll_deg: f32,
     },
+    /// The angle between tractor and trailer passed 60°.
+    Jackknife {
+        entity: String,
+        angle_deg: f32,
+    },
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 7] = [
+    pub const KINDS: [&'static str; 8] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
@@ -187,6 +213,7 @@ impl VehicleEvent {
         "WheelLanded",
         "LowAirPressure",
         "RolledOver",
+        "Jackknife",
     ];
 
     pub fn kind(&self) -> &'static str {
@@ -198,6 +225,21 @@ impl VehicleEvent {
             Self::WheelLanded { .. } => "WheelLanded",
             Self::LowAirPressure { .. } => "LowAirPressure",
             Self::RolledOver { .. } => "RolledOver",
+            Self::Jackknife { .. } => "Jackknife",
+        }
+    }
+
+    /// The vehicle the event is about.
+    pub fn entity(&self) -> &str {
+        match self {
+            Self::GearShift { entity, .. }
+            | Self::AbsEngaged { entity }
+            | Self::AbsReleased { entity }
+            | Self::WheelLift { entity, .. }
+            | Self::WheelLanded { entity, .. }
+            | Self::LowAirPressure { entity, .. }
+            | Self::RolledOver { entity, .. }
+            | Self::Jackknife { entity, .. } => entity,
         }
     }
 }
@@ -218,12 +260,25 @@ impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
         app.world.register::<Vehicle>();
         app.world.register::<VehicleInput>();
+        app.world.register::<Trailer>();
         if !app.world.has_resource::<VehicleLibrary>() {
             app.world.insert_resource(VehicleLibrary::default());
         }
+        if !app.world.has_resource::<TrailerLibrary>() {
+            app.world.insert_resource(TrailerLibrary::default());
+        }
+        // Trailers first: they set the tractor's kingpin load for this substep.
+        app.add_system(Stage::Physics, "trailer_dynamics", trailer_dynamics)
+            .before("vehicle_dynamics")
+            .reads::<Pose>()
+            .reads::<Velocity>()
+            .writes::<Trailer>()
+            .writes::<RigidBody>()
+            .writes::<Vehicle>()
+            .reads_resource("TrailerLibrary");
         app.add_event::<VehicleEvent>("VehicleEvent");
         app.add_system(Stage::Physics, "vehicle_dynamics", vehicle_dynamics)
-            .before("integrate_bodies")
+            .before("integrate_velocities")
             .reads::<VehicleInput>()
             .reads::<Pose>()
             .reads::<Velocity>()
@@ -269,6 +324,7 @@ pub fn set_rolling_speed(world: &mut World, e: Entity, speed: f32) {
         vel.angular = 0.0;
     }
     if let Some(mut veh) = world.get_mut::<Vehicle>(e) {
+        veh.prev_velocity = pose.forward() * speed;
         let omega = speed / def.wheel.radius_m;
         for w in &mut veh.wheels {
             w.omega = omega;
@@ -306,6 +362,8 @@ pub struct Telemetry {
     pub roll_deg: f32,
     pub pitch_deg: f32,
     pub abs_active: bool,
+    /// Reverse gear engaged.
+    pub reverse: bool,
     /// Air reservoir pressure, bar (air brakes only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub air_reservoir_bar: Option<f32>,
@@ -332,6 +390,7 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         roll_deg: (veh.roll + veh.tip_angle * veh.tip_dir).to_degrees(),
         pitch_deg: veh.pitch.to_degrees(),
         abs_active: veh.abs_active,
+        reverse: veh.reverse,
         air_reservoir_bar: veh.air.map(|a| a.reservoir_bar),
         wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),
     })

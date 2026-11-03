@@ -5,7 +5,10 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use wp_ecs::{Entity, World};
 use wp_physics::Pose;
-use wp_vehicle::{Vehicle, VehicleDef, VehicleInput, VehicleLibrary};
+use wp_vehicle::{
+    BodyStyle, Trailer, TrailerDef, TrailerLibrary, Vehicle, VehicleDef, VehicleInput,
+    VehicleLibrary,
+};
 use wp_world::Player;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +112,7 @@ pub enum CameraMode {
     /// Behind and above the player, looking ahead.
     #[default]
     Chase,
-    /// Straight down from 30 m, north up.
+    /// Straight down, north up; higher for longer vehicles.
     Top,
     /// Level with the player, from its left.
     Side,
@@ -145,7 +148,7 @@ impl CameraMode {
                 pos - fwd * 7.5 * s + Vec3::Z * 2.8 * s,
                 pos + fwd * 2.5 * s + Vec3::Z * 0.9 * s,
             ),
-            CameraMode::Top => (pos + Vec3::Z * 30.0 * s, pos),
+            CameraMode::Top => (pos + Vec3::Z * (18.0 + 2.2 * length), pos),
             CameraMode::Side => (
                 pos + left * 9.0 * s + Vec3::Z * 1.4 * s,
                 pos + Vec3::Z * 0.6 * s,
@@ -228,6 +231,14 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
             };
             vehicle_items(&mut items, &mut shadows, def, pose, veh, paint, braking);
         });
+    let trailers = world.get_resource::<TrailerLibrary>();
+    world
+        .query::<(&Pose, &Trailer)>()
+        .for_each(|_, (pose, tr)| {
+            if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&tr.model)) {
+                trailer_items(&mut items, &mut shadows, def, pose, tr);
+            }
+        });
 
     let camera = match focus_entity(world).and_then(|e| world.get::<Pose>(e).map(|p| (e, *p))) {
         Some((e, pose)) => {
@@ -240,7 +251,24 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
                 })
                 .map(|b| b.front - b.rear)
                 .unwrap_or(4.2);
-            mode.camera(&pose, len)
+            // Frame a towed trailer too.
+            let towed = world
+                .query::<(&Trailer, &wp_physics::PinJoint)>()
+                .entities()
+                .into_iter()
+                .find(|t| {
+                    world
+                        .get::<wp_physics::PinJoint>(*t)
+                        .is_some_and(|j| j.other == e)
+                })
+                .and_then(|t| world.get::<Trailer>(t).map(|tr| tr.model.clone()))
+                .and_then(|m| {
+                    trailers
+                        .as_ref()
+                        .and_then(|l| l.0.get(&m).map(|d| d.body.length_m))
+                })
+                .unwrap_or(0.0);
+            mode.camera(&pose, len + towed * 0.6)
         }
         None => mode.camera(&Pose::default(), 4.2),
     };
@@ -250,6 +278,120 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
         items,
         shadows,
     }
+}
+
+/// A box body on a deck, with each axle's wheels and brake lights.
+fn trailer_items(
+    items: &mut Vec<DrawItem>,
+    shadows: &mut Vec<BlobShadow>,
+    def: &TrailerDef,
+    pose: &Pose,
+    tr: &Trailer,
+) {
+    let base =
+        Mat4::from_translation(pose.position.extend(0.0)) * Mat4::from_rotation_z(pose.heading);
+    let r = def.wheel.radius_m;
+    let front = def.cg_behind_kingpin_m + def.body.kingpin_from_front_m;
+    let rear = front - def.body.length_m;
+    let hw = def.body.width_m / 2.0;
+    let deck = 1.15;
+    let mut box_at = |min: Vec3, max: Vec3, color: Vec3, rough: f32, emissive: f32| {
+        items.push(DrawItem {
+            mesh: MeshId::Cube,
+            transform: base
+                * Mat4::from_translation((min + max) * 0.5)
+                * Mat4::from_scale(max - min),
+            color,
+            roughness: rough,
+            metallic: 0.0,
+            emissive,
+        });
+    };
+    let curtain = Vec3::new(0.55, 0.57, 0.6);
+    let frame = Vec3::new(0.03, 0.03, 0.035);
+    box_at(
+        Vec3::new(rear, -hw, deck),
+        Vec3::new(front, hw, def.body.height_m),
+        curtain,
+        0.7,
+        0.0,
+    );
+    box_at(
+        Vec3::new(rear, -hw - 0.01, deck - 0.12),
+        Vec3::new(front, hw + 0.01, deck + 0.05),
+        frame,
+        0.6,
+        0.0,
+    );
+    box_at(
+        Vec3::new(rear, -hw - 0.01, def.body.height_m - 0.08),
+        Vec3::new(front, hw + 0.01, def.body.height_m + 0.01),
+        frame,
+        0.6,
+        0.0,
+    );
+    // Landing legs and rear bumper.
+    let leg_x = def.cg_behind_kingpin_m - 2.2;
+    for y in [-0.9, 0.9] {
+        box_at(
+            Vec3::new(leg_x - 0.08, y - 0.08, 0.35),
+            Vec3::new(leg_x + 0.08, y + 0.08, deck),
+            frame,
+            0.6,
+            0.0,
+        );
+    }
+    box_at(
+        Vec3::new(rear - 0.02, -hw + 0.2, r * 0.7),
+        Vec3::new(rear + 0.15, hw - 0.2, r * 0.95),
+        frame,
+        0.6,
+        0.0,
+    );
+    for side in [-1.0, 1.0] {
+        box_at(
+            Vec3::new(rear - 0.02, side * (hw - 0.3) - 0.15, deck - 0.1),
+            Vec3::new(rear + 0.01, side * (hw - 0.3) + 0.15, deck + 0.02),
+            Vec3::new(0.7, 0.02, 0.02),
+            0.2,
+            if tr.braking { 6.0 } else { 0.8 },
+        );
+    }
+    for (axle, dist) in def.axles_behind_kingpin_m.iter().enumerate() {
+        let x = def.cg_behind_kingpin_m - dist;
+        for side in 0..2 {
+            let y = if side == 0 {
+                def.track_width_m / 2.0
+            } else {
+                -def.track_width_m / 2.0
+            };
+            let angle = tr
+                .wheels
+                .get(axle * 2 + side)
+                .map(|w| w.angle)
+                .unwrap_or(0.0);
+            items.push(DrawItem {
+                mesh: MeshId::Wheel,
+                transform: base
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(r, 0.3, r),
+                        Quat::from_rotation_y(angle),
+                        Vec3::new(x, y, r),
+                    ),
+                color: Vec3::new(0.025, 0.025, 0.027),
+                roughness: 0.85,
+                metallic: 0.0,
+                emissive: 0.0,
+            });
+        }
+    }
+    shadows.push(BlobShadow {
+        center: pose.position + pose.forward() * ((front + rear) * 0.5),
+        half_extents: Vec2::new(def.body.length_m * 0.5 + 0.1, hw + 0.05),
+        heading: pose.heading,
+        strength: 0.85,
+        softness: 0.4,
+    });
 }
 
 fn palette(i: u32) -> Vec3 {
@@ -316,80 +458,181 @@ fn vehicle_items(
     let hw = shape.width / 2.0;
     let trim = Vec3::new(0.02, 0.02, 0.022);
     let glass = Vec3::new(0.015, 0.02, 0.028);
-    // Floor between the wheels, lower body, glasshouse and roof.
-    box_at(
-        Vec3::new(-b + r * 1.05, -half_track + 0.2, r * 0.45),
-        Vec3::new(a - r * 1.05, half_track - 0.2, sill),
-        trim,
-        0.8,
-        0.0,
-        0.0,
-    );
-    box_at(
-        Vec3::new(shape.rear, -hw, sill),
-        Vec3::new(shape.front, hw, belt),
-        paint,
-        0.32,
-        0.0,
-        0.0,
-    );
-    box_at(
-        Vec3::new(shape.rear + 0.05, -hw, r * 0.7),
-        Vec3::new(shape.rear + 0.3, hw, sill),
-        trim,
-        0.7,
-        0.0,
-        0.0,
-    );
-    box_at(
-        Vec3::new(shape.front - 0.3, -hw, r * 0.7),
-        Vec3::new(shape.front - 0.05, hw, sill),
-        trim,
-        0.7,
-        0.0,
-        0.0,
-    );
-    let (cabin_front, cabin_rear) = if tall {
-        (shape.front - 0.08, shape.rear + 0.2)
-    } else {
-        (a - r * 1.3, shape.rear + 0.3)
+    let style = match def.body.as_ref().map(|b| b.style).unwrap_or_default() {
+        BodyStyle::Auto if tall => BodyStyle::Bus,
+        BodyStyle::Auto => BodyStyle::Car,
+        s => s,
     };
-    box_at(
-        Vec3::new(cabin_rear, -hw + 0.07, belt),
-        Vec3::new(cabin_front, hw - 0.07, shape.height - 0.06),
-        glass,
-        0.05,
-        0.0,
-        0.0,
-    );
-    box_at(
-        Vec3::new(cabin_rear + 0.05, -hw + 0.09, shape.height - 0.07),
-        Vec3::new(cabin_front - 0.1, hw - 0.09, shape.height),
-        paint,
-        0.32,
-        0.0,
-        0.0,
-    );
-    // Lights.
-    let lamp_z = (sill + belt) * 0.5;
-    for side in [-1.0, 1.0] {
-        let y0 = side * (hw - 0.12);
+    if style == BodyStyle::TruckCab {
+        // Cab over the front axle, then an open chassis with the fifth wheel.
+        let cab_rear = shape.front - 2.3;
+        let cab_floor = r * 1.6;
         box_at(
-            Vec3::new(shape.front - 0.02, y0 - 0.17, lamp_z - 0.06),
-            Vec3::new(shape.front + 0.01, y0 + 0.17, lamp_z + 0.06),
-            Vec3::new(0.9, 0.9, 0.85),
-            0.1,
+            Vec3::new(cab_rear, -hw, cab_floor),
+            Vec3::new(shape.front, hw, shape.height * 0.62),
+            paint,
+            0.32,
             0.0,
-            0.6,
+            0.0,
         );
         box_at(
-            Vec3::new(shape.rear - 0.01, y0 - 0.15, lamp_z - 0.05),
-            Vec3::new(shape.rear + 0.02, y0 + 0.15, lamp_z + 0.05),
-            Vec3::new(0.7, 0.02, 0.02),
+            Vec3::new(shape.front - 0.35, -hw + 0.06, shape.height * 0.62),
+            Vec3::new(shape.front + 0.005, hw - 0.06, shape.height * 0.82),
+            glass,
+            0.05,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(cab_rear, -hw, shape.height * 0.62),
+            Vec3::new(shape.front - 0.35, hw, shape.height),
+            paint,
+            0.32,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(shape.front - 0.35, -hw, shape.height * 0.82),
+            Vec3::new(shape.front, hw, shape.height),
+            paint,
+            0.32,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(shape.front - 0.3, -hw, r * 0.6),
+            Vec3::new(shape.front + 0.02, hw, cab_floor),
+            trim,
+            0.6,
             0.2,
             0.0,
-            if braking { 6.0 } else { 0.8 },
         );
+        // Chassis rails, from under the cab to the rear.
+        for y in [-0.45, 0.45] {
+            box_at(
+                Vec3::new(shape.rear, y - 0.06, r * 1.25),
+                Vec3::new(cab_rear + 0.2, y + 0.06, r * 1.25 + 0.3),
+                trim,
+                0.7,
+                0.0,
+                0.0,
+            );
+        }
+        if let Some(h) = &def.hitch {
+            let x = -b + h.ahead_of_rear_axle_m;
+            box_at(
+                Vec3::new(x - 0.5, -0.6, r * 1.25 + 0.3),
+                Vec3::new(x + 0.5, 0.6, r * 1.25 + 0.42),
+                trim,
+                0.4,
+                0.6,
+                0.0,
+            );
+        }
+        // Mudguards over the drive axle.
+        box_at(
+            Vec3::new(-b - r * 1.2, -hw, r * 2.05),
+            Vec3::new(-b + r * 1.2, hw, r * 2.15),
+            trim,
+            0.6,
+            0.0,
+            0.0,
+        );
+        for side in [-1.0, 1.0] {
+            let y0 = side * (hw - 0.25);
+            box_at(
+                Vec3::new(shape.front - 0.02, y0 - 0.2, cab_floor - 0.25),
+                Vec3::new(shape.front + 0.03, y0 + 0.2, cab_floor - 0.1),
+                Vec3::new(0.9, 0.9, 0.85),
+                0.1,
+                0.0,
+                0.6,
+            );
+            box_at(
+                Vec3::new(shape.rear - 0.01, side * 1.0 - 0.12, r * 1.25),
+                Vec3::new(shape.rear + 0.02, side * 1.0 + 0.12, r * 1.25 + 0.12),
+                Vec3::new(0.7, 0.02, 0.02),
+                0.2,
+                0.0,
+                if braking { 6.0 } else { 0.8 },
+            );
+        }
+    } else {
+        // Floor between the wheels, lower body, glasshouse and roof.
+        box_at(
+            Vec3::new(-b + r * 1.05, -half_track + 0.2, r * 0.45),
+            Vec3::new(a - r * 1.05, half_track - 0.2, sill),
+            trim,
+            0.8,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(shape.rear, -hw, sill),
+            Vec3::new(shape.front, hw, belt),
+            paint,
+            0.32,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(shape.rear + 0.05, -hw, r * 0.7),
+            Vec3::new(shape.rear + 0.3, hw, sill),
+            trim,
+            0.7,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(shape.front - 0.3, -hw, r * 0.7),
+            Vec3::new(shape.front - 0.05, hw, sill),
+            trim,
+            0.7,
+            0.0,
+            0.0,
+        );
+        let (cabin_front, cabin_rear) = if tall {
+            (shape.front - 0.08, shape.rear + 0.2)
+        } else {
+            (a - r * 1.3, shape.rear + 0.3)
+        };
+        box_at(
+            Vec3::new(cabin_rear, -hw + 0.07, belt),
+            Vec3::new(cabin_front, hw - 0.07, shape.height - 0.06),
+            glass,
+            0.05,
+            0.0,
+            0.0,
+        );
+        box_at(
+            Vec3::new(cabin_rear + 0.05, -hw + 0.09, shape.height - 0.07),
+            Vec3::new(cabin_front - 0.1, hw - 0.09, shape.height),
+            paint,
+            0.32,
+            0.0,
+            0.0,
+        );
+        // Lights.
+        let lamp_z = (sill + belt) * 0.5;
+        for side in [-1.0, 1.0] {
+            let y0 = side * (hw - 0.12);
+            box_at(
+                Vec3::new(shape.front - 0.02, y0 - 0.17, lamp_z - 0.06),
+                Vec3::new(shape.front + 0.01, y0 + 0.17, lamp_z + 0.06),
+                Vec3::new(0.9, 0.9, 0.85),
+                0.1,
+                0.0,
+                0.6,
+            );
+            box_at(
+                Vec3::new(shape.rear - 0.01, y0 - 0.15, lamp_z - 0.05),
+                Vec3::new(shape.rear + 0.02, y0 + 0.15, lamp_z + 0.05),
+                Vec3::new(0.7, 0.02, 0.02),
+                0.2,
+                0.0,
+                if braking { 6.0 } else { 0.8 },
+            );
+        }
     }
 
     // Wheels.

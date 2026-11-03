@@ -1,0 +1,61 @@
+// A 4x2 highway tractor unit (up to 40 t combinations). Typical figures for the
+// class: 12.8 L engine, 360 kW and 2500 N·m, 12-speed automated gearbox,
+// 315/80 R22.5 tyres, air disc brakes with ABS, governed to 90 km/h (EU limit).
+// Not modelled on any one manufacturer's truck.
+(
+  name: "tractor",
+  mass_kg: 7800.0,
+  yaw_inertia_kgm2: 30000.0,
+  cg_height_m: 1.1,
+  wheelbase_m: 3.7,
+  cg_to_front_axle_m: 1.2,
+  track_width_m: 2.05,
+  drive: Rear,
+  wheel: (radius_m: 0.53, inertia_kgm2: 20.0),
+  tyre: (
+    friction: 0.8,
+    stiffness_per_load: 10.0,
+    relaxation_length_m: 0.6,
+    rolling_resistance: 0.006,
+    sliding_friction_ratio: 0.75,
+  ),
+  engine: (
+    idle_rpm: 600.0,
+    redline_rpm: 2100.0,
+    torque_curve: [(800.0, 1600.0), (1000.0, 2500.0), (1400.0, 2500.0), (1800.0, 2100.0), (2000.0, 1800.0)],
+    engine_brake_nm: 600.0,
+    governed_speed_kmh: Some(90.0),
+  ),
+  gearbox: (
+    ratios: [14.94, 11.73, 9.04, 7.09, 5.54, 4.35, 3.44, 2.70, 2.08, 1.63, 1.27, 1.0],
+    final_drive: 2.64,
+    efficiency: 0.93,
+    shift_up_rpm: 1500.0,
+    shift_down_rpm: 950.0,
+    reverse_ratio: Some(13.0),
+  ),
+  brakes: (
+    max_torque_nm: 50000.0,
+    front_bias: 0.5,
+    abs: true,
+    air: Some((
+      reservoir_max_bar: 10.0,
+      chamber_full_bar: 8.0,
+      response_time_s: 0.3,
+      compressor_bar_per_s: 0.3,
+      consumption_ratio: 0.06,
+      warning_bar: 5.5,
+    )),
+  ),
+  steering: (max_angle_deg: 45.0, rate_deg_per_s: 150.0),
+  aero: (drag_area_m2: 5.0),
+  suspension: (
+    roll_gradient_deg_per_g: 5.0,
+    pitch_gradient_deg_per_g: 2.0,
+    damping_ratio: 0.4,
+    roll_center_height_m: 0.6,
+    front_roll_share: 0.5,
+  ),
+  body: Some((length_m: 6.0, width_m: 2.5, height_m: 3.9, front_overhang_m: 1.4, style: TruckCab)),
+  hitch: Some((ahead_of_rear_axle_m: 0.5)),
+)

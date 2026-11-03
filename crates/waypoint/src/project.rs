@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use wp_core::{Diagnostic, Diagnostics};
 use wp_data::{Loaded, find_files, load_ron, load_toml};
 use wp_test::ScenarioDef;
-use wp_vehicle::VehicleDef;
+use wp_vehicle::{TrailerDef, VehicleDef};
 use wp_world::SceneDef;
 
 /// `game.toml` at the project root.
@@ -51,6 +51,8 @@ pub struct Project {
     pub scenes: BTreeMap<String, Loaded<SceneDef>>,
     /// By scenario name (file name without `.scenario.ron`).
     pub scenarios: BTreeMap<String, Loaded<ScenarioDef>>,
+    /// By trailer name.
+    pub trailers: BTreeMap<String, Loaded<TrailerDef>>,
     /// Files that exist but failed to parse, so references to them can say so.
     pub failed: Vec<String>,
 }
@@ -58,6 +60,7 @@ pub struct Project {
 pub const VEHICLE_EXT: &str = ".vehicle.ron";
 pub const SCENE_EXT: &str = ".scene.ron";
 pub const SCENARIO_EXT: &str = ".scenario.ron";
+pub const TRAILER_EXT: &str = ".trailer.ron";
 
 fn stem<'a>(path: &'a str, ext: &str) -> &'a str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -122,6 +125,17 @@ impl Project {
             }
         }
 
+        let mut trailers = BTreeMap::new();
+        for path in find_files(root, TRAILER_EXT) {
+            match load_ron::<TrailerDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
+                Ok(t) => {
+                    diags.extend(TrailerDef::validate(&t));
+                    trailers.insert(t.value.name.clone(), t);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
         let mut scenes = BTreeMap::new();
         for path in find_files(root, SCENE_EXT) {
             match load_ron::<SceneDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
@@ -150,6 +164,7 @@ impl Project {
             vehicles,
             scenes,
             scenarios,
+            trailers,
             failed,
         };
         diags.extend(project.check_references());
@@ -206,6 +221,27 @@ impl Project {
                     }
                 }
             }
+            if let Some(t) = &s.player.trailer {
+                if !self.trailers.contains_key(t) {
+                    out.push(
+                        sc.error_at(
+                            "WP-S018",
+                            "trailer",
+                            format!("trailer `{t}` does not exist"),
+                        )
+                        .help(format!("known trailers: {}", list(self.trailers.keys()))),
+                    );
+                } else if self
+                    .vehicles
+                    .get(&s.player.vehicle)
+                    .is_some_and(|v| v.value.hitch.is_none())
+                {
+                    out.push(
+                        sc.error_at("WP-S019", "trailer", format!("vehicle `{}` has no fifth wheel for a trailer", s.player.vehicle))
+                            .help("use a tractor unit, or add hitch: Some((ahead_of_rear_axle_m: 0.5)) to the vehicle"),
+                    );
+                }
+            }
             let vehicle_file = format!("{}{VEHICLE_EXT}", s.player.vehicle);
             if !self.vehicles.contains_key(&s.player.vehicle)
                 && let Some(f) = self
@@ -233,6 +269,23 @@ impl Project {
             }
         }
         out
+    }
+
+    /// Everything needed to run scenario `name`. `None` if it or what it
+    /// refers to is missing (`wp check` reports why).
+    pub fn scenario_input<'a>(&'a self, name: &'a str) -> Option<wp_test::ScenarioInput<'a>> {
+        let s = &self.scenarios.get(name)?.value;
+        let trailer = match &s.player.trailer {
+            Some(t) => Some(&self.trailers.get(t)?.value),
+            None => None,
+        };
+        Some(wp_test::ScenarioInput {
+            name,
+            scenario: s,
+            scene: &self.scenes.get(&s.scene)?.value,
+            vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
+            trailer,
+        })
     }
 
     pub fn disabled_plugins(&self) -> &[String] {

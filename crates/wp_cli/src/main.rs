@@ -39,7 +39,7 @@ enum Cmd {
     },
     /// Validate every project file against its schema and cross-references.
     Check,
-    /// Print the JSON Schema of a data type: game, vehicle, scene, scenario.
+    /// Print the JSON Schema of a data type: game, vehicle, trailer, scene, scenario.
     Schema { kind: String },
     /// Offline docs. Topics: cli, errors, errors/<CODE>, scenario, vehicle.
     Docs { topic: Option<String> },

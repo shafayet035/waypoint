@@ -46,6 +46,18 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../examples/sandbox/vehicles/hatchback.vehicle.ron"),
     ),
     (
+        "vehicles/tractor.vehicle.ron",
+        include_str!("../../../examples/sandbox/vehicles/tractor.vehicle.ron"),
+    ),
+    (
+        "trailers/semi_trailer.trailer.ron",
+        include_str!("../../../examples/sandbox/trailers/semi_trailer.trailer.ron"),
+    ),
+    (
+        "tests/truck_brake_60.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/truck_brake_60.scenario.ron"),
+    ),
+    (
         "vehicles/city_bus.vehicle.ron",
         include_str!("../../../examples/sandbox/vehicles/city_bus.vehicle.ron"),
     ),
@@ -169,10 +181,11 @@ pub fn schema(_ctx: &Ctx, kind: &str) -> CmdResult {
         "vehicle" => schema_json::<VehicleDef>(),
         "scene" => schema_json::<SceneDef>(),
         "scenario" => schema_json::<ScenarioDef>(),
+        "trailer" => schema_json::<waypoint::vehicle::TrailerDef>(),
         other => {
             return Err(cli_error(
                 format!("unknown schema type `{other}`"),
-                "types: game, vehicle, scene, scenario",
+                "types: game, vehicle, trailer, scene, scenario",
             ));
         }
     };
@@ -247,7 +260,10 @@ Units are in field names (mass_kg, radius_m, drag_area_m2). Model: brush tyres w
 length and sliding friction, body roll and pitch on springs, tipping about the outer wheels,
 torque-curve engine with optional speed governor, automatic gearbox, open differential, brakes
 (hydraulic, or air with reservoir, compressor and chamber lag) with optional ABS, aerodynamic drag.
-Optional sections: suspension, body, brakes.air, brakes.abs, engine.governed_speed_kmh.
+Optional sections: suspension, body (with style: Car | Bus | TruckCab), brakes.air, brakes.abs,
+engine.governed_speed_kmh, gearbox.reverse_ratio, hitch (fifth wheel for semi-trailers).
+Semi-trailers live in trailers/<name>.trailer.ron (`wp schema trailer`). Couple one in a scenario
+with player.trailer: Some(\"semi_trailer\"), or `wp run --vehicle tractor --trailer semi_trailer`.
 Check behaviour with `wp vehicle test <name>` (100 km/h tests are skipped for governed vehicles):
   accel_0_50 / accel_0_100   time from rest
   brake_60_0 / brake_100_0   stopping distance and ECE R13 MFDD
@@ -321,6 +337,12 @@ pub struct DriveArgs {
     pub(crate) steer: f32,
     #[arg(long, default_value_t = 0)]
     pub(crate) seed: u64,
+    /// Couple this semi-trailer to the vehicle (needs a tractor unit).
+    #[arg(long)]
+    pub(crate) trailer: Option<String>,
+    /// Start in reverse gear.
+    #[arg(long)]
+    pub(crate) reverse: bool,
 }
 
 #[derive(clap::Args)]
@@ -391,13 +413,10 @@ fn setup_drive(ctx: &Ctx, project: &Project, args: &DriveArgs) -> Result<Drive, 
                 known(project.scenarios.keys()),
             )
         })?;
-        let s = &sc.value;
-        let input = ScenarioInput {
-            name,
-            scenario: s,
-            scene: &project.scenes[&s.scene].value,
-            vehicle: &project.vehicles[&s.player.vehicle].value,
-        };
+        let _ = sc;
+        let input = project.scenario_input(name).ok_or_else(|| {
+            cli_error(format!("scenario `{name}` is incomplete"), "run `wp check`")
+        })?;
         let (app, player) = waypoint::test::prepare(&input, &make_app).map_err(|d| vec![d])?;
         return Ok(Drive {
             app,
@@ -449,7 +468,28 @@ fn setup_drive(ctx: &Ctx, project: &Project, args: &DriveArgs) -> Result<Drive, 
         throttle: args.throttle.clamp(0.0, 1.0),
         brake: args.brake.clamp(0.0, 1.0),
         steer: args.steer.clamp(-1.0, 1.0),
+        reverse: args.reverse,
     };
+    if let Some(tname) = &args.trailer {
+        let tdef = &project
+            .trailers
+            .get(tname)
+            .ok_or_else(|| {
+                cli_error(
+                    format!("unknown trailer `{tname}`"),
+                    known(project.trailers.keys()),
+                )
+            })?
+            .value;
+        let t =
+            waypoint::vehicle::spawn_trailer(&mut app.world, tdef, player).ok_or_else(|| {
+                cli_error(
+                    format!("vehicle `{}` has no fifth wheel", vehicle.value.name),
+                    "pick a tractor unit with --vehicle",
+                )
+            })?;
+        app.world.insert(t, Name(tdef.name.clone()));
+    }
     Ok(Drive {
         app,
         player,
@@ -703,13 +743,10 @@ pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut reports: Vec<(String, ScenarioReport)> = Vec::new();
     for (name, sc) in selected {
-        let s = &sc.value;
-        let input = ScenarioInput {
-            name,
-            scenario: s,
-            scene: &project.scenes[&s.scene].value,
-            vehicle: &project.vehicles[&s.player.vehicle].value,
-        };
+        let _ = sc;
+        let input = project.scenario_input(name).ok_or_else(|| {
+            cli_error(format!("scenario `{name}` is incomplete"), "run `wp check`")
+        })?;
         let report = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         if !ctx.json {
             print_report(&report, &sc.path);
@@ -838,11 +875,13 @@ pub const MANOEUVRES: [&str; 6] = [
 fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
     let player = |initial_kmh: f32, driver: Driver| PlayerDef {
         vehicle: vehicle.to_string(),
+        trailer: None,
         spawn: "origin".into(),
         initial_kmh,
         driver,
     };
     let key = |at_s: f32, throttle: f32, brake: f32| InputKey {
+        reverse: false,
         at_s,
         throttle,
         brake,
@@ -964,6 +1003,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             scenario: &def,
             scene: &scene,
             vehicle,
+            trailer: None,
         };
         let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         all_ok &= r.passed;

@@ -1,0 +1,24 @@
+// A 32 t tractor + semi-trailer combination: full brake from 60 km/h.
+// UN ECE R13 Type-0 limits for category N3 (heavy trucks), used here for the
+// combination: stopping distance ≤ 0.15·v + v²/130 = 36.7 m, MFDD ≥ 5.0 m/s².
+// The trailer must stay in line behind the tractor (no jackknife).
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "tractor",
+    trailer: Some("semi_trailer"),
+    spawn: "start",
+    initial_kmh: 60.0,
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 12.0,
+  assert: [
+    BrakingDistance(max_m: 36.7),
+    Mfdd(min_mps2: 5.0),
+    NoEvent("Jackknife"),
+    NoEvent("WheelLift"),
+    NoNaN,
+    Deterministic,
+  ],
+)

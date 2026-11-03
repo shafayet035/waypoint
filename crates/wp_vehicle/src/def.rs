@@ -38,6 +38,17 @@ pub struct VehicleDef {
     /// Outer body dimensions for drawing. Derived from the chassis if absent.
     #[serde(default)]
     pub body: Option<BodyDef>,
+    /// A fifth wheel for towing a semi-trailer (tractor units).
+    #[serde(default)]
+    pub hitch: Option<HitchDef>,
+}
+
+/// Where a semi-trailer's kingpin couples to this vehicle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HitchDef {
+    /// Fifth-wheel position ahead of the rear axle, m (typically 0.2–0.7).
+    pub ahead_of_rear_axle_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -111,6 +122,9 @@ pub struct GearboxDef {
     pub shift_up_rpm: f32,
     /// Automatic downshift engine speed.
     pub shift_down_rpm: f32,
+    /// Reverse gear ratio (positive number). Defaults to the first-gear ratio.
+    #[serde(default)]
+    pub reverse_ratio: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -183,6 +197,19 @@ pub struct BodyDef {
     pub height_m: f32,
     /// From the front bumper back to the front axle, m.
     pub front_overhang_m: f32,
+    /// How to draw it. `Auto` picks car or bus from the height.
+    #[serde(default)]
+    pub style: BodyStyle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum BodyStyle {
+    #[default]
+    Auto,
+    Car,
+    Bus,
+    /// A tractor unit: tall cab at the front, open chassis behind.
+    TruckCab,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -467,6 +494,30 @@ fn validate_extras(file: &Loaded<VehicleDef>) -> Vec<Diagnostic> {
                     v.cg_height_m
                 )),
         );
+    }
+    if let Some(hitch) = &v.hitch
+        && !(0.0..v.wheelbase_m).contains(&hitch.ahead_of_rear_axle_m)
+    {
+        out.push(
+            file.error_at(
+                "WP-V091",
+                "ahead_of_rear_axle_m",
+                "the fifth wheel must sit between the axles",
+            )
+            .expected(format!(
+                "0 ≤ ahead_of_rear_axle_m < wheelbase_m ({})",
+                v.wheelbase_m
+            )),
+        );
+    }
+    if let Some(r) = v.gearbox.reverse_ratio
+        && !(r > 0.0)
+    {
+        out.push(file.error_at(
+            "WP-V012",
+            "reverse_ratio",
+            "reverse_ratio must be a positive number",
+        ));
     }
     if let Some(b) = &v.body
         && (!(b.length_m > v.wheelbase_m && b.width_m > 0.0 && b.height_m > v.cg_height_m)

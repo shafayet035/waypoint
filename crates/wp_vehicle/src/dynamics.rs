@@ -60,6 +60,53 @@ pub fn vehicle_dynamics(world: &mut World) {
     }
 }
 
+/// One tyre's contact for this substep: sliding friction, relaxed slip states,
+/// brush force and low-speed damping. Updates the slip state in `w` and returns
+/// `(fx, fy, kinematic longitudinal slip)` in the wheel frame. Shared by
+/// vehicles and trailers.
+pub(crate) fn tyre_contact(
+    w: &mut crate::WheelState,
+    vt: Vec2,
+    load: f32,
+    peak_mu: f32,
+    tyre: &crate::def::TyreDef,
+    radius: f32,
+    dt: f32,
+) -> (f32, f32, f32) {
+    let k_tyre = tyre.stiffness_per_load;
+    // Sliding friction from the kinematic (instantaneous) slip.
+    let ref_speed = vt.x.abs().max(1.0);
+    let kin_long = (w.omega * radius - vt.x) / ref_speed;
+    let kin_lat = vt.y / ref_speed;
+    let slide = (kin_long * kin_long + kin_lat * kin_lat).sqrt();
+    let mu = parts::sliding_friction(peak_mu, tyre.sliding_friction_ratio, k_tyre, slide);
+
+    // Relaxed slip states; the relaxation length shrinks near standstill so
+    // little carcass wind-up is stored when the vehicle stops.
+    let relax_eff =
+        tyre.relaxation_length_m * (vt.x.abs() / LOW_SPEED_DAMPING_BELOW).clamp(0.1, 1.0);
+    let damping_speed = vt.x.abs() + SLIP_DAMPING_SPEED;
+    w.slip_ratio += ((w.omega * radius - vt.x) - damping_speed * w.slip_ratio) * dt / relax_eff;
+    w.slip_tan += (vt.y - damping_speed * w.slip_tan) * dt / relax_eff;
+    (w.slip_ratio, w.slip_tan) = parts::cap_slip(mu, k_tyre, w.slip_ratio, w.slip_tan);
+
+    let (mut fx, mut fy) = parts::brush_tyre(load, mu, k_tyre, w.slip_ratio, w.slip_tan);
+    // Near standstill, damp contact-patch sliding so a stopped vehicle settles.
+    let fade = (1.0 - vt.x.abs() / LOW_SPEED_DAMPING_BELOW).max(0.0);
+    if fade > 0.0 {
+        let c = CONTACT_DAMPING_PER_LOAD * load * fade;
+        fx += c * (w.omega * radius - vt.x);
+        fy -= c * vt.y;
+        let limit = mu * load;
+        let f = (fx * fx + fy * fy).sqrt();
+        if f > limit {
+            fx *= limit / f;
+            fy *= limit / f;
+        }
+    }
+    (fx, fy, kin_long)
+}
+
 struct Ctx<'a> {
     def: &'a VehicleDef,
     dt: f32,
@@ -94,6 +141,12 @@ fn step_vehicle(
 
     let v_local = pose.to_local(vel.linear);
     let yaw_rate = vel.angular;
+    // Acceleration measured from the velocity change over the last substep: it
+    // includes everything that moved the body (tyres, a trailer's pull, joints).
+    let a_world = (vel.linear - veh.prev_velocity) / dt;
+    veh.prev_velocity = vel.linear;
+    let alpha = dt / (ACCEL_FILTER_S + dt);
+    veh.accel_local += (pose.to_local(a_world) - veh.accel_local) * alpha;
     let (ax, ay) = (veh.accel_local.x, veh.accel_local.y);
 
     // ---- Suspension: body roll and pitch as damped springs ----------------
@@ -124,6 +177,15 @@ fn step_vehicle(
     // ---- Wheel loads -----------------------------------------------------
     let front_axle = (m * g * b / len - m * ax * h / len).max(0.0);
     let rear_axle = (m * g - front_axle).max(0.0);
+    // A semi-trailer's kingpin load sits on the fifth wheel, between the axles.
+    let (front_axle, rear_axle) = match &def.hitch {
+        Some(hitch) => {
+            let fk = veh.hitch_load_n.max(0.0);
+            let to_front = fk * hitch.ahead_of_rear_axle_m / len;
+            (front_axle + to_front, rear_axle + fk - to_front)
+        }
+        None => (front_axle, rear_axle),
+    };
     // Lateral transfer: through the springs (from roll) and through the roll
     // centre and unsprung mass (instant). Positive moves load to the right.
     let elastic = k_roll * veh.roll + c_roll * veh.roll_rate;
@@ -225,7 +287,18 @@ fn step_vehicle(
     let n_driven = driven.iter().filter(|d| **d).count() as f32;
     let gears = &def.gearbox.ratios;
     veh.gear = veh.gear.clamp(1, gears.len().max(1) as u8);
-    let ratio = gears.get(veh.gear as usize - 1).copied().unwrap_or(1.0) * def.gearbox.final_drive;
+    // Reverse engages (or disengages) only when nearly stopped.
+    if v_local.length() < 0.55 {
+        veh.reverse = input.reverse;
+    }
+    let ratio = if veh.reverse {
+        -def.gearbox
+            .reverse_ratio
+            .unwrap_or_else(|| gears.first().copied().unwrap_or(1.0))
+            * def.gearbox.final_drive
+    } else {
+        gears.get(veh.gear as usize - 1).copied().unwrap_or(1.0) * def.gearbox.final_drive
+    };
     let avg_omega: f32 = (0..4)
         .filter(|&i| driven[i])
         .map(|i| veh.wheels[i].omega)
@@ -253,7 +326,7 @@ fn step_vehicle(
     // Shift on road speed, not wheel speed, so wheelspin cannot cause hunting.
     let road_rpm = v_local.x.max(0.0) / radius * ratio * 60.0 / std::f32::consts::TAU;
     veh.shift_timer = (veh.shift_timer - dt).max(0.0);
-    if veh.shift_timer == 0.0 {
+    if veh.shift_timer == 0.0 && !veh.reverse {
         let from = veh.gear;
         if road_rpm > def.gearbox.shift_up_rpm && (veh.gear as usize) < gears.len() {
             veh.gear += 1;
@@ -286,6 +359,7 @@ fn step_vehicle(
         }
         _ => pedal,
     };
+    veh.brake_fraction = brake_fraction;
     let brake = brake_fraction * def.brakes.max_torque_nm;
     let front_brake = brake * def.brakes.front_bias / 2.0;
     let rear_brake = brake * (1.0 - def.brakes.front_bias) / 2.0;
@@ -293,8 +367,6 @@ fn step_vehicle(
     let speed = v_local.length();
 
     // ---- Tyres ------------------------------------------------------------
-    let relax = def.tyre.relaxation_length_m;
-    let k_tyre = def.tyre.stiffness_per_load;
     let mut force = Vec2::ZERO;
     let mut moment = 0.0;
     let mut abs_any = false;
@@ -305,34 +377,7 @@ fn step_vehicle(
         let vt = Vec2::from_angle(-steer[i]).rotate(contact_vel);
         let w = &mut veh.wheels[i];
 
-        // Sliding friction from the kinematic (instantaneous) slip.
-        let ref_speed = vt.x.abs().max(1.0);
-        let kin_long = (w.omega * radius - vt.x) / ref_speed;
-        let kin_lat = vt.y / ref_speed;
-        let slide = (kin_long * kin_long + kin_lat * kin_lat).sqrt();
-        let mu = parts::sliding_friction(peak_mu, def.tyre.sliding_friction_ratio, k_tyre, slide);
-
-        // Relaxed slip states; the relaxation length shrinks near standstill so
-        // little carcass wind-up is stored when the vehicle stops.
-        let relax_eff = relax * (vt.x.abs() / LOW_SPEED_DAMPING_BELOW).clamp(0.1, 1.0);
-        let damping_speed = vt.x.abs() + SLIP_DAMPING_SPEED;
-        w.slip_ratio += ((w.omega * radius - vt.x) - damping_speed * w.slip_ratio) * dt / relax_eff;
-        w.slip_tan += (vt.y - damping_speed * w.slip_tan) * dt / relax_eff;
-        (w.slip_ratio, w.slip_tan) = parts::cap_slip(mu, k_tyre, w.slip_ratio, w.slip_tan);
-
-        let (mut fx, mut fy) = parts::brush_tyre(loads[i], mu, k_tyre, w.slip_ratio, w.slip_tan);
-        let fade = (1.0 - vt.x.abs() / LOW_SPEED_DAMPING_BELOW).max(0.0);
-        if fade > 0.0 {
-            let c = CONTACT_DAMPING_PER_LOAD * loads[i] * fade;
-            fx += c * (w.omega * radius - vt.x);
-            fy -= c * vt.y;
-            let limit = mu * loads[i];
-            let f = (fx * fx + fy * fy).sqrt();
-            if f > limit {
-                fx *= limit / f;
-                fy *= limit / f;
-            }
-        }
+        let (fx, fy, kin_long) = tyre_contact(w, vt, loads[i], peak_mu, &def.tyre, radius, dt);
 
         if def.brakes.abs {
             w.abs_factor =
@@ -384,10 +429,6 @@ fn step_vehicle(
 
     // Aerodynamic drag.
     force += -0.5 * AIR_DENSITY * def.aero.drag_area_m2 * v_local.length() * v_local;
-
-    // Filtered acceleration drives next substep's load transfer and body motion.
-    let alpha = dt / (ACCEL_FILTER_S + dt);
-    veh.accel_local += (force / m - veh.accel_local) * alpha;
 
     body.apply_force(pose.to_world(force));
     body.apply_torque(moment);
@@ -448,6 +489,7 @@ mod tests {
                 throttle: 0.3,
                 brake: 0.0,
                 steer: 1.0,
+                reverse: false,
             },
             3.0,
         );
@@ -467,6 +509,7 @@ mod tests {
                 throttle: 0.3,
                 brake: 0.0,
                 steer: 1.0,
+                reverse: false,
             },
             3.0,
         );

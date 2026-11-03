@@ -26,6 +26,9 @@ pub struct PlayerDef {
     pub vehicle: String,
     /// Spawn point name in the scene.
     pub spawn: String,
+    /// Semi-trailer to couple to the vehicle's fifth wheel, by name.
+    #[serde(default)]
+    pub trailer: Option<String>,
     /// Starting speed along the spawn heading, km/h.
     #[serde(default)]
     pub initial_kmh: f32,
@@ -57,6 +60,9 @@ pub struct InputKey {
     /// −1 (right) to 1 (left).
     #[serde(default)]
     pub steer: f32,
+    /// Select reverse gear (engages below 2 km/h).
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

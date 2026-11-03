@@ -11,7 +11,7 @@ use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use wp_app::{App, Plugin};
 use wp_core::SimTime;
-use wp_ecs::{Component, Stage, World};
+use wp_ecs::{Component, Entity, Stage, World};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
@@ -128,27 +128,135 @@ impl Plugin for PhysicsPlugin {
         w.insert_reflected_resource("Gravity", gravity);
         let ground = w.remove_resource::<Ground>().unwrap_or_default();
         w.insert_reflected_resource("Ground", ground);
-        app.add_system(Stage::Physics, "integrate_bodies", integrate_bodies)
+        w.register::<PinJoint>();
+        // Force producers (vehicles, trailers) run before "integrate_velocities".
+        app.add_system(Stage::Physics, "integrate_velocities", integrate_velocities)
             .reads::<RigidBody>()
+            .writes::<Velocity>();
+        app.add_system(Stage::Physics, "solve_joints", solve_joints)
+            .after("integrate_velocities")
+            .reads::<PinJoint>()
+            .reads::<Pose>()
+            .reads::<RigidBody>()
+            .writes::<Velocity>();
+        app.add_system(Stage::Physics, "integrate_bodies", integrate_bodies)
+            .after("solve_joints")
             .writes::<Pose>()
-            .writes::<Velocity>()
             .writes::<RigidBody>();
     }
 }
 
-/// Semi-implicit Euler: velocity first, then position with the new velocity.
+/// Semi-implicit Euler, step 1: velocities from this substep's forces.
+pub fn integrate_velocities(world: &mut World) {
+    let dt = world.resource::<SimTime>().physics_dt();
+    world
+        .query::<(&mut Velocity, &RigidBody)>()
+        .for_each(|_, (vel, body)| {
+            vel.linear += body.force / body.mass * dt;
+            vel.angular += body.torque / body.inertia * dt;
+        });
+}
+
+/// Semi-implicit Euler, step 3: positions from the constrained velocities.
 pub fn integrate_bodies(world: &mut World) {
     let dt = world.resource::<SimTime>().physics_dt();
     world
-        .query::<(&mut Pose, &mut Velocity, &mut RigidBody)>()
+        .query::<(&mut Pose, &Velocity, &mut RigidBody)>()
         .for_each(|_, (pose, vel, body)| {
-            vel.linear += body.force / body.mass * dt;
-            vel.angular += body.torque / body.inertia * dt;
             pose.position += vel.linear * dt;
             pose.heading += vel.angular * dt;
             body.force = Vec2::ZERO;
             body.torque = 0.0;
         });
+}
+
+/// A pin (revolute) joint on the ground plane: a point on this body stays on a
+/// point of `other`, while both may rotate freely. Used for fifth wheels and
+/// drawbars. Stored on the second body.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PinJoint {
+    pub other: Entity,
+    /// Joint point in this body's frame, m from its centre of mass.
+    pub local_anchor: Vec2,
+    /// Joint point in `other`'s frame, m from its centre of mass.
+    pub other_anchor: Vec2,
+}
+
+impl Component for PinJoint {
+    const NAME: &'static str = "PinJoint";
+}
+
+/// Sequential-impulse iterations per substep. Joint chains (multiple
+/// trailers) converge with a handful at 480 Hz.
+const JOINT_ITERATIONS: usize = 8;
+/// Share of position drift corrected per substep (Baumgarte stabilisation).
+const JOINT_BAUMGARTE: f32 = 0.2;
+
+fn cross_sv(w: f32, r: Vec2) -> Vec2 {
+    Vec2::new(-w * r.y, w * r.x)
+}
+
+fn cross_vv(a: Vec2, b: Vec2) -> f32 {
+    a.x * b.y - a.y * b.x
+}
+
+/// Remove relative velocity at every pin joint (Box2D-style revolute joint,
+/// point constraint only). Deterministic: joints are visited in storage order.
+pub fn solve_joints(world: &mut World) {
+    let dt = world.resource::<SimTime>().physics_dt();
+    let joints = world.query::<&PinJoint>().entities();
+    if joints.is_empty() {
+        return;
+    }
+    for _ in 0..JOINT_ITERATIONS {
+        for &b in &joints {
+            let Some(j) = world.get::<PinJoint>(b).map(|j| *j) else {
+                continue;
+            };
+            let a = j.other;
+            let (Some(pa), Some(pb), Some(ba), Some(bb)) = (
+                world.get::<Pose>(a).map(|p| *p),
+                world.get::<Pose>(b).map(|p| *p),
+                world.get::<RigidBody>(a).map(|r| *r),
+                world.get::<RigidBody>(b).map(|r| *r),
+            ) else {
+                continue;
+            };
+            let (Some(va), Some(vb)) = (
+                world.get::<Velocity>(a).map(|v| *v),
+                world.get::<Velocity>(b).map(|v| *v),
+            ) else {
+                continue;
+            };
+            let ra = pa.to_world(j.other_anchor);
+            let rb = pb.to_world(j.local_anchor);
+            let (ima, imb, iia, iib) = (
+                1.0 / ba.mass,
+                1.0 / bb.mass,
+                1.0 / ba.inertia,
+                1.0 / bb.inertia,
+            );
+            let k11 = ima + imb + iia * ra.y * ra.y + iib * rb.y * rb.y;
+            let k12 = -iia * ra.x * ra.y - iib * rb.x * rb.y;
+            let k22 = ima + imb + iia * ra.x * ra.x + iib * rb.x * rb.x;
+            let det = k11 * k22 - k12 * k12;
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            let cdot = vb.linear + cross_sv(vb.angular, rb) - va.linear - cross_sv(va.angular, ra);
+            let c = (pb.position + rb) - (pa.position + ra);
+            let rhs = -(cdot + c * (JOINT_BAUMGARTE / dt));
+            let p = Vec2::new(k22 * rhs.x - k12 * rhs.y, -k12 * rhs.x + k11 * rhs.y) / det;
+            if let Some(mut v) = world.get_mut::<Velocity>(a) {
+                v.linear -= p * ima;
+                v.angular -= cross_vv(ra, p) * iia;
+            }
+            if let Some(mut v) = world.get_mut::<Velocity>(b) {
+                v.linear += p * imb;
+                v.angular += cross_vv(rb, p) * iib;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +271,7 @@ mod tests {
             w.query::<&mut RigidBody>()
                 .for_each(|_, b| b.apply_force(Vec2::new(1000.0, 0.0)))
         })
-        .before("integrate_bodies");
+        .before("integrate_velocities");
         app.finish().unwrap();
         let e = app.world.spawn();
         app.world.insert(e, Pose::default());
@@ -174,6 +282,69 @@ mod tests {
         let x = app.world.get::<Pose>(e).unwrap().position.x;
         assert!((v - 1.0).abs() < 1e-4, "v = {v}");
         assert!((x - 0.5).abs() < 0.01, "x = {x}");
+    }
+
+    #[test]
+    fn pin_joint_keeps_bodies_together() {
+        let mut app = App::new();
+        app.add_plugin(PhysicsPlugin);
+        // Pull the front body sideways; the joint must drag the rear one along.
+        app.add_system(Stage::Physics, "pull", |w| {
+            w.query::<&mut RigidBody>().for_each(|_, b| {
+                if b.mass < 2000.0 {
+                    b.apply_force(Vec2::new(5000.0, 3000.0));
+                }
+            })
+        })
+        .before("integrate_velocities");
+        app.finish().unwrap();
+        let a = app.world.spawn();
+        app.world.insert(
+            a,
+            Pose {
+                position: Vec2::new(2.0, 0.0),
+                heading: 0.0,
+            },
+        );
+        app.world.insert(a, Velocity::default());
+        app.world.insert(a, RigidBody::new(1000.0, 1500.0));
+        let b = app.world.spawn();
+        app.world.insert(
+            b,
+            Pose {
+                position: Vec2::new(-4.0, 0.0),
+                heading: 0.0,
+            },
+        );
+        app.world.insert(b, Velocity::default());
+        app.world.insert(b, RigidBody::new(5000.0, 20000.0));
+        // Joint at x = 0: 2 m behind a's centre, 4 m ahead of b's.
+        app.world.insert(
+            b,
+            PinJoint {
+                other: a,
+                local_anchor: Vec2::new(4.0, 0.0),
+                other_anchor: Vec2::new(-2.0, 0.0),
+            },
+        );
+        app.run_ticks(120);
+        let (pa, pb) = (
+            *app.world.get::<Pose>(a).unwrap(),
+            *app.world.get::<Pose>(b).unwrap(),
+        );
+        let gap = (pa.position + pa.to_world(Vec2::new(-2.0, 0.0)))
+            - (pb.position + pb.to_world(Vec2::new(4.0, 0.0)));
+        assert!(gap.length() < 0.01, "joint drifted {gap}");
+        // 5 kN on 6 t for 2 s: about 1.7 m forward for the pair.
+        assert!(
+            pb.position.x > -2.6,
+            "rear body was not dragged: {:?}",
+            pb.position
+        );
+        assert!(
+            pa.heading.abs() > 0.01 || pb.heading.abs() > 0.01,
+            "a sideways pull should articulate"
+        );
     }
 
     #[test]

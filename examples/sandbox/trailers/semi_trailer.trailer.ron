@@ -1,0 +1,23 @@
+// A 13.6 m three-axle curtainsider semi-trailer, laden to 24 t (about 32 t
+// gross with the tractor). Air disc brakes with ABS, driven by the tractor's
+// brake valve. Typical figures for EU trailers, not one manufacturer's.
+(
+  name: "semi_trailer",
+  mass_kg: 24000.0,
+  yaw_inertia_kgm2: 380000.0,
+  cg_height_m: 1.7,
+  cg_behind_kingpin_m: 5.0,
+  axles_behind_kingpin_m: [6.39, 7.7, 9.01],
+  track_width_m: 2.05,
+  wheel: (radius_m: 0.53, inertia_kgm2: 15.0),
+  tyre: (
+    friction: 0.8,
+    stiffness_per_load: 10.0,
+    relaxation_length_m: 0.6,
+    rolling_resistance: 0.006,
+    sliding_friction_ratio: 0.75,
+  ),
+  brakes: (max_torque_nm: 90000.0, abs: true),
+  aero: (drag_area_m2: 1.5),
+  body: (length_m: 13.6, width_m: 2.55, height_m: 4.0, kingpin_from_front_m: 1.6),
+)

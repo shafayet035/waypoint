@@ -51,7 +51,7 @@ pub fn start(
     use wp_core::Diagnostic;
     let make_app = || make_app(project.disabled_plugins());
     if let Some(name) = scenario {
-        let sc = project.scenarios.get(name).ok_or_else(|| {
+        let input = project.scenario_input(name).ok_or_else(|| {
             Diagnostic::error("WP-C001", format!("unknown scenario `{name}`")).help(format!(
                 "scenarios: {}",
                 project
@@ -62,13 +62,6 @@ pub fn start(
                     .join(", ")
             ))
         })?;
-        let s = &sc.value;
-        let input = wp_test::ScenarioInput {
-            name,
-            scenario: s,
-            scene: &project.scenes[&s.scene].value,
-            vehicle: &project.vehicles[&s.player.vehicle].value,
-        };
         return wp_test::prepare(&input, &make_app);
     }
     let scene = &project.scenes[&project.game.value.start_scene].value;

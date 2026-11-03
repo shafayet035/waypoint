@@ -23,6 +23,7 @@ fn world_with_car() -> App {
         throttle: 0.6,
         brake: 0.0,
         steer: 0.35,
+        reverse: false,
     };
     app.run_ticks(150);
     app

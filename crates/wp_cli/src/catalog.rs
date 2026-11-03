@@ -299,6 +299,41 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Use one of: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver.",
     },
     ErrorDoc {
+        code: "WP-S018",
+        title: "A scenario refers to a trailer that does not exist",
+        fix: "Use a trailer `name` from a trailers/*.trailer.ron file.",
+    },
+    ErrorDoc {
+        code: "WP-S019",
+        title: "The scenario's vehicle cannot tow a semi-trailer",
+        fix: "Use a tractor unit, or add hitch: Some((ahead_of_rear_axle_m: 0.5)) to the vehicle.",
+    },
+    ErrorDoc {
+        code: "WP-T001",
+        title: "A trailer quantity must be positive",
+        fix: "Check mass_kg, yaw_inertia_kgm2, cg_height_m, track_width_m and the wheel.",
+    },
+    ErrorDoc {
+        code: "WP-T002",
+        title: "Trailer axles are not listed front to back behind the kingpin",
+        fix: "List axles_behind_kingpin_m in increasing order, all positive.",
+    },
+    ErrorDoc {
+        code: "WP-T003",
+        title: "The trailer's centre of mass is not between kingpin and axles",
+        fix: "Set 0 < cg_behind_kingpin_m < the mean axle distance.",
+    },
+    ErrorDoc {
+        code: "WP-T004",
+        title: "Trailer body dimensions do not fit its axles",
+        fix: "kingpin_from_front_m must be inside the body, and the last axle too.",
+    },
+    ErrorDoc {
+        code: "WP-V091",
+        title: "The fifth wheel is not between the axles",
+        fix: "Set 0 ≤ ahead_of_rear_axle_m < wheelbase_m.",
+    },
+    ErrorDoc {
         code: "WP-W001",
         title: "Two spawn points share a name",
         fix: "Give every spawn point a unique name.",

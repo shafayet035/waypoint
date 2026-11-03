@@ -330,6 +330,11 @@ impl Server<'_> {
                     brake: n("brake").unwrap_or(0.0) as f32,
                     steer: n("steer").unwrap_or(0.0) as f32,
                     seed: n("seed").unwrap_or(0.0) as u64,
+                    trailer: s("trailer"),
+                    reverse: args
+                        .get("reverse")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 };
                 match make_session(self.ctx, &drive) {
                     Ok(session) => {
