@@ -1,0 +1,9 @@
+// An endless flat asphalt plane with two spawn points.
+(
+  name: "flat",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  spawns: [
+    (name: "start", position: (0.0, 0.0), heading_deg: 0.0),
+    (name: "skidpad", position: (0.0, -100.0), heading_deg: 0.0),
+  ],
+)

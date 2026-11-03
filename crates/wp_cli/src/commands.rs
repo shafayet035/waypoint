@@ -1,0 +1,682 @@
+use crate::{CmdResult, Ctx, catalog};
+use serde_json::json;
+use std::path::Path;
+use waypoint::app::App;
+use waypoint::core::{Diagnostic, SimRng};
+use waypoint::project::{GameConfig, Project};
+use waypoint::test::{
+    Assertion, Driver, InputKey, PlayerDef, ScenarioDef, ScenarioInput, ScenarioReport,
+    run_scenario,
+};
+use waypoint::vehicle::{VehicleDef, VehicleInput};
+use waypoint::world::{GroundDef, Name, Player, SceneDef, SpawnPoint};
+
+fn print_json(v: &serde_json::Value) {
+    println!("{}", serde_json::to_string_pretty(v).unwrap());
+}
+
+/// Load the project; any error-level diagnostic aborts the command.
+fn load_project(ctx: &Ctx) -> Result<Project, Vec<Diagnostic>> {
+    let (project, diags) = Project::load(&ctx.project);
+    if diags.has_errors() {
+        let mut all = diags.0;
+        all.push(
+            Diagnostic::error("WP-G002", "the project has errors; fix them first")
+                .help("run `wp check`"),
+        );
+        return Err(all);
+    }
+    Ok(project.expect("no errors means the project loaded"))
+}
+
+fn cli_error(message: impl Into<String>, help: impl Into<String>) -> Vec<Diagnostic> {
+    vec![Diagnostic::error("WP-C001", message).help(help)]
+}
+
+// ---- wp new ---------------------------------------------------------------
+
+const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
+    (
+        "game.toml",
+        include_str!("../../../examples/sandbox/game.toml"),
+    ),
+    (
+        "vehicles/hatchback.vehicle.ron",
+        include_str!("../../../examples/sandbox/vehicles/hatchback.vehicle.ron"),
+    ),
+    (
+        "scenes/flat.scene.ron",
+        include_str!("../../../examples/sandbox/scenes/flat.scene.ron"),
+    ),
+    (
+        "tests/accelerate_and_brake.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/accelerate_and_brake.scenario.ron"),
+    ),
+    (
+        "tests/skidpad.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/skidpad.scenario.ron"),
+    ),
+    (
+        "AGENTS.md",
+        include_str!("../../../examples/sandbox/AGENTS.md"),
+    ),
+];
+
+pub fn new(ctx: &Ctx, dest: &Path, template: &str) -> CmdResult {
+    if template != "sandbox" {
+        return Err(cli_error(
+            format!("unknown template `{template}`"),
+            "available templates: sandbox",
+        ));
+    }
+    if dest.exists() {
+        return Err(vec![
+            Diagnostic::error("WP-C004", format!("{} already exists", dest.display()))
+                .help("choose a new folder name"),
+        ]);
+    }
+    let game_name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "game".into());
+    let mut written = Vec::new();
+    for (rel, content) in TEMPLATE_SANDBOX {
+        let path = dest.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| io_error(&path, e))?;
+        let content = if *rel == "game.toml" {
+            content.replacen("name = \"sandbox\"", &format!("name = \"{game_name}\""), 1)
+        } else {
+            content.to_string()
+        };
+        std::fs::write(&path, content).map_err(|e| io_error(&path, e))?;
+        written.push(rel.to_string());
+    }
+    if ctx.json {
+        print_json(&json!({ "ok": true, "path": dest, "files": written }));
+    } else {
+        println!("created {} ({} files)", dest.display(), written.len());
+        println!("next: cd {} && wp check && wp test", dest.display());
+    }
+    Ok(0)
+}
+
+fn io_error(path: &Path, e: std::io::Error) -> Vec<Diagnostic> {
+    vec![Diagnostic::error(
+        "WP-D001",
+        format!("cannot write {}: {e}", path.display()),
+    )]
+}
+
+// ---- wp check -------------------------------------------------------------
+
+pub fn check(ctx: &Ctx) -> CmdResult {
+    let start = std::time::Instant::now();
+    let (project, diags) = Project::load(&ctx.project);
+    let files = project
+        .as_ref()
+        .map(|p| 1 + p.vehicles.len() + p.scenes.len() + p.scenarios.len())
+        .unwrap_or(0);
+    let ms = start.elapsed().as_millis();
+    if ctx.json {
+        print_json(&json!({
+            "ok": !diags.has_errors(),
+            "files": files,
+            "errors": diags.error_count(),
+            "warnings": diags.warning_count(),
+            "elapsed_ms": ms,
+            "diagnostics": diags,
+        }));
+    } else {
+        for d in diags.iter() {
+            print!("{}", d.render());
+        }
+        println!(
+            "checked {files} files in {ms} ms: {} error(s), {} warning(s)",
+            diags.error_count(),
+            diags.warning_count()
+        );
+    }
+    Ok(if diags.has_errors() { 1 } else { 0 })
+}
+
+// ---- wp schema ------------------------------------------------------------
+
+pub fn schema(_ctx: &Ctx, kind: &str) -> CmdResult {
+    use waypoint::data::schema_json;
+    let text = match kind {
+        "game" => schema_json::<GameConfig>(),
+        "vehicle" => schema_json::<VehicleDef>(),
+        "scene" => schema_json::<SceneDef>(),
+        "scenario" => schema_json::<ScenarioDef>(),
+        other => {
+            return Err(cli_error(
+                format!("unknown schema type `{other}`"),
+                "types: game, vehicle, scene, scenario",
+            ));
+        }
+    };
+    println!("{text}");
+    Ok(0)
+}
+
+// ---- wp docs --------------------------------------------------------------
+
+const DOCS_CLI: &str = "\
+wp — Waypoint command line. Every command takes --json and --project <dir>.
+
+  wp new <dir>                 create a project from the sandbox template
+  wp check                     validate all files (schemas + cross-references)
+  wp schema <type>             JSON Schema: game | vehicle | scene | scenario
+  wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
+  wp run --headless [opts]     simulate with constant inputs; prints final state
+        --seconds S | --ticks N  --seed S  --vehicle NAME  --scene PATH  --spawn NAME
+        --throttle 0..1  --brake 0..1  --steer -1..1  --trace
+  wp test [filter]             run scenario tests; exit 1 if any fail
+  wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
+  wp systems                   resolved system schedule
+  wp plugins                   loaded plugins in load order
+
+Agent loop: edit a file → wp check --json → wp test --json → read failures → fix.
+";
+
+const DOCS_SCENARIO: &str = "\
+Scenario files: tests/<name>.scenario.ron  (full schema: wp schema scenario)
+
+  (
+    scene: \"scenes/flat.scene.ron\",
+    seed: 7,
+    player: (vehicle: \"hatchback\", spawn: \"start\", initial_kmh: 0.0, driver: <Driver>),
+    duration_s: 20.0,
+    assert: [<Assertion>, ...],
+  )
+
+Drivers
+  Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0, steer: 0.0)])   keys hold until the next
+  Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
+
+Assertions
+  ReachSpeed(kmh: 100.0, within_s: 11.0)    BrakingDistance(max_m: 45.0)     StoppedBy(s: 14.0)
+  MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)   NoNaN   Deterministic
+
+Runs are headless at 60 Hz gameplay / 480 Hz physics, and bit-identical for the same build and seed.
+";
+
+const DOCS_VEHICLE: &str = "\
+Vehicle files: vehicles/<name>.vehicle.ron  (full schema with units: wp schema vehicle)
+
+Units are in field names (mass_kg, radius_m, drag_area_m2). Model: brush tyres with relaxation
+length and load transfer, torque-curve engine, automatic gearbox, open differential, per-axle brakes,
+aerodynamic drag. Check behaviour with `wp vehicle test <name>`:
+  accel_0_100   time from rest to 100 km/h
+  brake_100_0   stopping distance from 100 km/h (≈ 39 m is the limit for friction 1.0)
+  skidpad       steady lateral g at 40 km/h with fixed steering
+";
+
+pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
+    let text = match topic {
+        None => "topics: cli, errors, errors/<CODE>, scenario, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        Some("cli") => DOCS_CLI.to_string(),
+        Some("scenario") => DOCS_SCENARIO.to_string(),
+        Some("vehicle") => DOCS_VEHICLE.to_string(),
+        Some("errors") => {
+            if ctx.json {
+                let list: Vec<_> = catalog::ERRORS
+                    .iter()
+                    .map(|e| json!({ "code": e.code, "title": e.title, "fix": e.fix }))
+                    .collect();
+                print_json(&json!(list));
+                return Ok(0);
+            }
+            catalog::ERRORS.iter().map(|e| format!("{}  {}\n", e.code, e.title)).collect()
+        }
+        Some(t) if t.starts_with("errors/") => {
+            let code = &t["errors/".len()..];
+            let Some(e) = catalog::find(code) else {
+                return Err(cli_error(format!("unknown error code `{code}`"), "list all codes with `wp docs errors`"));
+            };
+            if ctx.json {
+                print_json(&json!({ "code": e.code, "title": e.title, "fix": e.fix }));
+                return Ok(0);
+            }
+            format!("{}: {}\n\nHow to fix: {}\n", e.code, e.title, e.fix)
+        }
+        Some(other) => {
+            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, scenario, vehicle"));
+        }
+    };
+    if ctx.json {
+        print_json(&json!({ "topic": topic, "text": text }));
+    } else {
+        print!("{text}");
+    }
+    Ok(0)
+}
+
+// ---- wp run ---------------------------------------------------------------
+
+#[derive(clap::Args)]
+pub struct RunArgs {
+    /// Run without a window (the only mode until the renderer lands).
+    #[arg(long)]
+    headless: bool,
+    /// Simulated seconds (ignored if --ticks is set).
+    #[arg(long, default_value_t = 10.0)]
+    seconds: f32,
+    /// Exact number of 60 Hz ticks to run.
+    #[arg(long)]
+    ticks: Option<u64>,
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
+    /// Scene path; defaults to game.toml start_scene.
+    #[arg(long)]
+    scene: Option<String>,
+    /// Spawn point; defaults to the scene's first.
+    #[arg(long)]
+    spawn: Option<String>,
+    /// Vehicle name; defaults to the first vehicle.
+    #[arg(long)]
+    vehicle: Option<String>,
+    #[arg(long, default_value_t = 0.0)]
+    throttle: f32,
+    #[arg(long, default_value_t = 0.0)]
+    brake: f32,
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    steer: f32,
+    /// Print telemetry every simulated second.
+    #[arg(long)]
+    trace: bool,
+}
+
+pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
+    if !args.headless {
+        return Err(vec![
+            Diagnostic::error("WP-C002", "windowed mode is not available yet")
+                .help("add --headless; the renderer arrives in the next milestone step"),
+        ]);
+    }
+    let project = load_project(ctx)?;
+    let scene_path = args
+        .scene
+        .clone()
+        .unwrap_or_else(|| project.game.value.start_scene.clone());
+    let scene = &project
+        .scenes
+        .get(&scene_path)
+        .ok_or_else(|| {
+            cli_error(
+                format!("unknown scene `{scene_path}`"),
+                known(project.scenes.keys()),
+            )
+        })?
+        .value;
+    let vehicle = match &args.vehicle {
+        Some(v) => project.vehicles.get(v),
+        None => project.vehicles.values().next(),
+    }
+    .ok_or_else(|| cli_error("vehicle not found", known(project.vehicles.keys())))?;
+    let spawn = match &args.spawn {
+        Some(s) => scene.spawn(s),
+        None => scene.spawns.first(),
+    }
+    .ok_or_else(|| {
+        cli_error(
+            "spawn point not found",
+            known(scene.spawns.iter().map(|s| &s.name)),
+        )
+    })?;
+
+    let mut app = waypoint::make_app(project.disabled_plugins());
+    app.finish().map_err(|d| vec![d])?;
+    app.world.insert_resource(SimRng::new(args.seed));
+    waypoint::world::apply_scene(&mut app.world, scene);
+    let (pos, heading) = waypoint::world::spawn_transform(spawn);
+    let player = waypoint::vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
+    app.world.insert(player, Name(vehicle.value.name.clone()));
+    app.world.insert(player, Player);
+    *app.world.get_mut::<VehicleInput>(player).unwrap() = VehicleInput {
+        throttle: args.throttle.clamp(0.0, 1.0),
+        brake: args.brake.clamp(0.0, 1.0),
+        steer: args.steer.clamp(-1.0, 1.0),
+    };
+
+    let time = app.time();
+    let ticks = args.ticks.unwrap_or_else(|| time.ticks_for(args.seconds));
+    let mut trace = Vec::new();
+    for tick in 1..=ticks {
+        app.tick();
+        if args.trace && tick % time.tick_hz as u64 == 0 {
+            let tel = waypoint::vehicle::telemetry(&app.world, player).unwrap();
+            if !ctx.json {
+                println!(
+                    "t={:>6.1}s  {:>6.1} km/h  gear {}  {:>5.0} rpm  lat {:+.2} g  pos ({:.1}, {:.1})",
+                    app.time().seconds(),
+                    tel.speed_kmh,
+                    tel.gear,
+                    tel.engine_rpm,
+                    tel.lateral_g,
+                    tel.position[0],
+                    tel.position[1]
+                );
+            }
+            trace.push(json!({ "t": app.time().seconds(), "telemetry": tel }));
+        }
+    }
+    let tel = waypoint::vehicle::telemetry(&app.world, player).unwrap();
+    let hash = app.world.state_hash();
+    if ctx.json {
+        print_json(&json!({
+            "ok": true,
+            "ticks": ticks,
+            "seconds": app.time().seconds(),
+            "physics_hz": time.physics_hz(),
+            "player": player.to_string(),
+            "telemetry": tel,
+            "state_hash": hash,
+            "trace": trace,
+            "world": app.world.to_json(),
+        }));
+    } else {
+        println!(
+            "ran {ticks} ticks ({:.1} s) of `{}` in {}: {:.1} km/h, gear {}, at ({:.1}, {:.1}), heading {:.1}°, state {hash}",
+            app.time().seconds(),
+            vehicle.value.name,
+            scene_path,
+            tel.speed_kmh,
+            tel.gear,
+            tel.position[0],
+            tel.position[1],
+            tel.heading_deg
+        );
+    }
+    Ok(0)
+}
+
+fn known<'a>(items: impl Iterator<Item = &'a String>) -> String {
+    let v: Vec<&str> = items.map(|s| s.as_str()).collect();
+    format!(
+        "known: {}",
+        if v.is_empty() {
+            "(none)".to_string()
+        } else {
+            v.join(", ")
+        }
+    )
+}
+
+// ---- wp test --------------------------------------------------------------
+
+pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
+    let project = load_project(ctx)?;
+    let selected: Vec<_> = project
+        .scenarios
+        .iter()
+        .filter(|(name, _)| filter.is_none_or(|f| name.contains(f)))
+        .collect();
+    if selected.is_empty() {
+        return Err(vec![
+            Diagnostic::error(
+                "WP-C003",
+                format!("no scenario matches `{}`", filter.unwrap_or("")),
+            )
+            .help(known(project.scenarios.keys())),
+        ]);
+    }
+    let make_app = || waypoint::make_app(project.disabled_plugins());
+    let mut reports: Vec<(String, ScenarioReport)> = Vec::new();
+    for (name, sc) in selected {
+        let s = &sc.value;
+        let input = ScenarioInput {
+            name,
+            scenario: s,
+            scene: &project.scenes[&s.scene].value,
+            vehicle: &project.vehicles[&s.player.vehicle].value,
+        };
+        let report = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
+        if !ctx.json {
+            print_report(&report, &sc.path);
+        }
+        reports.push((sc.path.clone(), report));
+    }
+    let failed = reports.iter().filter(|(_, r)| !r.passed).count();
+    if ctx.json {
+        let list: Vec<_> = reports
+            .iter()
+            .map(|(path, r)| json!({ "path": path, "report": r }))
+            .collect();
+        print_json(&json!({
+            "passed": failed == 0,
+            "total": reports.len(),
+            "failed": failed,
+            "reports": list,
+        }));
+    } else {
+        println!(
+            "\ntest result: {}. {} passed; {} failed",
+            if failed == 0 { "ok" } else { "FAILED" },
+            reports.len() - failed,
+            failed
+        );
+    }
+    Ok(if failed == 0 { 0 } else { 1 })
+}
+
+fn print_report(r: &ScenarioReport, path: &str) {
+    println!(
+        "test {} ... {} ({} ms)",
+        r.name,
+        if r.passed { "ok" } else { "FAILED" },
+        r.wall_ms
+    );
+    for a in &r.assertions {
+        println!(
+            "  {} {:<36} {}",
+            if a.passed { "✓" } else { "✗" },
+            a.assertion,
+            a.detail
+        );
+    }
+    if !r.passed {
+        println!("  --> {path}");
+        println!(
+            "  final state {}; rerun one test with `wp test {}`",
+            r.final_hash, r.name
+        );
+    }
+}
+
+// ---- wp systems / plugins ---------------------------------------------------
+
+fn finished_app(ctx: &Ctx) -> Result<App, Vec<Diagnostic>> {
+    let disabled = match Project::load(&ctx.project) {
+        (Some(p), _) => p.disabled_plugins().to_vec(),
+        _ => Vec::new(),
+    };
+    let mut app = waypoint::make_app(&disabled);
+    app.finish().map_err(|d| vec![d])?;
+    Ok(app)
+}
+
+pub fn systems(ctx: &Ctx) -> CmdResult {
+    let mut app = finished_app(ctx)?;
+    let systems = app.systems();
+    if ctx.json {
+        print_json(&json!({ "physics_substeps": app.time().substeps, "systems": systems }));
+    } else {
+        let t = app.time();
+        println!(
+            "gameplay {} Hz; Physics stage runs {}× per tick ({} Hz)",
+            t.tick_hz,
+            t.substeps,
+            t.physics_hz()
+        );
+        for s in systems {
+            println!(
+                "{:>2}  {:<14} {:<26} [{}]",
+                s.order,
+                format!("{:?}", s.stage),
+                s.name,
+                s.plugin
+            );
+            if !s.reads.is_empty() {
+                println!("      reads  {}", s.reads.join(", "));
+            }
+            if !s.writes.is_empty() {
+                println!("      writes {}", s.writes.join(", "));
+            }
+        }
+    }
+    Ok(0)
+}
+
+pub fn plugins(ctx: &Ctx) -> CmdResult {
+    let app = finished_app(ctx)?;
+    if ctx.json {
+        print_json(&json!({ "plugins": app.plugins() }));
+    } else {
+        for p in app.plugins() {
+            let deps = if p.dependencies.is_empty() {
+                String::new()
+            } else {
+                format!("  needs {}", p.dependencies.join(", "))
+            };
+            println!("{:>2}  {} {}{}", p.order, p.name, p.version, deps);
+        }
+    }
+    Ok(0)
+}
+
+// ---- wp vehicle test --------------------------------------------------------
+
+pub const MANOEUVRES: [&str; 3] = ["accel_0_100", "brake_100_0", "skidpad"];
+
+fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
+    let player = |initial_kmh: f32, driver: Driver| PlayerDef {
+        vehicle: vehicle.to_string(),
+        spawn: "origin".into(),
+        initial_kmh,
+        driver,
+    };
+    let key = |at_s: f32, throttle: f32, brake: f32| InputKey {
+        at_s,
+        throttle,
+        brake,
+        steer: 0.0,
+    };
+    let (player, duration_s, assert) = match name {
+        "accel_0_100" => (
+            player(0.0, Driver::Script(vec![key(0.0, 1.0, 0.0)])),
+            40.0,
+            vec![
+                Assertion::ReachSpeed {
+                    kmh: 100.0,
+                    within_s: 40.0,
+                },
+                Assertion::NoNaN,
+            ],
+        ),
+        "brake_100_0" => (
+            player(100.0, Driver::Script(vec![key(0.0, 0.0, 1.0)])),
+            15.0,
+            vec![
+                Assertion::BrakingDistance { max_m: 1000.0 },
+                Assertion::StoppedBy { s: 15.0 },
+                Assertion::NoNaN,
+            ],
+        ),
+        "skidpad" => (
+            player(
+                0.0,
+                Driver::Cruise {
+                    kmh: 40.0,
+                    steer: 0.25,
+                },
+            ),
+            30.0,
+            vec![Assertion::NoNaN],
+        ),
+        _ => return None,
+    };
+    Some(ScenarioDef {
+        scene: "<flat>".into(),
+        seed: 0,
+        player,
+        duration_s,
+        assert,
+    })
+}
+
+pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
+    let project = load_project(ctx)?;
+    let vehicle = &project
+        .vehicles
+        .get(name)
+        .ok_or_else(|| {
+            cli_error(
+                format!("unknown vehicle `{name}`"),
+                known(project.vehicles.keys()),
+            )
+        })?
+        .value;
+    let names: Vec<&str> = if which == "all" {
+        MANOEUVRES.to_vec()
+    } else if MANOEUVRES.contains(&which) {
+        vec![which]
+    } else {
+        return Err(cli_error(
+            format!("unknown manoeuvre `{which}`"),
+            format!("manoeuvres: {}, all", MANOEUVRES.join(", ")),
+        ));
+    };
+    let scene = SceneDef {
+        name: "flat".into(),
+        ground: GroundDef::default(),
+        spawns: vec![SpawnPoint {
+            name: "origin".into(),
+            position: (0.0, 0.0),
+            heading_deg: 0.0,
+        }],
+    };
+    let make_app = || waypoint::make_app(project.disabled_plugins());
+    let mut results = Vec::new();
+    let mut all_ok = true;
+    for m in names {
+        let def = manoeuvre(m, name).expect("known manoeuvre");
+        let input = ScenarioInput {
+            name: m,
+            scenario: &def,
+            scene: &scene,
+            vehicle,
+        };
+        let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
+        all_ok &= r.passed;
+        let (label, value) = match m {
+            "accel_0_100" => (
+                "time to 100 km/h",
+                r.metrics.time_to_100_kmh_s.map(|t| format!("{t:.2} s")),
+            ),
+            "brake_100_0" => (
+                "stopping distance",
+                r.metrics.braking_distance_m.map(|d| format!("{d:.1} m")),
+            ),
+            _ => (
+                "steady lateral",
+                Some(format!(
+                    "{:.3} g (peak {:.3} g)",
+                    r.metrics.steady_lateral_g, r.metrics.max_lateral_g
+                )),
+            ),
+        };
+        let value = value.unwrap_or_else(|| "not reached".into());
+        if !ctx.json {
+            println!(
+                "{m:<12} {label:<18} {value}{}",
+                if r.passed { "" } else { "   ✗ see --json" }
+            );
+        }
+        results.push(json!({ "manoeuvre": m, "result": value, "passed": r.passed, "report": r }));
+    }
+    if ctx.json {
+        print_json(&json!({ "vehicle": name, "passed": all_ok, "manoeuvres": results }));
+    }
+    Ok(if all_ok { 0 } else { 1 })
+}

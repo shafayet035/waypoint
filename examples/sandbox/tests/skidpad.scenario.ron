@@ -1,0 +1,16 @@
+// Hold 40 km/h with a fixed steering angle. The car should corner hard but
+// stay under the tyres' friction limit, and never spin.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 7,
+  player: (
+    vehicle: "hatchback",
+    spawn: "skidpad",
+    driver: Cruise(kmh: 40.0, steer: 0.25),
+  ),
+  duration_s: 30.0,
+  assert: [
+    SteadyLateralG(min: 0.4, max: 1.05),
+    NoNaN,
+  ],
+)

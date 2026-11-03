@@ -1,0 +1,35 @@
+// A front-wheel-drive 1.6 L family hatchback.
+// Units are in the field names. `wp schema vehicle` prints every field.
+(
+  name: "hatchback",
+  mass_kg: 1250.0,
+  yaw_inertia_kgm2: 1900.0,
+  cg_height_m: 0.55,
+  wheelbase_m: 2.6,
+  cg_to_front_axle_m: 1.05,
+  track_width_m: 1.52,
+  drive: Front,
+  wheel: (radius_m: 0.31, inertia_kgm2: 1.1),
+  tyre: (
+    friction: 1.0,
+    stiffness_per_load: 16.0,
+    relaxation_length_m: 0.35,
+    rolling_resistance: 0.012,
+  ),
+  engine: (
+    idle_rpm: 850.0,
+    redline_rpm: 6500.0,
+    torque_curve: [(1000.0, 130.0), (2000.0, 165.0), (3500.0, 190.0), (4500.0, 195.0), (5500.0, 180.0), (6500.0, 150.0)],
+    engine_brake_nm: 30.0,
+  ),
+  gearbox: (
+    ratios: [3.6, 2.1, 1.4, 1.05, 0.85],
+    final_drive: 4.1,
+    efficiency: 0.9,
+    shift_up_rpm: 6000.0,
+    shift_down_rpm: 2200.0,
+  ),
+  brakes: (max_torque_nm: 4500.0, front_bias: 0.68),
+  steering: (max_angle_deg: 35.0, rate_deg_per_s: 180.0),
+  aero: (drag_area_m2: 0.65),
+)

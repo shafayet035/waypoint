@@ -1,0 +1,22 @@
+[package]
+name = "wp_cli"
+description = "The `wp` command: new, check, schema, docs, run, test, systems, plugins, vehicle test."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wp"
+path = "src/main.rs"
+
+[dependencies]
+waypoint.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

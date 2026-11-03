@@ -1,0 +1,17 @@
+[package]
+name = "wp_data"
+description = "Loads RON and TOML data files with line-accurate diagnostics, and exports JSON Schemas."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ron.workspace = true
+toml.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true

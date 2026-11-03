@@ -1,0 +1,21 @@
+[package]
+name = "wp_test"
+description = "Scenario tests (.scenario.ron): scripted or AI drivers, assertions, metrics and determinism checks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_data.workspace = true
+wp_physics.workspace = true
+wp_vehicle.workspace = true
+wp_world.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true
