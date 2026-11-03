@@ -20,6 +20,18 @@ pub struct GameConfig {
     pub start_scene: String,
     #[serde(default)]
     pub plugins: PluginsConfig,
+    #[serde(default)]
+    pub dev: DevConfig,
+}
+
+/// Development-only settings. Leave empty in shipped games.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DevConfig {
+    /// If set, `waypoint-player` accepts control-protocol requests on
+    /// 127.0.0.1:<port> (on Android, reach it with `adb forward tcp:<port> tcp:<port>`).
+    #[serde(default)]
+    pub control_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

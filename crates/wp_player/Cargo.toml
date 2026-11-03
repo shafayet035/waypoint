@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "wp_player"
+# cdylib: Android loads the game as libwp_player.so (see tools/android/build.sh).
+crate-type = ["rlib", "cdylib"]
+
 [[bin]]
 name = "waypoint-player"
 path = "src/main.rs"
@@ -14,6 +19,9 @@ waypoint.workspace = true
 wp_control.workspace = true
 wp_platform.workspace = true
 wp_render.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit.workspace = true
 
 [lints]
 workspace = true

@@ -29,6 +29,20 @@ Claude then gets tools to check and test the project, take screenshots, and driv
 simulation (`session_start`, `session_call` with control-protocol methods such as `sim.step`,
 `input.set`, `world.find`, `render.screenshot`).
 
+## Android (main target)
+
+```sh
+rustup target add aarch64-linux-android        # once (rust-toolchain.toml does this too)
+tools/android/build.sh                         # → target/android/waypoint.apk (arm64, signed with a debug key)
+tools/android/run.sh                           # installs on a phone over USB, or starts the "waypoint" emulator
+```
+
+Needs the Android SDK in `~/Library/Android/sdk` with `platforms;android-36`, `build-tools`, an NDK,
+`platform-tools`, and for the emulator `emulator` plus `system-images;android-36;google_apis;arm64-v8a`.
+No Gradle or Java code: the game is a native library loaded by Android's `NativeActivity`.
+Agents can drive the game on the device: set `[dev] control_port = 7878` in `game.toml`, rebuild, then
+`adb forward tcp:7878 tcp:7878` and send control-protocol requests to `127.0.0.1:7878`.
+
 ## iOS
 
 ```sh
@@ -45,6 +59,6 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 ## Status
 
 Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
-(windowed and headless) work on desktop, and the player app builds for iOS. Android comes next. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
+(windowed and headless) work on desktop, and the player app builds for Android and iOS. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
 Licence: MIT OR Apache-2.0 (open question in the design).

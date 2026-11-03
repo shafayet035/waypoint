@@ -25,6 +25,9 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
 Use rustup's toolchain (`~/.cargo/bin` first on PATH); `rust-toolchain.toml` pins stable plus the
 iOS targets. A Homebrew Rust earlier on PATH lacks those targets.
 
+Android (main target): `tools/android/build.sh` → `target/android/waypoint.apk`; `tools/android/run.sh`
+installs it on a phone or the `waypoint` emulator and follows `adb logcat -s waypoint`.
+
 iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder bundled inside);
 `tools/ios/build.sh device` builds for iPhone (set `CODESIGN_IDENTITY` to sign).
 
@@ -71,7 +74,9 @@ the wgpu renderer (procedural sky, gridded ground, blob shadows, lit instanced v
 `wp shot`, windowed `wp run` with keyboard driving, world snapshots, the control protocol
 (`wp serve`, `wp run --control`), the MCP server (`wp mcp`), and
 `wp new/check/schema/docs/run/test/systems/plugins/vehicle test`.
-iOS: the player app builds, links and signs for the simulator and builds for devices, with
-two-thumb touch controls; it has not yet been launched (no simulator runtime installed here).
-Not yet: Android builds; running on an iOS simulator or phone; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
+Android: the APK builds, installs and runs on the Android 16 emulator (arm64) at a steady 60 ticks/s;
+touch controls and the control protocol over `adb forward` are verified there.
+iOS: the player app builds, links and signs for the simulator and builds for devices; it has not
+been launched yet (no simulator runtime installed here).
+Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

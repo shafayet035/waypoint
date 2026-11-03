@@ -48,14 +48,40 @@ pub struct WindowSummary {
 
 /// Run a session in a window until the user closes it. The session's player
 /// receives keyboard input; control requests are answered between frames.
-pub fn run_windowed(
-    session: Session,
-    mut opts: WindowOptions,
-) -> Result<WindowSummary, Diagnostic> {
+pub fn run_windowed(session: Session, opts: WindowOptions) -> Result<WindowSummary, Diagnostic> {
     let event_loop = EventLoop::new().map_err(|e| {
         Diagnostic::error("WP-P001", format!("cannot open a window: {e}"))
             .help("use --headless on machines without a display")
     })?;
+    run_with_event_loop(event_loop, session, opts)
+}
+
+/// Android entry: the event loop must be built from the `AndroidApp` that
+/// `android_main` receives.
+#[cfg(target_os = "android")]
+pub fn run_windowed_android(
+    app: winit::platform::android::activity::AndroidApp,
+    session: Session,
+    opts: WindowOptions,
+) -> Result<WindowSummary, Diagnostic> {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+    let event_loop = EventLoop::builder()
+        .with_android_app(app)
+        .build()
+        .map_err(|e| {
+            Diagnostic::error(
+                "WP-P001",
+                format!("cannot start the Android event loop: {e}"),
+            )
+        })?;
+    run_with_event_loop(event_loop, session, opts)
+}
+
+fn run_with_event_loop(
+    event_loop: EventLoop<()>,
+    session: Session,
+    mut opts: WindowOptions,
+) -> Result<WindowSummary, Diagnostic> {
     let reset = session.player.and_then(|p| snapshot(&session, p));
     let mut handler = Handler {
         control: opts.control.take(),
@@ -65,6 +91,7 @@ pub fn run_windowed(
         reset,
         opts,
         gfx: None,
+        paused_by_suspend: false,
         error: None,
         keys: Keys::default(),
         touch: Touches::default(),
@@ -166,6 +193,8 @@ struct Handler {
     reset: Option<Snapshot>,
     opts: WindowOptions,
     gfx: Option<Gfx>,
+    /// Set when the OS took the surface away (app in background on mobile).
+    paused_by_suspend: bool,
     error: Option<Diagnostic>,
     keys: Keys,
     touch: Touches,
@@ -362,11 +391,25 @@ impl ApplicationHandler for Handler {
                 g.window.request_redraw();
                 self.gfx = Some(g);
                 self.last = Instant::now();
+                if self.paused_by_suspend {
+                    self.session.paused = false;
+                    self.paused_by_suspend = false;
+                }
             }
             Err(e) => {
                 self.error = Some(e);
                 event_loop.exit();
             }
+        }
+    }
+
+    /// Mobile apps lose their surface in the background: drop all graphics
+    /// (rebuilt in `resumed`) and stop the clock so no time is skipped.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.gfx = None;
+        if !self.session.paused {
+            self.session.paused = true;
+            self.paused_by_suspend = true;
         }
     }
 

@@ -2901,6 +2901,7 @@ name = "wp_player"
 version = "0.1.0"
 dependencies = [
  "waypoint",
+ "winit",
  "wp_control",
  "wp_platform",
  "wp_render",
