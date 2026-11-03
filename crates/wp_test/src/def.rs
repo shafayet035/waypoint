@@ -45,6 +45,13 @@ pub enum Driver {
         #[serde(default)]
         steer: f32,
     },
+    /// Reverse the towed trailer into a scene dock and stop with its rear at
+    /// the bumpers. Needs `player.trailer`. `kmh` is the reversing speed.
+    ReverseToDock {
+        dock: String,
+        #[serde(default = "default_dock_kmh")]
+        kmh: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -87,6 +94,13 @@ pub enum Assertion {
     NoEvent(String),
     /// At least one vehicle event of this kind happens to the player.
     ExpectEvent(String),
+    /// At the end, the trailer's rear is within `max_offset_m` of the dock
+    /// point, its heading within `max_angle_deg` of the dock's, and it is stopped.
+    Docked {
+        dock: String,
+        max_offset_m: f32,
+        max_angle_deg: f32,
+    },
     /// The vehicle is stopped (below 0.5 km/h) by `s` seconds and stays stopped.
     StoppedBy { s: f32 },
     /// Speed never exceeds this, km/h.
@@ -99,6 +113,10 @@ pub enum Assertion {
     NoNaN,
     /// A second run with the same seed produces identical state hashes.
     Deterministic,
+}
+
+fn default_dock_kmh() -> f32 {
+    3.0
 }
 
 impl Assertion {
@@ -123,6 +141,13 @@ impl Assertion {
             Self::TurningCircle { max_m } => format!("TurningCircle(≤ {max_m} m)"),
             Self::NoEvent(k) => format!("NoEvent({k})"),
             Self::ExpectEvent(k) => format!("ExpectEvent({k})"),
+            Self::Docked {
+                dock,
+                max_offset_m,
+                max_angle_deg,
+            } => {
+                format!("Docked({dock}, ≤ {max_offset_m} m, ≤ {max_angle_deg}°)")
+            }
             Self::NoNaN => "NoNaN".into(),
             Self::Deterministic => "Deterministic".into(),
         }

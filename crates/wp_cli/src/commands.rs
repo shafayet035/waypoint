@@ -54,6 +54,14 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../examples/sandbox/trailers/semi_trailer.trailer.ron"),
     ),
     (
+        "scenes/yard.scene.ron",
+        include_str!("../../../examples/sandbox/scenes/yard.scene.ron"),
+    ),
+    (
+        "tests/truck_docking.scenario.ron",
+        include_str!("../../../examples/sandbox/tests/truck_docking.scenario.ron"),
+    ),
+    (
         "tests/truck_brake_60.scenario.ron",
         include_str!("../../../examples/sandbox/tests/truck_brake_60.scenario.ron"),
     ),
@@ -238,14 +246,16 @@ Scenario files: tests/<name>.scenario.ron  (full schema: wp schema scenario)
 Drivers
   Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0, steer: 0.0)])   keys hold until the next
   Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
+  ReverseToDock(dock: \"bay_1\", kmh: 3.0)       backs the towed trailer into a scene dock (pulls up to retry)
 
 Assertions
   ReachSpeed(kmh: 50.0, within_s: 15.0, not_before_s: 8.0)   (not_before_s is optional)
   BrakingDistance(max_m: 36.7)    Mfdd(min_mps2: 5.0)    StoppedBy(s: 14.0)    TurningCircle(max_m: 25.0)
   MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)
   NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic
+  Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
-Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver.
+Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife.
 Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) from 60 km/h
 ≤ 0.15v + v²/130 = 36.7 m and MFDD ≥ 5.0 m/s²; cars (M1, R13-H) from 100 km/h ≤ 70 m and
 MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.
@@ -992,6 +1002,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             position: (0.0, 0.0),
             heading_deg: 0.0,
         }],
+        docks: vec![],
     };
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut results = Vec::new();

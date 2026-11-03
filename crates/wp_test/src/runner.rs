@@ -1,4 +1,5 @@
 use crate::def::{Assertion, Driver, ScenarioDef};
+use crate::drivers::DriverState;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use wp_app::App;
@@ -53,6 +54,11 @@ pub struct Metrics {
     pub events: BTreeMap<String, u32>,
     pub final_position: [f32; 2],
     pub final_heading_deg: f32,
+    /// Centre of the towed trailer's rear edge at the end, if towing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trailer_rear: Option<[f32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trailer_heading_deg: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -82,6 +88,7 @@ struct Sample {
 
 struct Run {
     samples: Vec<Sample>,
+    docks: Vec<wp_world::DockDef>,
     /// World hash at every whole second.
     trace: Vec<String>,
     final_hash: String,
@@ -170,14 +177,19 @@ pub fn prepare(
         app.world.insert(t, Name(tdef.name.clone()));
     }
 
-    let mut driver = DriverState::new(s.player.driver.clone());
+    let dock = match &s.player.driver {
+        Driver::ReverseToDock { dock, .. } => {
+            Some(input.scene.dock(dock).cloned().ok_or_else(|| {
+                Diagnostic::error("WP-S020", format!("dock `{dock}` is not in the scene"))
+            })?)
+        }
+        _ => None,
+    };
+    let mut driver = DriverState::new(s.player.driver.clone(), dock);
     app.add_system(Stage::Agents, "scenario_driver", move |w| {
         let t = w.resource::<SimTime>().seconds() as f32;
         let dt = w.resource::<SimTime>().dt();
-        let forward_kmh = wp_vehicle::telemetry(w, player)
-            .map(|t| t.forward_kmh)
-            .unwrap_or(0.0);
-        let input = driver.next(t, dt, forward_kmh);
+        let input = driver.next(t, dt, w, player);
         if let Some(mut i) = w.get_mut::<VehicleInput>(player) {
             *i = input;
         }
@@ -247,6 +259,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     }
 
     let tel = wp_vehicle::telemetry(&app.world, player).expect("player has telemetry");
+    let rig = crate::drivers::RigGeometry::read(&app.world, player);
     let first_reach = |kmh: f32| samples.iter().find(|s| s.speed_kmh >= kmh).map(|s| s.t);
     let braking = braking(&samples);
     let metrics = Metrics {
@@ -269,9 +282,12 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         events: event_counts,
         final_position: tel.position,
         final_heading_deg: tel.heading_deg,
+        trailer_rear: rig.map(|g| g.trailer_rear.to_array()),
+        trailer_heading_deg: rig.map(|g| g.trailer_heading.to_degrees()),
     };
     Ok(Run {
         samples,
+        docks: input.scene.docks.clone(),
         trace,
         final_hash: app.world.state_hash(),
         nan_at,
@@ -481,55 +497,31 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
             Some(n) => (true, format!("{n} {kind} event(s)")),
             None => (false, format!("no {kind} event happened")),
         },
+        Assertion::Docked {
+            dock,
+            max_offset_m,
+            max_angle_deg,
+        } => {
+            let Some(d) = run.docks.iter().find(|d| &d.name == dock) else {
+                return (false, format!("dock `{dock}` is not in the scene"));
+            };
+            let (Some(rear), Some(heading)) = (m.trailer_rear, m.trailer_heading_deg) else {
+                return (false, "the player is not towing a trailer".into());
+            };
+            let offset = Vec2::from_array(rear).distance(d.point());
+            let angle = (heading - d.heading_deg + 180.0).rem_euclid(360.0) - 180.0;
+            let stopped = m.final_speed_kmh < 0.5;
+            let ok = offset <= *max_offset_m && angle.abs() <= *max_angle_deg && stopped;
+            (
+                ok,
+                format!(
+                    "rear {offset:.2} m from the dock point, {:.1}° off its heading, {:.1} km/h",
+                    angle.abs(),
+                    m.final_speed_kmh
+                ),
+            )
+        }
         Assertion::NoNaN => (run.nan_at.is_none(), "all values finite".into()),
         Assertion::Deterministic => unreachable!("handled by run_scenario"),
-    }
-}
-
-/// Produces driver inputs each tick.
-struct DriverState {
-    driver: Driver,
-    integral: f32,
-}
-
-impl DriverState {
-    fn new(driver: Driver) -> Self {
-        Self {
-            driver,
-            integral: 0.0,
-        }
-    }
-
-    fn next(&mut self, t: f32, dt: f32, forward_kmh: f32) -> VehicleInput {
-        match &self.driver {
-            Driver::Script(keys) => keys
-                .iter()
-                .rev()
-                .find(|k| k.at_s <= t)
-                .map(|k| VehicleInput {
-                    throttle: k.throttle,
-                    brake: k.brake,
-                    steer: k.steer,
-                    reverse: k.reverse,
-                })
-                .unwrap_or_default(),
-            Driver::Cruise { kmh, steer } => {
-                // PI speed controller on km/h error.
-                let err = kmh - forward_kmh;
-                self.integral = (self.integral + 0.02 * err * dt).clamp(0.0, 0.6);
-                let throttle = (0.08 * err + self.integral).clamp(0.0, 1.0);
-                let brake = if err < -3.0 {
-                    (-0.05 * err).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                VehicleInput {
-                    throttle,
-                    brake,
-                    steer: *steer,
-                    reverse: false,
-                }
-            }
-        }
     }
 }

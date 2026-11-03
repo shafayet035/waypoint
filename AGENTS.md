@@ -83,5 +83,8 @@ been launched yet (no simulator runtime installed here).
 M1 (realistic drive): suspension roll/pitch, tipping and rollover, sliding friction, ABS, air
 brakes, speed governor, vehicle events (`events.poll`, `NoEvent`/`ExpectEvent`), a 12 m city bus,
 and regulation-based validation tests (ECE R13 braking, EU turning circle).
-Not yet: testing on physical phones; running on an iOS simulator; trailers and articulation (M2); vehicle meshes (glTF) instead of procedural boxes; reverse gear,
+M2 (in progress): pin joints, semi-trailers, reverse gear, tractor unit, docks and a reversing
+driver; the docking gate test passes (`truck_docking`). Still to do in M2: road network and
+OpenStreetMap / OpenDRIVE import.
+Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

@@ -309,6 +309,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Use a tractor unit, or add hitch: Some((ahead_of_rear_axle_m: 0.5)) to the vehicle.",
     },
     ErrorDoc {
+        code: "WP-S020",
+        title: "A scenario refers to a dock that is not in its scene",
+        fix: "Use a dock name from the scene's `docks` list.",
+    },
+    ErrorDoc {
+        code: "WP-S021",
+        title: "ReverseToDock is used without a trailer",
+        fix: "Add trailer: Some(\"semi_trailer\") to the player, and use a tractor unit.",
+    },
+    ErrorDoc {
         code: "WP-T001",
         title: "A trailer quantity must be positive",
         fix: "Check mass_kg, yaw_inertia_kgm2, cg_height_m, track_width_m and the wheel.",

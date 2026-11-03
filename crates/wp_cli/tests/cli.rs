@@ -59,7 +59,7 @@ fn new_check_test_loop() {
     let (code, v) = json(&game, &["test"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["passed"], true);
-    assert_eq!(v["total"], 7);
+    assert_eq!(v["total"], 8);
 
     // Creating it again must fail with a coded error.
     let (code, v) = json(&dir, &["new", "my_bus_game"]);

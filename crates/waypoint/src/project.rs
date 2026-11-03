@@ -221,6 +221,33 @@ impl Project {
                     }
                 }
             }
+            if let wp_test::Driver::ReverseToDock { dock, .. } = &s.player.driver {
+                if s.player.trailer.is_none() {
+                    out.push(
+                        sc.error_at(
+                            "WP-S021",
+                            "driver",
+                            "ReverseToDock needs a trailer to back in",
+                        )
+                        .help("add trailer: Some(\"semi_trailer\") to the player"),
+                    );
+                }
+                if let Some(scene) = self.scenes.get(&s.scene)
+                    && scene.value.dock(dock).is_none()
+                {
+                    out.push(
+                        sc.error_at(
+                            "WP-S020",
+                            "dock",
+                            format!("dock `{dock}` is not in {}", s.scene),
+                        )
+                        .help(format!(
+                            "docks there: {}",
+                            list(scene.value.docks.iter().map(|d| &d.name))
+                        )),
+                    );
+                }
+            }
             if let Some(t) = &s.player.trailer {
                 if !self.trailers.contains_key(t) {
                     out.push(

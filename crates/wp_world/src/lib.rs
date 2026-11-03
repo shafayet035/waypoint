@@ -19,7 +19,43 @@ pub struct SceneDef {
     pub ground: GroundDef,
     /// Named places where vehicles can start.
     pub spawns: Vec<SpawnPoint>,
+    /// Loading docks a trailer can be reversed into.
+    #[serde(default)]
+    pub docks: Vec<DockDef>,
 }
+
+/// A loading dock. A docked trailer has its rear at `position` and faces
+/// `heading_deg` (pointing out of the dock, towards the yard).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DockDef {
+    pub name: String,
+    /// Centre of the dock opening at the bumpers, (x east, y north), m.
+    pub position: (f32, f32),
+    /// Direction out of the dock, degrees counter-clockwise from east.
+    pub heading_deg: f32,
+    /// Width of the bay between the guide lines, m.
+    #[serde(default = "dock_width")]
+    pub width_m: f32,
+}
+
+fn dock_width() -> f32 {
+    3.6
+}
+
+impl DockDef {
+    pub fn point(&self) -> Vec2 {
+        Vec2::new(self.position.0, self.position.1)
+    }
+    /// Unit vector out of the dock.
+    pub fn outward(&self) -> Vec2 {
+        Vec2::from_angle(self.heading_deg.to_radians())
+    }
+}
+
+/// The current scene's docks, for drawing and drivers.
+#[derive(Clone, Debug, Default)]
+pub struct Docks(pub Vec<DockDef>);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +98,10 @@ pub struct SpawnPoint {
 impl SceneDef {
     pub fn spawn(&self, name: &str) -> Option<&SpawnPoint> {
         self.spawns.iter().find(|s| s.name == name)
+    }
+
+    pub fn dock(&self, name: &str) -> Option<&DockDef> {
+        self.docks.iter().find(|d| d.name == name)
     }
 
     pub fn validate(file: &Loaded<SceneDef>) -> Vec<Diagnostic> {
@@ -128,6 +168,7 @@ pub fn apply_scene(world: &mut World, scene: &SceneDef) {
         friction_scale: scene.ground.friction_scale,
     });
     world.insert_resource(Gravity(scene.ground.gravity));
+    world.insert_resource(Docks(scene.docks.clone()));
 }
 
 /// Spawn position and heading (radians) of a spawn point.

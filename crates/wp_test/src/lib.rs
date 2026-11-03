@@ -6,6 +6,7 @@
 //! pass/fail per assertion, metrics and a state hash.
 
 mod def;
+pub mod drivers;
 mod runner;
 
 pub use def::{Assertion, Driver, InputKey, PlayerDef, ScenarioDef};

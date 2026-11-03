@@ -1,0 +1,21 @@
+// M2 gate: back a 13.6 m semi-trailer into a loading dock from an offset,
+// angled start. Real docks allow about ±0.15 m sideways; the bumpers stop the
+// trailer, so the rear must end within 0.3 m of the dock point, square to it,
+// stopped, and without folding the rig.
+(
+  scene: "scenes/yard.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "tractor",
+    trailer: Some("semi_trailer"),
+    spawn: "approach",
+    driver: ReverseToDock(dock: "bay_1", kmh: 3.0),
+  ),
+  duration_s: 150.0,
+  assert: [
+    Docked(dock: "bay_1", max_offset_m: 0.3, max_angle_deg: 3.0),
+    NoEvent("Jackknife"),
+    NoNaN,
+    Deterministic,
+  ],
+)

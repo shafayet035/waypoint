@@ -1,0 +1,14 @@
+// A depot yard with one loading dock. The dock faces east: a docked trailer
+// has its rear at (0, 0) and points along +x, towards the yard.
+(
+  name: "yard",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  spawns: [
+    // Tractor placed so its trailer's rear is 25 m out, 3 m north of the
+    // dock line, with the rig angled 8° (tractor ahead, trailer behind).
+    (name: "approach", position: (38.86, 4.95), heading_deg: 8.0),
+  ],
+  docks: [
+    (name: "bay_1", position: (0.0, 0.0), heading_deg: 0.0, width_m: 3.6),
+  ],
+)
