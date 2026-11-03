@@ -10,7 +10,12 @@ cargo test --workspace                 # all unit, integration and scenario test
 cargo clippy --workspace --all-targets # must stay warning-free
 cargo run -p wp_cli -- --project examples/sandbox test
 cargo run -p wp_cli -- --project examples/sandbox vehicle test hatchback
+cargo run -p wp_cli -- --project examples/sandbox shot --scenario skidpad --at 10s --camera showcase
+cargo run -p wp_cli -- --project examples/sandbox run      # opens a window; W/S/A/D to drive
 ```
+
+To see what a scenario looks like at a moment, use `wp shot` and open the PNG.
+Render tests skip themselves when no GPU adapter exists.
 
 The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`.
 
@@ -26,6 +31,9 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
 | `wp_vehicle` | `.vehicle.ron`, validation, brush tyres, engine, gearbox, brakes, aero |
 | `wp_world` | `.scene.ron`, spawn points, `Name`, `Player` |
 | `wp_test` | `.scenario.ron`, drivers, assertions, the scenario runner |
+| `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
+| `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
+| `wp_platform` | Window, keyboard driving, fixed-timestep interactive loop (winit) |
 | `waypoint` | `DefaultPlugins`, project loader, prelude |
 | `wp_cli` | The `wp` command and the error-code catalogue |
 
@@ -39,6 +47,7 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
   there is a file, and a `help`. Add every new code to `crates/wp_cli/src/catalog.rs`; a test
   fails otherwise. Never reuse a code for a different meaning.
 - **Layers.** Lower crates never depend on higher ones; simulation never depends on rendering.
+  Rendering only reads the world (`wp_render::extract`); it must never change simulation state.
 - **Data first.** A new vehicle, scene or test should need a file, not code. New data fields get
   doc comments (they become schema descriptions) and units in their names.
 - **Physics changes** must keep `examples/sandbox` scenarios and `wp vehicle test hatchback`
@@ -47,6 +56,8 @@ The `wp` binary is `target/debug/wp` after a build. Every command takes `--json`
 ## M0 status
 
 Done: ECS, scheduler, plugins, data + schemas, planar vehicle physics at 480 Hz, scenario tests,
+the wgpu renderer (procedural sky, gridded ground, blob shadows, lit instanced vehicles, 4× MSAA),
+`wp shot`, windowed `wp run` with keyboard driving, and
 `wp new/check/schema/docs/run/test/systems/plugins/vehicle test`.
-Not yet: the GPU renderer (`wp_rhi` on wgpu) and windowed `wp run`, which come next; reverse gear,
+Not yet: Android and iOS builds; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; the control protocol and MCP server (M1).

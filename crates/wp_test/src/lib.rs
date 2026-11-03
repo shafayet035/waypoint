@@ -9,4 +9,4 @@ mod def;
 mod runner;
 
 pub use def::{Assertion, Driver, InputKey, PlayerDef, ScenarioDef};
-pub use runner::{AssertionResult, Metrics, ScenarioInput, ScenarioReport, run_scenario};
+pub use runner::{AssertionResult, Metrics, ScenarioInput, ScenarioReport, prepare, run_scenario};

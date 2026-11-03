@@ -39,6 +39,8 @@ pub const WHEEL_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
 pub struct WheelState {
     /// Spin rate, rad/s.
     pub omega: f32,
+    /// Rotation angle, rad, in [0, 2π). Used by the renderer.
+    pub angle: f32,
     /// Relaxed longitudinal slip κ.
     pub slip_ratio: f32,
     /// Relaxed lateral slip tan α.
@@ -356,6 +358,7 @@ fn step_vehicle(
             def.wheel.inertia_kgm2,
             dt,
         );
+        w.angle = (w.angle + w.omega * dt).rem_euclid(std::f32::consts::TAU);
         w.load = loads[i];
         w.force = Vec2::new(fx, fy);
 

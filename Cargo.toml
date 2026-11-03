@@ -16,6 +16,11 @@ ron = "0.12"
 toml = "1"
 schemars = "1"
 clap = { version = "4", features = ["derive"] }
+wgpu = "30"
+winit = "0.30"
+pollster = "1"
+png = "0.18"
+bytemuck = { version = "1", features = ["derive"] }
 
 wp_core = { path = "crates/wp_core" }
 wp_ecs = { path = "crates/wp_ecs" }
@@ -26,6 +31,9 @@ wp_vehicle = { path = "crates/wp_vehicle" }
 wp_world = { path = "crates/wp_world" }
 wp_test = { path = "crates/wp_test" }
 waypoint = { path = "crates/waypoint" }
+wp_rhi = { path = "crates/wp_rhi" }
+wp_render = { path = "crates/wp_render" }
+wp_platform = { path = "crates/wp_platform" }
 
 [profile.dev]
 opt-level = 1

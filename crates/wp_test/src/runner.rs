@@ -2,7 +2,7 @@ use crate::def::{Assertion, Driver, ScenarioDef};
 use serde::Serialize;
 use wp_app::App;
 use wp_core::{Diagnostic, SimRng, SimTime};
-use wp_ecs::Stage;
+use wp_ecs::{Entity, Stage};
 use wp_vehicle::{VehicleDef, VehicleInput};
 use wp_world::{Name, Player, SceneDef};
 
@@ -110,7 +110,13 @@ pub fn run_scenario(
     })
 }
 
-fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Diagnostic> {
+/// Build a finished app for a scenario: scene applied, player spawned and its
+/// driver installed, at t = 0. Returns the app and the player entity. Use this
+/// to inspect or screenshot a scenario at any time (`wp shot --scenario`).
+pub fn prepare(
+    input: &ScenarioInput,
+    make_app: &dyn Fn() -> App,
+) -> Result<(App, Entity), Diagnostic> {
     let s = input.scenario;
     let spawn = input.scene.spawn(&s.player.spawn).ok_or_else(|| {
         Diagnostic::error(
@@ -143,6 +149,15 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     })
     .writes::<VehicleInput>();
     app.finish()?;
+    Ok((app, player))
+}
+
+fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Diagnostic> {
+    let s = input.scenario;
+    let (mut app, player) = prepare(input, make_app)?;
+    let pos = wp_vehicle::telemetry(&app.world, player)
+        .map(|t| glam_vec(t.position))
+        .unwrap_or_default();
 
     let time = app.time();
     let ticks = time.ticks_for(s.duration_s);

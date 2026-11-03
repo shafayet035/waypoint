@@ -39,11 +39,6 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Run the command with --help, or `wp docs cli`, to see valid values.",
     },
     ErrorDoc {
-        code: "WP-C002",
-        title: "Windowed mode is not available yet",
-        fix: "Use `wp run --headless`. The renderer arrives in the next milestone step.",
-    },
-    ErrorDoc {
         code: "WP-C003",
         title: "No scenario matches the filter",
         fix: "Run `wp test` without a filter to list all scenarios.",
@@ -82,6 +77,41 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-G010",
         title: "game.toml start_scene does not exist",
         fix: "Point start_scene at a .scene.ron file, relative to the project root.",
+    },
+    ErrorDoc {
+        code: "WP-P001",
+        title: "A window could not be opened",
+        fix: "Run on a machine with a display, or use `wp run --headless` / `wp shot`.",
+    },
+    ErrorDoc {
+        code: "WP-P002",
+        title: "The window event loop failed",
+        fix: "Rerun; if it persists, report the message with your OS version.",
+    },
+    ErrorDoc {
+        code: "WP-R001",
+        title: "No usable GPU adapter",
+        fix: "Install GPU drivers; on headless Linux CI install mesa lavapipe (software Vulkan). WGPU_BACKEND selects a backend.",
+    },
+    ErrorDoc {
+        code: "WP-R002",
+        title: "The GPU refused to create a device",
+        fix: "Update GPU drivers; the message names the missing feature or limit.",
+    },
+    ErrorDoc {
+        code: "WP-R003",
+        title: "Reading a rendered frame back from the GPU failed",
+        fix: "Rerun; if it persists, try another backend with WGPU_BACKEND.",
+    },
+    ErrorDoc {
+        code: "WP-R004",
+        title: "Cannot render to the window surface",
+        fix: "Update GPU drivers or try another backend with WGPU_BACKEND.",
+    },
+    ErrorDoc {
+        code: "WP-R010",
+        title: "A screenshot could not be written",
+        fix: "Check the --out path and that its folder is writable.",
     },
     ErrorDoc {
         code: "WP-S010",

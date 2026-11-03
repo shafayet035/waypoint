@@ -1,0 +1,20 @@
+[package]
+name = "wp_platform"
+description = "Windows and input (winit): runs an App interactively with a fixed-timestep loop and keyboard driving."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_physics.workspace = true
+wp_vehicle.workspace = true
+wp_rhi.workspace = true
+wp_render.workspace = true
+winit.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

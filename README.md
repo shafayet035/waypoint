@@ -14,11 +14,13 @@ cd my_game
 ../target/debug/wp test
 ../target/debug/wp vehicle test hatchback
 ../target/debug/wp run --headless --throttle 1 --seconds 8 --trace
+../target/debug/wp shot --scenario skidpad --at 10s --camera showcase --out skidpad.png
+../target/debug/wp run        # drive in a window: W/S throttle-brake, A/D steer, C camera, R reset
 ```
 
 ## Status
 
-Milestone M0 (Foundations) is in progress: the simulation core, the data formats and the CLI work
-headless. The renderer comes next. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
+Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
+(windowed and headless) work on desktop. Android and iOS builds come next. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
 Licence: MIT OR Apache-2.0 (open question in the design).

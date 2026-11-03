@@ -116,10 +116,47 @@ fn headless_run_is_deterministic() {
 }
 
 #[test]
-fn windowed_run_explains_itself() {
-    let (code, v) = json(&repo().join("examples/sandbox"), &["run"]);
+fn shot_writes_a_png_of_a_scenario() {
+    let dir = temp_dir("shot");
+    let out = dir.join("frame.png");
+    let sandbox = repo().join("examples/sandbox");
+    let (code, v) = json(
+        &sandbox,
+        &[
+            "shot",
+            "--scenario",
+            "skidpad",
+            "--at",
+            "5s",
+            "--camera",
+            "showcase",
+            "--width",
+            "320",
+            "--height",
+            "180",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    if code == 1 && v["diagnostics"][0]["code"] == "WP-R001" {
+        eprintln!("skipping: no GPU adapter on this machine");
+        return;
+    }
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["at_s"], 5.0);
+    let bytes = std::fs::read(&out).unwrap();
+    assert_eq!(&bytes[1..4], b"PNG");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn bad_camera_is_a_coded_error() {
+    let (code, v) = json(
+        &repo().join("examples/sandbox"),
+        &["shot", "--camera", "drone"],
+    );
     assert_eq!(code, 1);
-    assert_eq!(v["diagnostics"][0]["code"], "WP-C002");
+    assert_eq!(v["diagnostics"][0]["code"], "WP-C001");
 }
 
 #[test]

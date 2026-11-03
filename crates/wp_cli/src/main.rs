@@ -42,8 +42,10 @@ enum Cmd {
     Schema { kind: String },
     /// Offline docs. Topics: cli, errors, errors/<CODE>, scenario, vehicle.
     Docs { topic: Option<String> },
-    /// Run the simulation with constant inputs and print the final state.
+    /// Drive in a window (keyboard), or --headless to simulate and print the final state.
     Run(commands::RunArgs),
+    /// Render one frame to a PNG, headless: any scenario or drive at any time.
+    Shot(commands::ShotArgs),
     /// Run scenario tests (all, or those whose name contains FILTER).
     Test { filter: Option<String> },
     /// Print the resolved system schedule.
@@ -85,6 +87,7 @@ fn main() {
         Cmd::Schema { kind } => commands::schema(&ctx, &kind),
         Cmd::Docs { topic } => commands::docs(&ctx, topic.as_deref()),
         Cmd::Run(args) => commands::run(&ctx, &args),
+        Cmd::Shot(args) => commands::shot(&ctx, &args),
         Cmd::Test { filter } => commands::test(&ctx, filter.as_deref()),
         Cmd::Systems => commands::systems(&ctx),
         Cmd::Plugins => commands::plugins(&ctx),

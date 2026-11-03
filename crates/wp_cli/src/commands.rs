@@ -10,6 +10,7 @@ use waypoint::test::{
 };
 use waypoint::vehicle::{VehicleDef, VehicleInput};
 use waypoint::world::{GroundDef, Name, Player, SceneDef, SpawnPoint};
+use wp_render::CameraMode;
 
 fn print_json(v: &serde_json::Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap());
@@ -168,15 +169,19 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp check                     validate all files (schemas + cross-references)
   wp schema <type>             JSON Schema: game | vehicle | scene | scenario
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
-  wp run --headless [opts]     simulate with constant inputs; prints final state
-        --seconds S | --ticks N  --seed S  --vehicle NAME  --scene PATH  --spawn NAME
-        --throttle 0..1  --brake 0..1  --steer -1..1  --trace
+  wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera, R reset, P pause
+  wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
+  wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
   wp test [filter]             run scenario tests; exit 1 if any fail
   wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
   wp systems                   resolved system schedule
   wp plugins                   loaded plugins in load order
 
-Agent loop: edit a file → wp check --json → wp test --json → read failures → fix.
+Drive options (run and shot): --scenario NAME, or --scene PATH --spawn NAME --vehicle NAME
+  --throttle 0..1 --brake 0..1 --steer -1..1 --seed N
+
+Agent loop: edit a file → wp check --json → wp test --json → on failure, wp shot --scenario <name> --at <t>
+and look at the image → fix.
 ";
 
 const DOCS_SCENARIO: &str = "\
@@ -252,21 +257,14 @@ pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
     Ok(0)
 }
 
-// ---- wp run ---------------------------------------------------------------
+// ---- wp run / wp shot --------------------------------------------------------
 
-#[derive(clap::Args)]
-pub struct RunArgs {
-    /// Run without a window (the only mode until the renderer lands).
+/// What to drive: shared by `wp run` and `wp shot`.
+#[derive(clap::Args, Clone)]
+pub struct DriveArgs {
+    /// Use a scenario's scene, vehicle, spawn and driver instead of constant inputs.
     #[arg(long)]
-    headless: bool,
-    /// Simulated seconds (ignored if --ticks is set).
-    #[arg(long, default_value_t = 10.0)]
-    seconds: f32,
-    /// Exact number of 60 Hz ticks to run.
-    #[arg(long)]
-    ticks: Option<u64>,
-    #[arg(long, default_value_t = 0)]
-    seed: u64,
+    scenario: Option<String>,
     /// Scene path; defaults to game.toml start_scene.
     #[arg(long)]
     scene: Option<String>,
@@ -280,21 +278,87 @@ pub struct RunArgs {
     throttle: f32,
     #[arg(long, default_value_t = 0.0)]
     brake: f32,
+    /// -1 (full right) to 1 (full left).
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     steer: f32,
-    /// Print telemetry every simulated second.
-    #[arg(long)]
-    trace: bool,
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
 }
 
-pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
-    if !args.headless {
-        return Err(vec![
-            Diagnostic::error("WP-C002", "windowed mode is not available yet")
-                .help("add --headless; the renderer arrives in the next milestone step"),
-        ]);
+#[derive(clap::Args)]
+pub struct RunArgs {
+    /// Run without a window: simulate as fast as possible and print the result.
+    #[arg(long)]
+    headless: bool,
+    /// Simulated seconds for --headless (ignored if --ticks is set).
+    #[arg(long, default_value_t = 10.0)]
+    seconds: f32,
+    /// Exact number of 60 Hz ticks to run headless.
+    #[arg(long)]
+    ticks: Option<u64>,
+    /// Print telemetry every simulated second (headless).
+    #[arg(long)]
+    trace: bool,
+    /// Starting camera in a window: chase, top, side, showcase.
+    #[arg(long, default_value = "chase")]
+    camera: String,
+    /// Close the window after this many real seconds (for smoke tests).
+    #[arg(long)]
+    exit_after: Option<f32>,
+    #[command(flatten)]
+    drive: DriveArgs,
+}
+
+#[derive(clap::Args)]
+pub struct ShotArgs {
+    /// Simulated time of the frame, e.g. 12.5 or 12.5s.
+    #[arg(long, default_value = "0")]
+    at: String,
+    /// chase, top, side or showcase.
+    #[arg(long, default_value = "chase")]
+    camera: String,
+    #[arg(long, default_value_t = 1280)]
+    width: u32,
+    #[arg(long, default_value_t = 720)]
+    height: u32,
+    /// Output PNG path.
+    #[arg(long, default_value = "shot.png")]
+    out: std::path::PathBuf,
+    #[command(flatten)]
+    drive: DriveArgs,
+}
+
+/// A ready-to-tick app with the player spawned, plus a label for messages.
+struct Drive {
+    app: App,
+    player: waypoint::ecs::Entity,
+    label: String,
+}
+
+fn setup_drive(ctx: &Ctx, project: &Project, args: &DriveArgs) -> Result<Drive, Vec<Diagnostic>> {
+    let make_app = || waypoint::make_app(project.disabled_plugins());
+    if let Some(name) = &args.scenario {
+        let sc = project.scenarios.get(name).ok_or_else(|| {
+            cli_error(
+                format!("unknown scenario `{name}`"),
+                known(project.scenarios.keys()),
+            )
+        })?;
+        let s = &sc.value;
+        let input = ScenarioInput {
+            name,
+            scenario: s,
+            scene: &project.scenes[&s.scene].value,
+            vehicle: &project.vehicles[&s.player.vehicle].value,
+        };
+        let (app, player) = waypoint::test::prepare(&input, &make_app).map_err(|d| vec![d])?;
+        return Ok(Drive {
+            app,
+            player,
+            label: format!("scenario `{name}`"),
+        });
     }
-    let project = load_project(ctx)?;
+    let _ = ctx;
     let scene_path = args
         .scene
         .clone()
@@ -325,7 +389,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
         )
     })?;
 
-    let mut app = waypoint::make_app(project.disabled_plugins());
+    let mut app = make_app();
     app.finish().map_err(|d| vec![d])?;
     app.world.insert_resource(SimRng::new(args.seed));
     waypoint::world::apply_scene(&mut app.world, scene);
@@ -338,6 +402,54 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
         brake: args.brake.clamp(0.0, 1.0),
         steer: args.steer.clamp(-1.0, 1.0),
     };
+    Ok(Drive {
+        app,
+        player,
+        label: format!("`{}` in {scene_path}", vehicle.value.name),
+    })
+}
+
+fn camera_mode(name: &str) -> Result<CameraMode, Vec<Diagnostic>> {
+    CameraMode::parse(name).ok_or_else(|| {
+        cli_error(
+            format!("unknown camera `{name}`"),
+            "cameras: chase, top, side, showcase",
+        )
+    })
+}
+
+pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
+    let project = load_project(ctx)?;
+    let Drive {
+        mut app,
+        player,
+        label,
+    } = setup_drive(ctx, &project, &args.drive)?;
+
+    if !args.headless {
+        let camera = camera_mode(&args.camera)?;
+        let summary = wp_platform::run_windowed(
+            app,
+            Some(player),
+            wp_platform::WindowOptions {
+                title: format!("Waypoint · {}", project.game.value.name),
+                width: 1280,
+                height: 720,
+                camera,
+                exit_after_s: args.exit_after,
+            },
+        )
+        .map_err(|d| vec![d])?;
+        if ctx.json {
+            print_json(&json!({ "ok": true, "window": summary }));
+        } else {
+            println!(
+                "closed after {:.1} s: {} frames, {} ticks ({:.1} simulated s)",
+                summary.real_seconds, summary.frames, summary.ticks, summary.sim_seconds
+            );
+        }
+        return Ok(0);
+    }
 
     let time = app.time();
     let ticks = args.ticks.unwrap_or_else(|| time.ticks_for(args.seconds));
@@ -377,15 +489,78 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
         }));
     } else {
         println!(
-            "ran {ticks} ticks ({:.1} s) of `{}` in {}: {:.1} km/h, gear {}, at ({:.1}, {:.1}), heading {:.1}°, state {hash}",
+            "ran {ticks} ticks ({:.1} s) of {label}: {:.1} km/h, gear {}, at ({:.1}, {:.1}), heading {:.1}°, state {hash}",
             app.time().seconds(),
-            vehicle.value.name,
-            scene_path,
             tel.speed_kmh,
             tel.gear,
             tel.position[0],
             tel.position[1],
             tel.heading_deg
+        );
+    }
+    Ok(0)
+}
+
+fn parse_seconds(s: &str) -> Result<f32, Vec<Diagnostic>> {
+    s.trim()
+        .trim_end_matches('s')
+        .parse::<f32>()
+        .ok()
+        .filter(|t| *t >= 0.0 && t.is_finite())
+        .ok_or_else(|| {
+            cli_error(
+                format!("bad time `{s}`"),
+                "use seconds, e.g. --at 12.5 or --at 12.5s",
+            )
+        })
+}
+
+pub fn shot(ctx: &Ctx, args: &ShotArgs) -> CmdResult {
+    let at = parse_seconds(&args.at)?;
+    let camera = camera_mode(&args.camera)?;
+    if !(16..=8192).contains(&args.width) || !(16..=8192).contains(&args.height) {
+        return Err(cli_error(
+            "image size out of range",
+            "width and height must be 16 to 8192 pixels",
+        ));
+    }
+    let project = load_project(ctx)?;
+    let Drive {
+        mut app,
+        player,
+        label,
+    } = setup_drive(ctx, &project, &args.drive)?;
+    let ticks = app.time().ticks_for(at);
+    app.run_ticks(ticks);
+
+    let gpu = wp_rhi::Gpu::headless().map_err(|d| vec![d])?;
+    let frame = wp_render::extract(&app.world, camera);
+    let rgba =
+        wp_render::render_rgba(&gpu, &frame, args.width, args.height).map_err(|d| vec![d])?;
+    wp_rhi::write_png(&args.out, args.width, args.height, &rgba).map_err(|d| vec![d])?;
+    let tel = waypoint::vehicle::telemetry(&app.world, player);
+    if ctx.json {
+        print_json(&json!({
+            "ok": true,
+            "path": args.out,
+            "width": args.width,
+            "height": args.height,
+            "at_s": app.time().seconds(),
+            "ticks": ticks,
+            "camera": args.camera,
+            "gpu": gpu.info(),
+            "telemetry": tel,
+            "state_hash": app.world.state_hash(),
+        }));
+    } else {
+        println!(
+            "wrote {} ({}×{}, {} camera) of {label} at {:.2} s on {}",
+            args.out.display(),
+            args.width,
+            args.height,
+            args.camera,
+            app.time().seconds(),
+            gpu.info().name
         );
     }
     Ok(0)

@@ -1,0 +1,16 @@
+[package]
+name = "wp_rhi"
+description = "Render hardware interface: a thin layer over wgpu (Vulkan, Metal, desktop APIs) with headless capture."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+png.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
