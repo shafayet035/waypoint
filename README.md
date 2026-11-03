@@ -29,9 +29,22 @@ Claude then gets tools to check and test the project, take screenshots, and driv
 simulation (`session_start`, `session_call` with control-protocol methods such as `sim.step`,
 `input.set`, `world.find`, `render.screenshot`).
 
+## iOS
+
+```sh
+rustup target add aarch64-apple-ios-sim aarch64-apple-ios   # once (rust-toolchain.toml does this too)
+tools/ios/build.sh sim                                      # → target/ios/sim/Waypoint.app
+xcrun simctl install booted target/ios/sim/Waypoint.app
+xcrun simctl launch booted dev.waypoint.player
+```
+
+Touch controls: left thumb drags sideways to steer; right thumb high for throttle, low for brake;
+tap the top edge to change camera. The simulator needs an iOS runtime
+(`xcodebuild -downloadPlatform iOS`, about 7–8 GB).
+
 ## Status
 
 Milestone M0 (Foundations): the simulation core, data formats, CLI and a first wgpu renderer
-(windowed and headless) work on desktop. Android and iOS builds come next. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
+(windowed and headless) work on desktop, and the player app builds for iOS. Android comes next. See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
 Licence: MIT OR Apache-2.0 (open question in the design).

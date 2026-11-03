@@ -1,0 +1,19 @@
+[package]
+name = "wp_player"
+description = "The game player: runs a Waypoint project in a window. This is the app shipped to iOS and Android."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "waypoint-player"
+path = "src/main.rs"
+
+[dependencies]
+waypoint.workspace = true
+wp_control.workspace = true
+wp_platform.workspace = true
+wp_render.workspace = true
+
+[lints]
+workspace = true

@@ -2897,6 +2897,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wp_player"
+version = "0.1.0"
+dependencies = [
+ "waypoint",
+ "wp_control",
+ "wp_platform",
+ "wp_render",
+]
+
+[[package]]
 name = "wp_render"
 version = "0.1.0"
 dependencies = [

@@ -3,7 +3,8 @@
 //! The simulation always advances in whole 60 Hz ticks (so it stays
 //! deterministic); rendering runs at display rate and only reads the world.
 //! Controls: W/↑ throttle, S/↓ brake, A/← and D/→ steer, C camera,
-//! R reset, P pause, Esc quit. A control client (`wp run --control <port>`)
+//! R reset, P pause, Esc quit. On touch screens: left thumb drags to steer,
+//! right thumb high for throttle, low for brake, tap the top edge for camera. A control client (`wp run --control <port>`)
 //! can query and drive the same session while it runs.
 
 use serde::Serialize;
@@ -66,6 +67,7 @@ pub fn run_windowed(
         gfx: None,
         error: None,
         keys: Keys::default(),
+        touch: Touches::default(),
         input: VehicleInput::default(),
         started: Instant::now(),
         last: Instant::now(),
@@ -112,6 +114,43 @@ impl Keys {
     }
 }
 
+/// (start, current) positions of one touch, in pixels.
+type TouchPoint = ((f64, f64), (f64, f64));
+
+/// Two-thumb touch layout for phones and tablets:
+/// - left half: drag sideways from where the thumb landed to steer;
+/// - right half: upper part is throttle, lower part is brake;
+/// - a tap in the top strip cycles the camera.
+#[derive(Default)]
+struct Touches {
+    /// Touch id → where the thumb landed and where it is now.
+    active: std::collections::BTreeMap<u64, TouchPoint>,
+    size: (f64, f64),
+}
+
+impl Touches {
+    fn any(&self) -> bool {
+        !self.active.is_empty()
+    }
+
+    /// (throttle, brake, steer) targets from the current touches.
+    fn targets(&self) -> (f32, f32, Option<f32>) {
+        let (w, h) = (self.size.0.max(1.0), self.size.1.max(1.0));
+        let (mut throttle, mut brake, mut steer) = (0.0, 0.0, None);
+        for (start, pos) in self.active.values() {
+            if start.0 < w / 2.0 {
+                let dx = (pos.0 - start.0) / (w * 0.12);
+                steer = Some((-dx as f32).clamp(-1.0, 1.0));
+            } else if pos.1 < h * 0.6 {
+                throttle = 1.0;
+            } else {
+                brake = 1.0;
+            }
+        }
+        (throttle, brake, steer)
+    }
+}
+
 /// Pose and part state to restore on R.
 type Snapshot = (Pose, Vehicle);
 
@@ -129,6 +168,7 @@ struct Handler {
     gfx: Option<Gfx>,
     error: Option<Diagnostic>,
     keys: Keys,
+    touch: Touches,
     input: VehicleInput,
     camera: CameraMode,
     started: Instant,
@@ -210,16 +250,19 @@ impl Handler {
         let approach =
             |v: f32, target: f32, rate: f32| v + (target - v).clamp(-rate * dt, rate * dt);
         let k = &self.keys;
-        self.input.throttle =
-            approach(self.input.throttle, if k.throttle { 1.0 } else { 0.0 }, 3.0);
-        self.input.brake = approach(self.input.brake, if k.brake { 1.0 } else { 0.0 }, 5.0);
-        let steer_target = match (k.left, k.right) {
-            (true, false) => 1.0,
-            (false, true) => -1.0,
-            _ => 0.0,
+        let (touch_throttle, touch_brake, touch_steer) = self.touch.targets();
+        let throttle = if k.throttle { 1.0 } else { touch_throttle };
+        let brake = if k.brake { 1.0 } else { touch_brake };
+        self.input.throttle = approach(self.input.throttle, throttle, 3.0);
+        self.input.brake = approach(self.input.brake, brake, 5.0);
+        let (steer_target, rate) = match (k.left, k.right, touch_steer) {
+            (true, false, _) => (1.0, 1.8),
+            (false, true, _) => (-1.0, 1.8),
+            // A thumb gives an analogue position: follow it quickly.
+            (_, _, Some(t)) => (t, 6.0),
+            // Steering returns to centre faster than it winds on.
+            _ => (0.0, 3.5),
         };
-        // Steering returns to centre faster than it winds on.
-        let rate = if steer_target == 0.0 { 3.5 } else { 1.8 };
         self.input.steer = approach(self.input.steer, steer_target, rate);
     }
 
@@ -244,7 +287,8 @@ impl Handler {
             while self.accumulator >= tick_dt && steps < 8 {
                 self.update_input(tick_dt as f32);
                 // The keyboard drives only while it is in use, so a control client can drive too.
-                let keyboard_active = self.keys.any() || self.input != VehicleInput::default();
+                let keyboard_active =
+                    self.keys.any() || self.touch.any() || self.input != VehicleInput::default();
                 if keyboard_active
                     && let Some(e) = self.session.player
                     && let Some(mut i) = self.session.app.world.get_mut::<VehicleInput>(e)
@@ -341,6 +385,30 @@ impl ApplicationHandler for Handler {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => self.key(&event, event_loop),
+            WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase;
+                if let Some(g) = &self.gfx {
+                    let size = g.window.inner_size();
+                    self.touch.size = (size.width as f64, size.height as f64);
+                }
+                let p = (t.location.x, t.location.y);
+                match t.phase {
+                    TouchPhase::Started if p.1 < self.touch.size.1 * 0.12 => {
+                        self.camera = self.camera.next()
+                    }
+                    TouchPhase::Started => {
+                        self.touch.active.insert(t.id, (p, p));
+                    }
+                    TouchPhase::Moved => {
+                        if let Some(e) = self.touch.active.get_mut(&t.id) {
+                            e.1 = p;
+                        }
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        self.touch.active.remove(&t.id);
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => {
                 self.frame();
                 if let Some(limit) = self.opts.exit_after_s

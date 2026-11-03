@@ -1,0 +1,5 @@
+# rustup reads this: stable Rust plus the mobile targets the engine ships to.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+targets = ["aarch64-apple-ios-sim", "aarch64-apple-ios"]

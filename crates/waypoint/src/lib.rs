@@ -40,6 +40,62 @@ pub fn make_app(disabled: &[String]) -> App {
     app
 }
 
+/// Start a project for play: a scenario's setup (with its driver) if `scenario`
+/// is given, else the first vehicle at the first spawn of `start_scene`.
+/// Returns the finished app and the player entity.
+pub fn start(
+    project: &project::Project,
+    scenario: Option<&str>,
+    seed: u64,
+) -> Result<(App, wp_ecs::Entity), wp_core::Diagnostic> {
+    use wp_core::Diagnostic;
+    let make_app = || make_app(project.disabled_plugins());
+    if let Some(name) = scenario {
+        let sc = project.scenarios.get(name).ok_or_else(|| {
+            Diagnostic::error("WP-C001", format!("unknown scenario `{name}`")).help(format!(
+                "scenarios: {}",
+                project
+                    .scenarios
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+        let s = &sc.value;
+        let input = wp_test::ScenarioInput {
+            name,
+            scenario: s,
+            scene: &project.scenes[&s.scene].value,
+            vehicle: &project.vehicles[&s.player.vehicle].value,
+        };
+        return wp_test::prepare(&input, &make_app);
+    }
+    let scene = &project.scenes[&project.game.value.start_scene].value;
+    let vehicle = project.vehicles.values().next().ok_or_else(|| {
+        Diagnostic::error("WP-G011", "the project has no vehicles")
+            .help("add a vehicles/<name>.vehicle.ron file")
+    })?;
+    let spawn = scene.spawns.first().ok_or_else(|| {
+        Diagnostic::error(
+            "WP-W004",
+            format!("scene `{}` has no spawn points", scene.name),
+        )
+        .help("add an entry to `spawns`")
+    })?;
+    let mut app = make_app();
+    app.finish()?;
+    app.world
+        .insert_reflected_resource("SimRng", wp_core::SimRng::new(seed));
+    wp_world::apply_scene(&mut app.world, scene);
+    let (pos, heading) = wp_world::spawn_transform(spawn);
+    let player = wp_vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
+    app.world
+        .insert(player, wp_world::Name(vehicle.value.name.clone()));
+    app.world.insert(player, wp_world::Player);
+    Ok((app, player))
+}
+
 pub mod prelude {
     pub use crate::DefaultPlugins;
     pub use wp_app::{App, Plugin, PluginGroup};

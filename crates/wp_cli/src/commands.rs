@@ -567,9 +567,9 @@ pub fn serve(ctx: &Ctx, args: &ServeArgs) -> CmdResult {
             && writeln!(stdout, "{resp}")
                 .and_then(|_| stdout.flush())
                 .is_err()
-            {
-                break;
-            }
+        {
+            break;
+        }
     }
     Ok(0)
 }

@@ -79,6 +79,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Point start_scene at a .scene.ron file, relative to the project root.",
     },
     ErrorDoc {
+        code: "WP-G011",
+        title: "The project has no vehicles",
+        fix: "Add a vehicles/<name>.vehicle.ron file (copy one from `wp new`).",
+    },
+    ErrorDoc {
         code: "WP-K001",
         title: "The control request names an entity that does not exist",
         fix: "Call world.entities for valid ids (strings like \"3v0\"), or omit `entity` to use the player.",
