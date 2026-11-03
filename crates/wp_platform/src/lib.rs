@@ -2,7 +2,7 @@
 //!
 //! The simulation always advances in whole 60 Hz ticks (so it stays
 //! deterministic); rendering runs at display rate and only reads the world.
-//! Controls: W/↑ throttle, S/↓ brake, A/← and D/→ steer, C camera,
+//! Controls: W/↑ throttle, S/↓ brake (hold at a standstill to reverse), A/← and D/→ steer, C camera,
 //! R reset, P pause, Esc quit. On touch screens: left thumb drags to steer,
 //! right thumb high for throttle, low for brake, tap the top edge for camera. A control client (`wp run --control <port>`)
 //! can query and drive the same session while it runs.
@@ -280,8 +280,23 @@ impl Handler {
             |v: f32, target: f32, rate: f32| v + (target - v).clamp(-rate * dt, rate * dt);
         let k = &self.keys;
         let (touch_throttle, touch_brake, touch_steer) = self.touch.targets();
-        let throttle = if k.throttle { 1.0 } else { touch_throttle };
-        let brake = if k.brake { 1.0 } else { touch_brake };
+        let accelerate = if k.throttle { 1.0 } else { touch_throttle };
+        let slow = if k.brake { 1.0 } else { touch_brake };
+        // Driving-game convention: holding "brake" at a standstill engages
+        // reverse and backs up; "accelerate" then brakes until stopped, after
+        // which it selects drive again.
+        let forward_kmh = self
+            .session
+            .player
+            .and_then(|e| wp_vehicle::telemetry(&self.session.app.world, e))
+            .map(|t| t.forward_kmh)
+            .unwrap_or(0.0);
+        if slow > 0.5 && accelerate < 0.5 && forward_kmh < 1.0 {
+            self.input.reverse = true;
+        } else if accelerate > 0.5 && slow < 0.5 && forward_kmh > -1.0 {
+            self.input.reverse = false;
+        }
+        let (throttle, brake) = if self.input.reverse { (slow, accelerate) } else { (accelerate, slow) };
         self.input.throttle = approach(self.input.throttle, throttle, 3.0);
         self.input.brake = approach(self.input.brake, brake, 5.0);
         let (steer_target, rate) = match (k.left, k.right, touch_steer) {
@@ -374,7 +389,7 @@ impl Handler {
                 ""
             };
             gfx.window.set_title(&format!(
-                "{} · {model} · {status} · camera {:?}{paused}   [W/S drive, A/D steer, C camera, R reset, P pause]",
+                "{} · {model} · {status} · camera {:?}{paused}   [W/S drive (hold S when stopped to reverse), A/D steer, C camera, R reset, P pause]",
                 self.opts.title, self.camera
             ));
         }
