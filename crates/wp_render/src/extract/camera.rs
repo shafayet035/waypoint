@@ -1,4 +1,4 @@
-//! Cameras (chase, top, side, showcase) and lighting/atmosphere settings.
+//! Cameras (chase, cab, top, side, showcase) and lighting/atmosphere settings.
 
 #[allow(unused_imports)]
 use super::*;
@@ -164,11 +164,14 @@ pub enum CameraMode {
     Side,
     /// Front three-quarter view, for screenshots of the vehicle.
     Showcase,
+    /// The driver's seat, looking out of the windscreen.
+    Cab,
 }
 
 impl CameraMode {
-    pub const ALL: [(&'static str, CameraMode); 4] = [
+    pub const ALL: [(&'static str, CameraMode); 5] = [
         ("chase", CameraMode::Chase),
+        ("cab", CameraMode::Cab),
         ("top", CameraMode::Top),
         ("side", CameraMode::Side),
         ("showcase", CameraMode::Showcase),
@@ -203,6 +206,8 @@ impl CameraMode {
                 pos + fwd * 5.2 * s + left * 3.6 * s + Vec3::Z * 1.7 * s,
                 pos + Vec3::Z * 0.55 * s - fwd * 0.3 * s,
             ),
+            // Without a vehicle to sit in: eye height, looking ahead.
+            CameraMode::Cab => (pos + Vec3::Z * 1.2, pos + fwd * 10.0 + Vec3::Z * 1.0),
         };
         let up = if self == CameraMode::Top {
             Vec3::Y

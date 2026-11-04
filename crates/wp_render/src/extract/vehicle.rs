@@ -444,3 +444,140 @@ fn rebuild_normals(part: &mut wp_asset::Part) {
         *out = n.normalize_or(Vec3::from(*out)).to_array();
     }
 }
+
+/// The vehicle's body frame: position and heading, tipping about the outer
+/// wheels, then roll and pitch on the springs. Body-frame x is forward from
+/// the centre of mass, y left, z up from the ground.
+pub fn body_matrix(def: &VehicleDef, pose: &Pose, veh: &Vehicle) -> Mat4 {
+    let half_track = def.track_width_m / 2.0;
+    let d = if veh.tip_dir >= 0.0 { 1.0 } else { -1.0 };
+    let base = Mat4::from_translation(pose.position.extend(0.0))
+        * Mat4::from_rotation_z(pose.heading)
+        * Mat4::from_translation(Vec3::new(0.0, -d * half_track, 0.0))
+        * Mat4::from_rotation_x(d * veh.tip_angle)
+        * Mat4::from_translation(Vec3::new(0.0, d * half_track, 0.0));
+    let pivot = Vec3::new(0.0, 0.0, def.suspension.roll_center_height_m);
+    base * Mat4::from_translation(pivot)
+        * Mat4::from_rotation_x(veh.roll)
+        * Mat4::from_rotation_y(veh.pitch)
+        * Mat4::from_translation(-pivot)
+}
+
+/// The driver's eye in the body frame and the cab camera's field of view.
+/// `left_seat`: the driver sits left of the centreline (right-hand traffic).
+pub fn cab_eye(def: &VehicleDef, left_seat: bool) -> (Vec3, f32) {
+    let side = if left_seat { 1.0 } else { -1.0 };
+    if let Some(c) = &def.cab {
+        return (
+            Vec3::new(c.eye_m.0, side * c.eye_m.1.abs(), c.eye_m.2),
+            c.fov_deg,
+        );
+    }
+    let shape = body_shape(def);
+    let style = match def.body.as_ref().map(|b| b.style).unwrap_or_default() {
+        BodyStyle::Auto if shape.height > 2.2 => BodyStyle::Bus,
+        BodyStyle::Auto => BodyStyle::Car,
+        s => s,
+    };
+    let (back, y) = match style {
+        BodyStyle::Bus => (1.15, shape.width * 0.28),
+        BodyStyle::TruckCab => (1.25, shape.width * 0.25),
+        _ => (1.95, shape.width * 0.21),
+    };
+    (
+        Vec3::new(shape.front - back, side * y, shape.height * 0.78),
+        62.0,
+    )
+}
+
+/// What the driver sees of the cab: dashboard with lit gauges, steering wheel
+/// (turning with the front wheels), windscreen pillars and roof edge.
+pub(super) fn cab_items(
+    items: &mut Vec<DrawItem>,
+    def: &VehicleDef,
+    body: Mat4,
+    eye: Vec3,
+    steer_angle: f32,
+    night: bool,
+) {
+    let shape = body_shape(def);
+    let hw = shape.width / 2.0 - 0.06;
+    let dark = Vec3::new(0.025, 0.025, 0.028);
+    let trim = Vec3::new(0.06, 0.06, 0.065);
+    let mut part = |min: Vec3, max: Vec3, color: Vec3, rough: f32, emissive: f32| {
+        items.push(DrawItem {
+            mesh: MeshId::Cube,
+            transform: body
+                * Mat4::from_translation((min + max) * 0.5)
+                * Mat4::from_scale(max - min),
+            color,
+            roughness: rough,
+            metallic: 0.0,
+            emissive,
+        });
+    };
+    let dash_x = eye.x + 0.5;
+    let dash_top = eye.z - 0.33;
+    // Dashboard from the driver's knees to the foot of the windscreen.
+    part(
+        Vec3::new(dash_x, -hw, dash_top - 0.45),
+        Vec3::new(dash_x + 1.0, hw, dash_top),
+        dark,
+        0.8,
+        0.0,
+    );
+    // Instrument binnacle and its gauges (lit at night).
+    part(
+        Vec3::new(dash_x + 0.08, eye.y - 0.22, dash_top),
+        Vec3::new(dash_x + 0.3, eye.y + 0.22, eye.z - 0.24),
+        dark,
+        0.8,
+        0.0,
+    );
+    for dy in [-0.08, 0.08] {
+        part(
+            Vec3::new(dash_x + 0.075, eye.y + dy - 0.045, dash_top + 0.015),
+            Vec3::new(dash_x + 0.08, eye.y + dy + 0.045, eye.z - 0.265),
+            Vec3::new(0.35, 0.4, 0.45),
+            0.3,
+            if night { 1.4 } else { 0.1 },
+        );
+    }
+    // Windscreen pillars and the roof edge above the screen.
+    let pillar_x = dash_x + 0.55;
+    for y in [-hw + 0.02, hw - 0.1] {
+        part(
+            Vec3::new(pillar_x, y, dash_top),
+            Vec3::new(pillar_x + 0.08, y + 0.08, eye.z + 0.32),
+            trim,
+            0.7,
+            0.0,
+        );
+    }
+    part(
+        Vec3::new(eye.x - 0.2, -hw, eye.z + 0.28),
+        Vec3::new(pillar_x + 0.08, hw, eye.z + 0.36),
+        trim,
+        0.9,
+        0.0,
+    );
+    // Steering wheel: a ring facing the driver, tilted back, turning about
+    // its column (about 15 turns of the wheel per turn of the road wheels).
+    let centre = Vec3::new(eye.x + 0.42, eye.y, eye.z - 0.4);
+    let spin = Quat::from_rotation_y(-steer_angle * 15.0);
+    // The column leans back towards the driver.
+    let face = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(0.45);
+    items.push(DrawItem {
+        mesh: MeshId::Wheel,
+        transform: body
+            * Mat4::from_scale_rotation_translation(
+                Vec3::new(0.19, 0.035, 0.19),
+                face * spin,
+                centre,
+            ),
+        color: Vec3::new(0.09, 0.09, 0.095),
+        roughness: 0.6,
+        metallic: 0.2,
+        emissive: 0.0,
+    });
+}

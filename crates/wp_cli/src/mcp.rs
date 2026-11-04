@@ -40,7 +40,7 @@ fn tools() -> Value {
     );
     shot_props.insert(
         "camera".into(),
-        json!({ "type": "string", "enum": ["chase", "top", "side", "showcase"] }),
+        json!({ "type": "string", "enum": ["chase", "cab", "top", "side", "showcase"] }),
     );
     shot_props.insert(
         "width".into(),

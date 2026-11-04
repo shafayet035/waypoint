@@ -11,14 +11,14 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp check                     validate all files (schemas + cross-references)
   wp schema <type>             JSON Schema: game | vehicle | trailer | road | scene | scenario
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
-  wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera, R reset, P pause
+  wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera (incl. cab view), R reset, P pause
   wp run --mission route_1     play a mission (its scene, vehicle and spawn); the title shows the objective
   wp run --quality low         quality tier: low|mid|flagship (default game.toml [quality] tier)
                                art style: game.toml [look] style = \"realistic\"|\"toon\"|\"flat\", plus colour
                                overrides (sky_top, ground, asphalt... as [r, g, b] 0–255); see `wp schema game`
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
   wp run --control <port>      also accept control-protocol requests on 127.0.0.1:<port> (0 = any free port)
-  wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
+  wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|cab|top|side|showcase --out f.png
   wp audio [opts] --out f.wav  render the player vehicle's sound headless (engine, road, skids); wp run --mute
   wp serve [drive opts]        control protocol (JSON-RPC 2.0) on stdin/stdout, one request per line
   wp mcp                       Model Context Protocol server on stdin/stdout (tools, resources, screenshots)

@@ -26,7 +26,9 @@ pub use assist::{Controls, DriverAids, steer_limit};
 pub use collision::{
     Contacts, Damage, Dent, Footprint, dent_depth_m, detect_collisions, vehicle_footprint,
 };
-pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
+pub use def::{
+    AirBrakeDef, BodyDef, BodyStyle, CabDef, Drive, HitchDef, SoundDef, SuspensionDef, VehicleDef,
+};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
 pub use trailer::{

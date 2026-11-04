@@ -54,7 +54,7 @@ pub struct RunArgs {
     /// Print telemetry every simulated second (headless).
     #[arg(long)]
     trace: bool,
-    /// Starting camera in a window: chase, top, side, showcase.
+    /// Starting camera in a window: chase, cab, top, side, showcase.
     #[arg(long, default_value = "chase")]
     camera: String,
     /// Quality tier for the window: low, mid or flagship (default: game.toml's).
@@ -133,7 +133,7 @@ fn camera_mode(name: &str) -> Result<CameraMode, Vec<Diagnostic>> {
     CameraMode::parse(name).ok_or_else(|| {
         cli_error(
             format!("unknown camera `{name}`"),
-            "cameras: chase, top, side, showcase",
+            "cameras: chase, cab, top, side, showcase",
         )
     })
 }

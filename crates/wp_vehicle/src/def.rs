@@ -45,6 +45,9 @@ pub struct VehicleDef {
     /// follows `engine.cylinders` and the revs.
     #[serde(default)]
     pub sound: SoundDef,
+    /// The driver's view (cab camera). Absent: placed from the body style.
+    #[serde(default)]
+    pub cab: Option<CabDef>,
     /// Body model to draw (glTF `.glb`, a project path such as
     /// `assets/vehicles/hatchback.glb`), origin on the ground midway between
     /// the axles, sized to `body`. Wheels stay procedural. Without one the
@@ -124,6 +127,23 @@ fn default_engine_brake() -> f32 {
 
 fn default_cylinders() -> u8 {
     4
+}
+
+/// The driver's seat, for the cab (first-person) camera.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CabDef {
+    /// Driver's eye: metres forward of the centre of mass, to the driver's
+    /// side of the centreline (mirrored for left- or right-hand traffic),
+    /// and above the ground.
+    pub eye_m: (f32, f32, f32),
+    /// Vertical field of view, degrees.
+    #[serde(default = "default_cab_fov")]
+    pub fov_deg: f32,
+}
+
+fn default_cab_fov() -> f32 {
+    62.0
 }
 
 /// The synthesized vehicle sound. Every level is a multiplier: 1 is the default.

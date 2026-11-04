@@ -201,6 +201,10 @@ Art styles: game.toml `[look]` → reflected `Look` resource (live-editable): `s
 "flat"` (toon: banded light, one crisp highlight, bold colour, no grid; flat: matte pastel, wrapped light, no
 reflections) plus overrides: sky_top, sky_horizon, ground, grid, asphalt, markings, sidewalk (sRGB 0–255),
 saturation, fog, exposure, toon_bands. Every tier keeps the game's style; only detail drops.
+Cab camera (`CameraMode::Cab`, `--camera cab`, C in windows): the driver's eye from the vehicle's optional
+`cab: Some((eye_m: (x, y, z), fov_deg))` or placed from the body style, on the left for right-hand traffic and
+the right for left-hand traffic, moving with roll and pitch; the cab shows a dashboard with gauges (lit at
+night), a steering wheel that turns with the wheels, pillars and the roof edge.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 WASM mod modules and per-mod capability permissions; damage effects on driving; traffic vehicles' sound.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque

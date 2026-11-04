@@ -86,7 +86,7 @@ pub const METHODS: &[(&str, &str, &str)] = &[
     ),
     (
         "render.screenshot",
-        "{camera?: chase|top|side|showcase, width?, height?, path?}",
+        "{camera?: chase|cab|top|side|showcase, width?, height?, path?}",
         "Render the current frame. Writes a PNG to path, or returns png_base64.",
     ),
     (

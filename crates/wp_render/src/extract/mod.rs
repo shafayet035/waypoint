@@ -15,7 +15,7 @@ use pedestrian::pedestrian_items;
 use signal::signal_items;
 use stop::stop_items;
 use trailer::trailer_items;
-pub use vehicle::{BodyShape, body_shape};
+pub use vehicle::{BodyShape, body_matrix, body_shape, cab_eye};
 use vehicle::{palette, vehicle_items};
 
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -261,7 +261,31 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
                         .and_then(|l| l.0.get(&m).map(|d| d.body.length_m))
                 })
                 .unwrap_or(0.0);
-            mode.camera(&pose, len + towed * 0.6)
+            let cab = (mode == CameraMode::Cab)
+                .then(|| {
+                    let veh = world.get::<Vehicle>(e)?;
+                    let def = library.as_ref()?.0.get(&veh.model)?.clone();
+                    Some((def, veh.clone()))
+                })
+                .flatten();
+            match cab {
+                Some((def, veh)) => {
+                    let left_seat = world
+                        .get_resource::<wp_world::Roads>()
+                        .is_none_or(|r| r.0.drive_side == wp_road::DriveSide::Right);
+                    let (eye, fov) = cab_eye(&def, left_seat);
+                    let body = body_matrix(&def, &pose, &veh);
+                    vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
+                    let at = body.transform_point3(eye);
+                    Camera {
+                        eye: at,
+                        target: at + body.transform_vector3(Vec3::new(1.0, 0.0, -0.06)) * 10.0,
+                        up: body.transform_vector3(Vec3::Z),
+                        fov_y_deg: fov,
+                    }
+                }
+                None => mode.camera(&pose, len + towed * 0.6),
+            }
         }
         None => mode.camera(&Pose::default(), 4.2),
     };
