@@ -26,4 +26,6 @@
     (stop: "market", depart_s: 855.0),
   ],
   time_limit_s: Some(1200.0),
+  // Extra events in Lua: a school group on the second lap, messages, a bonus.
+  script: Some("missions/route_1.lua"),
 )

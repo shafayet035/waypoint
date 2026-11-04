@@ -41,7 +41,7 @@ enum Cmd {
     Check,
     /// Print the JSON Schema of a data type: game, vehicle, trailer, road, scene, scenario.
     Schema { kind: String },
-    /// Offline docs. Topics: cli, errors, errors/<CODE>, scenario, vehicle.
+    /// Offline docs. Topics: cli, errors, errors/<CODE>, scenario, scripting, vehicle.
     Docs { topic: Option<String> },
     /// Drive in a window (keyboard), or --headless to simulate and print the final state.
     Run(commands::RunArgs),

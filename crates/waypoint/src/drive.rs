@@ -138,7 +138,9 @@ impl DriveSpec {
         app.world.insert(player, Name(vehicle.value.name.clone()));
         app.world.insert(player, Player);
         if let Some(m) = mission {
-            wp_mission::start(&mut app.world, m).map_err(|e| {
+            let script = project.mission_script(m);
+            let script = script.as_ref().map(|(p, src)| (p.as_str(), src.as_str()));
+            wp_mission::start(&mut app.world, m, script).map_err(|e| {
                 Diagnostic::error("WP-S021", format!("mission cannot start: {e}"))
                     .help("run `wp check`")
             })?;

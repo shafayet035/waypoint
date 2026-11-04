@@ -458,3 +458,25 @@ fn import_opendrive_then_drive_a_route() {
     assert_eq!(v["diagnostics"][0]["code"], "WP-I001");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn broken_mission_script_is_reported_with_its_line() {
+    let dir = temp_dir("lua");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    std::fs::write(
+        game.join("missions/route_1.lua"),
+        "function on_start()\n  mission.message(\"hi\"\nend\n",
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1, "{v}");
+    let d = v["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "WP-L001")
+        .unwrap_or_else(|| panic!("no WP-L001 in {v}"));
+    assert!(d["location"]["line"].as_u64().is_some(), "{d}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -118,6 +118,10 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../../examples/sandbox/missions/route_1.mission.ron"),
     ),
     (
+        "missions/route_1.lua",
+        include_str!("../../../../examples/sandbox/missions/route_1.lua"),
+    ),
+    (
         "tests/bus_route.scenario.ron",
         include_str!("../../../../examples/sandbox/tests/bus_route.scenario.ron"),
     ),

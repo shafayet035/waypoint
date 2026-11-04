@@ -83,8 +83,8 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   changes and lane-drop tapers, OpenStreetMap and OpenDRIVE import.
 - **M3 (living city, in progress):** AI traffic that follows lanes, keeps its distance, obeys traffic
   lights and give-way rules; crash physics; pedestrians on sidewalks and zebra crossings; bus missions
-  with stops, timetables and passengers (`wp run --mission route_1`). Next: Lua mission scripts,
-  streaming and the asset pipeline.
+  with stops, timetables and passengers (`wp run --mission route_1`), scriptable in Lua (Luau).
+  Next: streaming and the asset pipeline.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

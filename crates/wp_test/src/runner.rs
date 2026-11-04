@@ -24,6 +24,8 @@ pub struct ScenarioInput<'a> {
     pub traffic: Vec<&'a VehicleDef>,
     /// The scenario's mission, if it names one.
     pub mission: Option<&'a wp_mission::MissionDef>,
+    /// Its script: (path, source).
+    pub mission_script: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -217,7 +219,11 @@ pub fn prepare(
         _ => None,
     };
     if let Some(m) = input.mission {
-        wp_mission::start(&mut app.world, m)
+        let script = input
+            .mission_script
+            .as_ref()
+            .map(|(p, src)| (p.as_str(), src.as_str()));
+        wp_mission::start(&mut app.world, m, script)
             .map_err(|e| Diagnostic::error("WP-S021", format!("mission cannot start: {e}")))?;
     }
     let autopilot = matches!(s.player.driver, Driver::Autopilot);

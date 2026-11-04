@@ -151,6 +151,12 @@ pub struct MissionStatus {
     /// Straight-line distance to the next stop, m.
     pub distance_m: f32,
     pub doors_open: bool,
+    /// The last message from the mission script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Lines the script logged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<String>,
     pub completed: bool,
     pub failed: bool,
     pub score: Score,
@@ -216,6 +222,13 @@ pub struct MissionState {
     red_lights: u32,
     people_hit: u32,
     failed: Option<String>,
+    /// The mission's Lua script, if any, and what it has said.
+    script: Option<wp_script::Script>,
+    started: bool,
+    objective_override: Option<String>,
+    message: Option<String>,
+    bonus: i32,
+    log: Vec<String>,
 }
 
 impl MissionState {
@@ -261,7 +274,7 @@ impl MissionState {
             - self.red_lights as f32 * 15.0
             - self.people_hit as f32 * 50.0)
             .max(0.0);
-        let total = (punctuality + comfort + safety) / 3.0;
+        let total = ((punctuality + comfort + safety) / 3.0 + self.bonus as f32).clamp(0.0, 100.0);
         Score {
             punctuality: punctuality.round() as u32,
             comfort: comfort.round() as u32,
@@ -303,7 +316,12 @@ pub fn resolve_route(
 
 /// Start `def` in a world whose scene (with roads) is set up and whose
 /// player exists. Errors if a stop is missing.
-pub fn start(world: &mut World, def: &MissionDef) -> Result<(), String> {
+/// `script` is the mission script's (file name, source), if it has one.
+pub fn start(
+    world: &mut World,
+    def: &MissionDef,
+    script: Option<(&str, &str)>,
+) -> Result<(), String> {
     let net = world
         .get_resource::<Roads>()
         .map(|r| r.0.clone())
@@ -312,7 +330,20 @@ pub fn start(world: &mut World, def: &MissionDef) -> Result<(), String> {
         .get_resource::<SimRng>()
         .map_or(0, |r| r.clone().next_u64());
     let route = resolve_route(def, &net, seed)?;
+    let script = match script {
+        Some((name, source)) => Some(
+            wp_script::Script::load(source, name, seed)
+                .map_err(|e| format!("script {name}: {e}"))?,
+        ),
+        None => None,
+    };
     world.insert_resource(MissionState {
+        script,
+        started: false,
+        objective_override: None,
+        message: None,
+        bonus: 0,
+        log: Vec::new(),
         def: def.clone(),
         route,
         phase: Phase::Driving,
@@ -486,9 +517,86 @@ fn mission(world: &mut World) {
             }
             _ => {}
         }
+        // The script: hooks for this tick's events, then its commands.
+        if st.script.is_some() {
+            let view = wp_script::View {
+                time_s: t,
+                speed_kmh,
+                on_board: st.on_board,
+                next_stop: st.route[st.next.min(st.route.len() - 1)].id.clone(),
+                stops_served: st.next as u32,
+            };
+            let script = st.script.as_ref().expect("checked");
+            script.set_view(view);
+            let mut result = Ok(());
+            if !st.started {
+                result = result.and(script.call("on_start", ()));
+            }
+            result = result.and(script.call("on_tick", dt));
+            for e in &out {
+                result = result.and(match e {
+                    MissionEvent::Arrived { stop, .. } => script.call("on_arrive", stop.clone()),
+                    MissionEvent::Departed {
+                        stop,
+                        late_s,
+                        boarded,
+                        alighted,
+                        left_behind,
+                        ..
+                    } => script.call_with_info(
+                        "on_depart",
+                        stop,
+                        &[
+                            ("late_s", *late_s as f64),
+                            ("boarded", *boarded as f64),
+                            ("alighted", *alighted as f64),
+                            ("left_behind", *left_behind as f64),
+                        ],
+                    ),
+                    MissionEvent::Completed { score, .. } => script.call("on_complete", *score),
+                    MissionEvent::Failed { reason, .. } => script.call("on_fail", reason.clone()),
+                });
+            }
+            let commands = script.take_commands();
+            st.started = true;
+            if let Err(e) = result
+                && st.failed.is_none()
+            {
+                let reason = format!("script error: {e}");
+                st.failed = Some(reason.clone());
+                out.push(MissionEvent::Failed { t, reason });
+            }
+            for c in commands {
+                match c {
+                    wp_script::Command::Objective(text) => st.objective_override = Some(text),
+                    wp_script::Command::Message(text) => st.message = Some(text),
+                    wp_script::Command::AddPassengers { stop, count } => {
+                        let from = st.next;
+                        if let Some(rs) = st.route.iter_mut().skip(from).find(|r| r.id == stop) {
+                            rs.waiting += count;
+                        }
+                    }
+                    wp_script::Command::Bonus(points) => st.bonus += points,
+                    wp_script::Command::Fail(reason) => {
+                        if st.failed.is_none() {
+                            st.failed = Some(reason.clone());
+                            out.push(MissionEvent::Failed { t, reason });
+                        }
+                    }
+                    wp_script::Command::Log(text) => {
+                        st.log.push(format!("{t:.1}s {text}"));
+                        if st.log.len() > 50 {
+                            st.log.remove(0);
+                        }
+                    }
+                }
+            }
+        }
         let next = st.next.min(st.route.len().saturating_sub(1));
         let stop = &st.route[next];
         MissionStatus {
+            message: st.message.clone(),
+            log: st.log.clone(),
             title: st.def.title.clone(),
             objective: match (&st.phase, &st.failed) {
                 (_, Some(reason)) => format!("Mission failed: {reason}"),
@@ -504,6 +612,9 @@ fn mission(world: &mut World) {
                     "{}: {alighting} getting off, {boarding} getting on",
                     stop.name
                 ),
+                (Phase::Driving, _) if st.objective_override.is_some() => {
+                    st.objective_override.clone().unwrap_or_default()
+                }
                 (Phase::Driving, _) => {
                     let due = stop.depart_s - t;
                     format!(
@@ -567,6 +678,12 @@ mod tests {
             red_lights: 0,
             people_hit: 0,
             failed: None,
+            script: None,
+            started: false,
+            objective_override: None,
+            message: None,
+            bonus: 0,
+            log: Vec::new(),
         }
     }
 

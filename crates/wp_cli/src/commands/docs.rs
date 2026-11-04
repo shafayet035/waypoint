@@ -105,9 +105,35 @@ Check behaviour with `wp vehicle test <name>` (100 km/h tests are skipped for go
   turning_circle             diameter of the outer front wheel's path on full lock
 ";
 
+const DOCS_SCRIPTING: &str = "\
+Mission scripts: Lua (Luau, sandboxed). Set `script: Some(\"missions/route_1.lua\")` in a mission.
+`wp check` compiles every script (WP-L001 with the line); a runtime error fails the mission.
+
+Hooks (define the ones you need):
+  on_start()                     once, at the first tick
+  on_tick(dt)                    every tick (60 Hz); dt in seconds
+  on_arrive(stop)                doors open at a stop (stop id)
+  on_depart(stop, info)          info: late_s, boarded, alighted, left_behind
+  on_complete(score)             the route is done (score 0–100)
+  on_fail(reason)
+
+The `mission` table:
+  mission.objective(text)        replace the objective shown while driving
+  mission.message(text)          show a message
+  mission.add_passengers(stop, n) more people wait at the next visit to a stop
+  mission.bonus(points)          add (or, if negative, take) points
+  mission.fail(reason)
+  mission.log(text)              a line in the run's log (wp test --json: metrics.mission.log)
+  mission.state()                { time_s, speed_kmh, on_board, next_stop, stops_served }
+
+No `os`, files or clock; math.random is seeded from the run's seed, so runs stay deterministic.
+Luau extras over Lua 5.1: `+=`, `continue`, string interpolation, optional types.
+";
+
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
     let text = match topic {
-        None => "topics: cli, errors, errors/<CODE>, scenario, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        None => "topics: cli, errors, errors/<CODE>, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        Some("scripting") => DOCS_SCRIPTING.to_string(),
         Some("cli") => DOCS_CLI.to_string(),
         Some("scenario") => DOCS_SCENARIO.to_string(),
         Some("vehicle") => DOCS_VEHICLE.to_string(),

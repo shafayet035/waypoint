@@ -16,6 +16,7 @@ wp_world.workspace = true
 wp_road.workspace = true
 wp_traffic.workspace = true
 wp_mission.workspace = true
+wp_script.workspace = true
 wp_test.workspace = true
 serde.workspace = true
 schemars.workspace = true

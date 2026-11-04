@@ -338,17 +338,29 @@ impl Project {
                         .help("list at least one stop"),
                 );
             }
-            if let Some(script) = &d.script
-                && !self.root.join(script).exists()
-            {
-                out.push(
-                    m.error_at(
-                        "WP-M005",
-                        "script",
-                        format!("script `{script}` does not exist"),
-                    )
-                    .help("paths are relative to the project root, e.g. missions/route_1.lua"),
-                );
+            if let Some(script) = &d.script {
+                match std::fs::read_to_string(self.root.join(script)) {
+                    Err(_) => out.push(
+                        m.error_at(
+                            "WP-M005",
+                            "script",
+                            format!("script `{script}` does not exist"),
+                        )
+                        .help("paths are relative to the project root, e.g. missions/route_1.lua"),
+                    ),
+                    Ok(source) => {
+                        if let Err(e) = wp_script::check(&source, script) {
+                            let mut d = Diagnostic::error("WP-L001", format!("{script}: {}", e.message))
+                                .help("fix the Lua (Luau) syntax; `wp docs scripting` lists the hooks and API");
+                            d.location = Some(wp_core::Location {
+                                file: script.clone(),
+                                line: e.line.map(|l| l as usize),
+                                column: None,
+                            });
+                            out.push(d);
+                        }
+                    }
+                }
             }
         }
         for sc in self.scenarios.values() {
@@ -505,6 +517,11 @@ impl Project {
                 Some(m) => Some(&self.missions.get(m)?.value),
                 None => None,
             },
+            mission_script: s
+                .mission
+                .as_ref()
+                .and_then(|m| self.missions.get(m))
+                .and_then(|m| self.mission_script(&m.value)),
             scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,
@@ -524,6 +541,13 @@ impl Project {
             .into_iter()
             .map(|v| self.vehicles.get(v).map(|l| &l.value))
             .collect()
+    }
+
+    /// A mission's script: (path, source), if it has one that can be read.
+    pub fn mission_script(&self, def: &wp_mission::MissionDef) -> Option<(String, String)> {
+        let path = def.script.as_ref()?;
+        let source = std::fs::read_to_string(self.root.join(path)).ok()?;
+        Some((path.clone(), source))
     }
 
     /// The road network a scene refers to, if any (and if it loaded).

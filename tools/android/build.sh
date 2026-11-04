@@ -29,6 +29,8 @@ rustup target list --installed | grep -qx "$TARGET" || fail "run: rustup target 
 TC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android$MIN_SDK-clang"
 export CC_aarch64_linux_android="$TC/aarch64-linux-android$MIN_SDK-clang"
+# Luau (mission scripts) is C++.
+export CXX_aarch64_linux_android="$TC/aarch64-linux-android$MIN_SDK-clang++"
 export AR_aarch64_linux_android="$TC/llvm-ar"
 # 16 KB pages: required for Android 15+ devices that use them.
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"

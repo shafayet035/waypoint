@@ -129,6 +129,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Pick another port with --control <port>, or 0 for any free port.",
     },
     ErrorDoc {
+        code: "WP-L001",
+        title: "A Lua script does not compile",
+        fix: "Fix the syntax at the line given (Luau: Lua 5.1 plus `+=`, types, `continue`). `wp docs scripting` lists the hooks and the `mission` API.",
+    },
+    ErrorDoc {
         code: "WP-M001",
         title: "A mission's scene does not exist",
         fix: "Point `scene` at a scenes/<name>.scene.ron file.",

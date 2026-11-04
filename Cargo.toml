@@ -21,6 +21,7 @@ winit = { version = "0.30", features = ["android-native-activity"] }
 pollster = "1"
 png = "0.18"
 quick-xml = "0.42"
+mlua = { version = "0.11", features = ["luau", "vendored"] }
 bytemuck = { version = "1", features = ["derive"] }
 
 wp_core = { path = "crates/wp_core" }
@@ -32,6 +33,7 @@ wp_vehicle = { path = "crates/wp_vehicle" }
 wp_world = { path = "crates/wp_world" }
 wp_traffic = { path = "crates/wp_traffic" }
 wp_mission = { path = "crates/wp_mission" }
+wp_script = { path = "crates/wp_script" }
 wp_road = { path = "crates/wp_road" }
 wp_test = { path = "crates/wp_test" }
 waypoint = { path = "crates/waypoint" }

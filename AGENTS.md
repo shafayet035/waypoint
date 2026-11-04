@@ -46,6 +46,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
 | `wp_world` | `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
 | `wp_traffic` | AI traffic: routes, lane following, IDM car-following, junction claims; shared path controllers |
+| `wp_script` | Luau mission scripts: sandbox, hooks, `mission` API, deterministic random |
 | `wp_mission` | Missions: bus stops on routes, timetable, passengers, score; `MissionPlugin` |
 | `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
@@ -137,7 +138,11 @@ Missions (`wp_mission`, gameplay layer): road files have bus `stops`; `missions/
 stops with a timetable, passengers board/alight while the doors are open, and a score (punctuality,
 comfort ≤ 0.3 g, safety). `wp run --mission route_1` to play; the `Autopilot` driver lets the traffic AI
 drive a scenario's mission (`wp_traffic::autopilot` waypoints, held until released). M3 gate `bus_route`:
-two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 85, no collisions. `town_traffic` gate: 12
+two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 85, no collisions.
+Mission scripts (`wp_script`): Luau via mlua (vendored C++; the Android build sets
+CXX_aarch64_linux_android), sandboxed, no `os`/clock, `math.random` seeded. Hooks on_start/on_tick/
+on_arrive/on_depart/on_complete/on_fail; `mission.*` API queues commands. `wp check` compiles scripts
+(WP-L001 with the line); `wp docs scripting`. route_1.lua adds a school group on lap two. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

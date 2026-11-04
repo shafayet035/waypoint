@@ -1,0 +1,13 @@
+[package]
+name = "wp_script"
+description = "Lua (Luau) scripting: sandboxed, deterministic mission scripts with hooks and a small API."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+mlua.workspace = true
+
+[lints]
+workspace = true
