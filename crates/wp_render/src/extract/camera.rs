@@ -129,3 +129,59 @@ impl CameraMode {
         }
     }
 }
+
+/// Chase-camera smoothing for interactive windows. The camera's heading
+/// trails the vehicle's, so steering corrections and the car's own yaw do not
+/// swing the whole view each frame. Lives with the window, never in the
+/// simulation; headless shots use the vehicle's exact heading.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ChaseSmoothing {
+    heading: Option<f32>,
+}
+
+impl ChaseSmoothing {
+    /// Time constant of the trailing, seconds.
+    const LAG_S: f32 = 0.25;
+
+    /// Advance by `dt` seconds towards `target` heading (rad); the heading to draw with.
+    pub fn update(&mut self, target: f32, dt: f32) -> f32 {
+        let h = match self.heading {
+            None => target,
+            Some(h) => {
+                let diff = (target - h + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                h + diff * (1.0 - (-dt / Self::LAG_S).exp())
+            }
+        };
+        self.heading = Some(h);
+        h
+    }
+
+    /// Forget the past (after a reset or teleport).
+    pub fn snap(&mut self) {
+        self.heading = None;
+    }
+}
+
+#[cfg(test)]
+mod smoothing_tests {
+    use super::ChaseSmoothing;
+
+    #[test]
+    fn trails_then_settles_and_wraps_the_short_way() {
+        let mut s = ChaseSmoothing::default();
+        assert_eq!(s.update(0.0, 0.016), 0.0);
+        let first = s.update(1.0, 0.016);
+        assert!(first > 0.0 && first < 0.2, "trails: {first}");
+        let mut h = first;
+        for _ in 0..200 {
+            h = s.update(1.0, 0.016);
+        }
+        assert!((h - 1.0).abs() < 1e-3, "settles: {h}");
+        // From just under +π to just over −π is a small turn, not a full spin.
+        let mut w = ChaseSmoothing::default();
+        w.update(3.1, 0.016);
+        let next = w.update(-3.1, 0.016);
+        assert!(next > 3.1, "goes the short way: {next}");
+    }
+}

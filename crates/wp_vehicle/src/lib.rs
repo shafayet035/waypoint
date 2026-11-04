@@ -7,6 +7,7 @@
 //! with optional ABS), tyre slip and forces, and adds the resulting force and
 //! yaw moment to the rigid body. Notable moments are sent as [`VehicleEvent`]s.
 
+pub mod assist;
 pub mod def;
 pub mod dynamics;
 pub mod parts;
@@ -19,6 +20,7 @@ use wp_app::{App, Plugin};
 use wp_ecs::{Component, Entity, Stage, World};
 use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 
+pub use assist::{Controls, DriverAids, steer_limit};
 pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
@@ -332,7 +334,7 @@ pub fn set_rolling_speed(world: &mut World, e: Entity, speed: f32) {
 }
 
 /// A snapshot of what a driver or test cares about.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Telemetry {
     pub speed_kmh: f32,
     /// Signed speed along the vehicle's heading, km/h.
@@ -342,6 +344,9 @@ pub struct Telemetry {
     /// Longitudinal acceleration in g, positive forward.
     pub longitudinal_g: f32,
     pub yaw_rate_deg_s: f32,
+    /// Angle between where the vehicle points and where it travels, degrees
+    /// (+ sliding to the left); 0 below 10 km/h. Large values mean a slide or spin.
+    pub sideslip_deg: f32,
     pub gear: u8,
     pub engine_rpm: f32,
     pub steer_deg: f32,
@@ -360,6 +365,20 @@ pub struct Telemetry {
     pub wheel_loads_n: [f32; 4],
 }
 
+/// Sideslip angle, rad: from the heading to the velocity, + left; 0 when slow.
+fn sideslip(forward: glam::Vec2, velocity: glam::Vec2) -> f32 {
+    if velocity.length() < 10.0 / 3.6 {
+        return 0.0;
+    }
+    // Measured against the direction of travel along the body, so reversing is not a slide.
+    let along = if velocity.dot(forward) < 0.0 {
+        -forward
+    } else {
+        forward
+    };
+    along.angle_to(velocity)
+}
+
 pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
     let pose = *world.get::<Pose>(e)?;
     let vel = *world.get::<Velocity>(e)?;
@@ -371,6 +390,7 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         lateral_g: veh.accel_local.y / g,
         longitudinal_g: veh.accel_local.x / g,
         yaw_rate_deg_s: vel.angular.to_degrees(),
+        sideslip_deg: sideslip(pose.forward(), vel.linear).to_degrees(),
         gear: veh.gear,
         engine_rpm: veh.engine_rpm,
         steer_deg: veh.steer_angle.to_degrees(),

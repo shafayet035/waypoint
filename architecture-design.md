@@ -138,6 +138,52 @@ One renderer serves three mobile quality tiers. Flagship phones get the richest 
 | Mid | Mainstream phones from the last three years, 6–8 GB RAM | 60 fps, upscaled from about 720p | Baked GI, screen-space reflections, cascaded shadows | LODs with GPU culling | Medium |
 | Flagship | Current flagships with hardware ray tracing, 8 GB+ RAM | 60 fps, upscaled from about 900p | Dynamic probes, volumetrics, optional ray-traced shadows and reflections | Full detail with GPU culling | Large |
 
+## Art and assets: photoreal on phones
+
+Every tier aims for a photoreal look; lower tiers drop detail, never the art style. A Low-tier phone shows the same city with fewer triangles, smaller textures and simpler lighting. Most of the realism comes from content: measured materials, baked light and correct exposure, not costly effects.
+
+**Look.** All materials use the glTF metal-roughness PBR model, with values taken from measured references for asphalt, concrete, paint, glass and rubber. Base colours stay within about 30–240 in sRGB, so nothing is unnaturally dark or bright. Light is set in physical units: about 100,000 lux for direct sun and 10,000 for overcast. Reference photos of real streets, Dhaka first, set the colour grade and are what image tests compare against.
+
+**Pipeline.** Artists model in Blender and export glTF 2.0 (`.glb`) into `assets/`. `wp asset build` turns each file into a packed, tier-ready asset; nobody edits its output by hand.
+
+1. Check: metres, pivot on the ground, every texture present, budgets met. Problems are coded errors, like the rest of `wp check`.
+2. Meshes: an LOD chain built with meshoptimizer, each level about half the triangles of the last. Vertex data is quantised, and distant props and buildings get an impostor.
+3. Textures: compressed to KTX2 with Basis Universal, with full mip chains. UASTC is used for normal maps and hero textures, ETC1S for the rest. The phone transcodes to ASTC, or to ETC2 where ASTC is missing.
+4. Lighting: lightmaps and probes for each world tile are baked on the desktop during the build.
+5. Packaging: one variant per tier, delivered with Play Asset Delivery on Android and On-Demand Resources on iOS. A Low-tier phone never downloads 4K textures.
+
+**Budgets.** Starting values, checked per asset by `wp check`; profiling on real phones in M3 sets the final numbers.
+
+| Budget | Low | Mid | Flagship |
+| --- | --- | --- | --- |
+| Player vehicle, nearest LOD (triangles) | 40k | 80k | 150k, with interior |
+| Traffic vehicle, nearest LOD (triangles) | 8k | 15k | 30k |
+| Triangles on screen | 400k | 1M | 2.5M |
+| Draw calls per frame | 300 | 600 | 1,200 |
+| Largest texture (px) | 1024 | 2048 | 4096, player vehicle and landmarks only |
+| Texture memory | 300 MB | 700 MB | 1.5 GB |
+| Props switch to impostors at | 50 m | 100 m | 200 m |
+
+**Where the realism comes from.**
+
+- **Vehicles:** modelled to the dimensions in their `.vehicle.ron`, with clearcoat paint, real glass, detailed tyre sidewalls and lamp lenses. The player vehicle gets a full interior for the cab camera.
+- **Roads:** the engine builds road meshes from the lane graph. Artists supply materials and decals instead: asphalt with large-scale variation, patches, cracks and worn markings.
+- **Buildings:** imported cities are generated from OpenStreetMap footprints and height tags, using modular facade kits per region. For Dhaka that means concrete, tiles, balconies, shop signs and AC units. Pieces are instanced, so blocks stay cheap; landmarks are modelled by hand.
+- **Vegetation and props:** instanced, switching to impostors at the distances in the table.
+
+**Sources and licences.** Every asset has a `.asset.ron` file next to it naming its source, author, licence and required credit. `wp check` rejects an asset without one, and the build writes the game's credits screen. Allowed sources:
+
+- our own Blender work;
+- CC0 libraries such as Poly Haven and ambientCG;
+- bought packs whose licence allows redistribution in mobile games;
+- AI-generated models, for background props only, after cleanup. Generation can cost credits, so it is opt-in per asset.
+
+Map data keeps its OpenStreetMap (ODbL) credit.
+
+**How agents check the look.** Pixels are tested like physics. Fixed-camera scenarios render with `wp shot` at every tier preset and are compared with approved golden images. The comparison is perceptual, since GPUs differ slightly. The M4 image tests also compare exposure and colour with the reference photos. An agent can model a prop through the Blender MCP server, build it, screenshot it in a scene and fix it without a person.
+
+**When.** The asset pipeline (glTF loader, `wp asset build`, budgets) lands in M3, whose gate runs a real city on a Low-tier phone. Flagship art (interiors, 4K hero textures) follows in M4, and the 1.0 asset pack ships in M6. Until M3, vehicles are procedural boxes.
+
 ## Physics engine
 
 Realism lives here. The player's vehicle runs at 480 Hz with detailed tyre, suspension and drivetrain models, and that fidelity is the same on every tier. Only crash-deformation detail and background work (traffic count, distant vehicles, debris) scale down on older phones.

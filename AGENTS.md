@@ -102,5 +102,10 @@ geometrically with 6 m kerb returns. `wp import osm` turns OpenStreetMap data in
 and scene (clipped to the export bounds, one-way carriageways centred, left/right traffic); on a
 real Dhaka export, routes to 127 of 145 roads drive within 0.8 m of the lane centre (the rest are dead
 ends at the map edge). Still to do in M2: OpenDRIVE import; lane-drop tapers.
+Driver aids (`wp_vehicle::assist`) sit between keys or thumbs and the car: brakes bite at 12 % and
+build to full in about 0.9 s, steering lock shrinks with speed (about 10° at 60 km/h), and counter-steer
+catches slides past 4° of sideslip. The window's input and the `Keyboard` scenario driver both use them;
+`keyboard_slalom` (no spin at 100 km/h) and `keyboard_brake_tap` guard the feel. The chase camera trails
+the car's heading (0.25 s) in windows only; `wp shot` stays rigid.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
 ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.

@@ -38,6 +38,10 @@ pub struct Metrics {
     pub final_speed_kmh: f32,
     pub distance_m: f32,
     pub max_lateral_g: f32,
+    /// Largest |sideslip angle|, degrees (above 10 km/h).
+    pub max_sideslip_deg: f32,
+    /// Peak deceleration, g.
+    pub max_decel_g: f32,
     /// Mean |lateral g| over the second half of the run.
     pub steady_lateral_g: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,6 +86,8 @@ struct Sample {
     t: f32,
     speed_kmh: f32,
     lateral_g: f32,
+    longitudinal_g: f32,
+    sideslip_deg: f32,
     brake: f32,
     steer: f32,
     distance_m: f32,
@@ -266,6 +272,8 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
             t,
             speed_kmh: tel.speed_kmh,
             lateral_g: tel.lateral_g,
+            longitudinal_g: tel.longitudinal_g,
+            sideslip_deg: tel.sideslip_deg,
             brake: input_now.brake,
             steer: input_now.steer,
             distance_m: distance,
@@ -290,6 +298,14 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         max_lateral_g: samples
             .iter()
             .map(|s| s.lateral_g.abs())
+            .fold(0.0, f32::max),
+        max_sideslip_deg: samples
+            .iter()
+            .map(|s| s.sideslip_deg.abs())
+            .fold(0.0, f32::max),
+        max_decel_g: samples
+            .iter()
+            .map(|s| -s.longitudinal_g)
             .fold(0.0, f32::max),
         steady_lateral_g: steady_lateral_g(&samples),
         time_to_50_kmh_s: first_reach(50.0),
@@ -484,6 +500,14 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
         Assertion::MaxLateralG(g) => (
             m.max_lateral_g <= *g,
             format!("peak {:.3} g", m.max_lateral_g),
+        ),
+        Assertion::MaxSideslipDeg(d) => (
+            m.max_sideslip_deg <= *d,
+            format!("peak sideslip {:.1}°", m.max_sideslip_deg),
+        ),
+        Assertion::MaxDecelG(g) => (
+            m.max_decel_g <= *g,
+            format!("peak deceleration {:.2} g", m.max_decel_g),
         ),
         Assertion::SteadyLateralG { min, max } => {
             if samples.is_empty() {

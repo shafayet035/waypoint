@@ -15,7 +15,7 @@
     stiffness_per_load: 16.0,
     relaxation_length_m: 0.35,
     rolling_resistance: 0.012,
-    sliding_friction_ratio: 0.75,
+    sliding_friction_ratio: 0.85,
   ),
   engine: (
     idle_rpm: 850.0,
@@ -36,7 +36,7 @@
   suspension: (
     roll_gradient_deg_per_g: 4.5,
     pitch_gradient_deg_per_g: 2.5,
-    damping_ratio: 0.35,
+    damping_ratio: 0.6,
     roll_center_height_m: 0.12,
     front_roll_share: 0.6,
   ),

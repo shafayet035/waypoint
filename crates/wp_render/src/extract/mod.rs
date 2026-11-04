@@ -6,7 +6,7 @@ mod dock;
 mod trailer;
 mod vehicle;
 
-pub use camera::{Camera, CameraMode, Environment};
+pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
 use trailer::trailer_items;
 pub use vehicle::{BodyShape, body_shape};
@@ -71,6 +71,13 @@ pub fn focus_entity(world: &World) -> Option<Entity> {
 
 /// Snapshot the world for drawing.
 pub fn extract(world: &World, mode: CameraMode) -> FrameView {
+    extract_with(world, mode, None)
+}
+
+/// Like [`extract`], but the chase camera looks along `chase_heading` (rad)
+/// instead of the vehicle's exact heading: a window smooths it over frames
+/// (see [`ChaseSmoothing`]) so the view trails small yaw motions.
+pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>) -> FrameView {
     let mut items = Vec::new();
     let mut shadows = Vec::new();
     let library = world.get_resource::<VehicleLibrary>();
@@ -105,7 +112,10 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
         });
 
     let camera = match focus_entity(world).and_then(|e| world.get::<Pose>(e).map(|p| (e, *p))) {
-        Some((e, pose)) => {
+        Some((e, mut pose)) => {
+            if let (CameraMode::Chase, Some(h)) = (mode, chase_heading) {
+                pose.heading = h;
+            }
             let len = world
                 .get::<Vehicle>(e)
                 .and_then(|v| {

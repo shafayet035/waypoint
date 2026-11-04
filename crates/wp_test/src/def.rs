@@ -39,6 +39,10 @@ pub struct PlayerDef {
 pub enum Driver {
     /// Timed inputs. Each key holds until the next one.
     Script(Vec<InputKey>),
+    /// Timed key presses, driven through the same driver aids as a player's
+    /// keyboard (progressive brakes, speed-sensitive steering, brake to
+    /// reverse). Use it to test how the game feels; `reverse` is ignored.
+    Keyboard(Vec<InputKey>),
     /// Hold a speed with a speed controller and a fixed steering input.
     Cruise {
         kmh: f32,
@@ -118,6 +122,11 @@ pub enum Assertion {
     MaxSpeed(f32),
     /// Peak lateral acceleration never exceeds this, in g (passenger comfort).
     MaxLateralG(f32),
+    /// The sideslip angle (between heading and direction of travel, above
+    /// 10 km/h) never exceeds this, degrees. A spin or big slide breaks it.
+    MaxSideslipDeg(f32),
+    /// Peak deceleration never exceeds this, in g (a brake tap should not be an emergency stop).
+    MaxDecelG(f32),
     /// Mean lateral acceleration over the second half of the run lies in [min, max], in g.
     SteadyLateralG { min: f32, max: f32 },
     /// No NaN or infinite values appear in the vehicle state.
@@ -151,6 +160,8 @@ impl Assertion {
             Self::StoppedBy { s } => format!("StoppedBy({s} s)"),
             Self::MaxSpeed(k) => format!("MaxSpeed({k} km/h)"),
             Self::MaxLateralG(g) => format!("MaxLateralG({g} g)"),
+            Self::MaxSideslipDeg(d) => format!("MaxSideslipDeg({d}°)"),
+            Self::MaxDecelG(g) => format!("MaxDecelG({g} g)"),
             Self::SteadyLateralG { min, max } => format!("SteadyLateralG({min}–{max} g)"),
             Self::Mfdd { min_mps2 } => format!("Mfdd(≥ {min_mps2} m/s²)"),
             Self::TurningCircle { max_m } => format!("TurningCircle(≤ {max_m} m)"),
@@ -206,7 +217,7 @@ impl ScenarioDef {
                 );
             }
         }
-        if let Driver::Script(keys) = &s.player.driver {
+        if let Driver::Script(keys) | Driver::Keyboard(keys) = &s.player.driver {
             if keys.windows(2).any(|w| w[1].at_s < w[0].at_s) {
                 out.push(
                     file.error_at("WP-S014", "at_s", "script keys must be in time order")

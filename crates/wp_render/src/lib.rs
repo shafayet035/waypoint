@@ -13,7 +13,8 @@ pub mod extract;
 pub mod mesh;
 
 pub use extract::{
-    BlobShadow, Camera, CameraMode, DrawItem, Environment, FrameView, MeshId, extract,
+    BlobShadow, Camera, CameraMode, ChaseSmoothing, DrawItem, Environment, FrameView, MeshId,
+    extract, extract_with,
 };
 
 use bytemuck::{Pod, Zeroable};

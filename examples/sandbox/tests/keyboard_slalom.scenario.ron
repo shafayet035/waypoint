@@ -1,0 +1,27 @@
+// Driver aids: flicking A/D at 100 km/h must not spin the car. The keys go
+// through the same aids as the player's keyboard (speed-sensitive steering,
+// counter-steer). Without them this run ends sideways (75° of sideslip).
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "start",
+    initial_kmh: 100.0,
+    driver: Keyboard([
+      (at_s: 0.0, throttle: 0.5),
+      (at_s: 1.0, throttle: 0.5, steer: 1.0),
+      (at_s: 2.2, throttle: 0.5, steer: -1.0),
+      (at_s: 3.4, throttle: 0.5, steer: 1.0),
+      (at_s: 4.6, throttle: 0.5, steer: -1.0),
+      (at_s: 5.8, throttle: 0.5),
+    ]),
+  ),
+  duration_s: 9.0,
+  assert: [
+    MaxSideslipDeg(9.0),   // at the grip limit, not sliding
+    NoEvent("WheelLift"),
+    NoNaN,
+    Deterministic,
+  ],
+)

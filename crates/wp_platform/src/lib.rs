@@ -21,9 +21,9 @@ use wp_control::{Session, tcp::Pending};
 use wp_core::Diagnostic;
 use wp_ecs::Entity;
 use wp_physics::{Pose, Velocity};
-use wp_render::{CameraMode, Renderer, extract};
+use wp_render::{CameraMode, ChaseSmoothing, Renderer, extract_with};
 use wp_rhi::{Gpu, GpuInfo, wgpu};
-use wp_vehicle::{Vehicle, VehicleInput};
+use wp_vehicle::{Controls, DriverAids, Vehicle, VehicleInput, VehicleLibrary};
 
 pub struct WindowOptions {
     pub title: String,
@@ -96,6 +96,8 @@ fn run_with_event_loop(
         keys: Keys::default(),
         touch: Touches::default(),
         input: VehicleInput::default(),
+        aids: DriverAids::default(),
+        chase: ChaseSmoothing::default(),
         started: Instant::now(),
         last: Instant::now(),
         accumulator: 0.0,
@@ -199,7 +201,10 @@ struct Handler {
     keys: Keys,
     touch: Touches,
     input: VehicleInput,
+    /// Progressive brakes, speed-sensitive steering, counter-steer.
+    aids: DriverAids,
     camera: CameraMode,
+    chase: ChaseSmoothing,
     started: Instant,
     last: Instant,
     accumulator: f64,
@@ -272,46 +277,35 @@ impl Handler {
         w.insert(e, vehicle);
         w.insert(e, VehicleInput::default());
         self.input = VehicleInput::default();
+        self.aids = DriverAids::default();
+        self.chase.snap();
     }
 
     /// Smooth digital keys into analogue controls, like a pad trigger.
     fn update_input(&mut self, dt: f32) {
-        let approach =
-            |v: f32, target: f32, rate: f32| v + (target - v).clamp(-rate * dt, rate * dt);
         let k = &self.keys;
         let (touch_throttle, touch_brake, touch_steer) = self.touch.targets();
-        let accelerate = if k.throttle { 1.0 } else { touch_throttle };
-        let slow = if k.brake { 1.0 } else { touch_brake };
-        // Driving-game convention: holding "brake" at a standstill engages
-        // reverse and backs up; "accelerate" then brakes until stopped, after
-        // which it selects drive again.
-        let forward_kmh = self
-            .session
-            .player
-            .and_then(|e| wp_vehicle::telemetry(&self.session.app.world, e))
-            .map(|t| t.forward_kmh)
-            .unwrap_or(0.0);
-        if slow > 0.5 && accelerate < 0.5 && forward_kmh < 1.0 {
-            self.input.reverse = true;
-        } else if accelerate > 0.5 && slow < 0.5 && forward_kmh > -1.0 {
-            self.input.reverse = false;
-        }
-        let (throttle, brake) = if self.input.reverse {
-            (slow, accelerate)
-        } else {
-            (accelerate, slow)
+        let key_steer = match (k.left, k.right) {
+            (true, false) => Some(1.0),
+            (false, true) => Some(-1.0),
+            _ => None,
         };
-        self.input.throttle = approach(self.input.throttle, throttle, 3.0);
-        self.input.brake = approach(self.input.brake, brake, 5.0);
-        let (steer_target, rate) = match (k.left, k.right, touch_steer) {
-            (true, false, _) => (1.0, 1.8),
-            (false, true, _) => (-1.0, 1.8),
+        let controls = Controls {
+            accelerate: if k.throttle { 1.0 } else { touch_throttle },
+            brake: if k.brake { 1.0 } else { touch_brake },
+            steer: key_steer.or(touch_steer).unwrap_or(0.0),
             // A thumb gives an analogue position: follow it quickly.
-            (_, _, Some(t)) => (t, 6.0),
-            // Steering returns to centre faster than it winds on.
-            _ => (0.0, 3.5),
+            analog_steer: key_steer.is_none() && touch_steer.is_some(),
         };
-        self.input.steer = approach(self.input.steer, steer_target, rate);
+        let w = &self.session.app.world;
+        let Some(e) = self.session.player else { return };
+        let def = w.get::<Vehicle>(e).and_then(|v| {
+            w.get_resource::<VehicleLibrary>()
+                .and_then(|l| l.0.get(&v.model).cloned())
+        });
+        if let (Some(def), Some(motion)) = (def, wp_vehicle::telemetry(w, e)) {
+            self.input = self.aids.update(controls, &motion, &def, dt);
+        }
     }
 
     /// Answer every waiting control request before this frame's ticks.
@@ -353,7 +347,12 @@ impl Handler {
             }
         }
 
-        let frame = extract(&self.session.app.world, self.camera);
+        let heading = self
+            .session
+            .player
+            .and_then(|e| self.session.app.world.get::<Pose>(e))
+            .map(|p| self.chase.update(p.heading, real_dt as f32));
+        let frame = extract_with(&self.session.app.world, self.camera, heading);
         let Some(gfx) = self.gfx.as_mut() else { return };
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)

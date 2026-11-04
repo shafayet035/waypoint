@@ -36,6 +36,8 @@ pub struct DriverState {
     phase: DockPhase,
     pull_ups: u32,
     route: Option<RouteProgress>,
+    /// Driver aids for `Keyboard`.
+    aids: wp_vehicle::DriverAids,
 }
 
 /// The docking manoeuvre's state.
@@ -64,6 +66,7 @@ impl DriverState {
             phase: DockPhase::Reversing,
             pull_ups: 0,
             route: None,
+            aids: wp_vehicle::DriverAids::default(),
         }
     }
 
@@ -72,6 +75,26 @@ impl DriverState {
             .map(|t| t.forward_kmh)
             .unwrap_or(0.0);
         match self.driver.clone() {
+            Driver::Keyboard(keys) => {
+                let key = keys.iter().rev().find(|k| k.at_s <= t).cloned();
+                let controls = key
+                    .map(|k| wp_vehicle::Controls {
+                        accelerate: k.throttle,
+                        brake: k.brake,
+                        steer: k.steer,
+                        analog_steer: false,
+                    })
+                    .unwrap_or_default();
+                let def = world.get::<Vehicle>(player).and_then(|v| {
+                    world
+                        .get_resource::<VehicleLibrary>()
+                        .and_then(|l| l.0.get(&v.model).cloned())
+                });
+                match (def, wp_vehicle::telemetry(world, player)) {
+                    (Some(def), Some(motion)) => self.aids.update(controls, &motion, &def, dt),
+                    _ => VehicleInput::default(),
+                }
+            }
             Driver::Script(keys) => keys
                 .iter()
                 .rev()
