@@ -1,0 +1,20 @@
+// Crash physics: a car accelerates flat out into a parked bus lying across
+// the road. Bodies collide (impulses, no passing through): the car stops
+// against the bus's side, 1.3 m from its centreline (half the bus's width)
+// plus the car's front, and the 15-tonne bus barely moves.
+(
+  scene: "scenes/crash.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "run_up",
+    driver: Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0)]),
+  ),
+  duration_s: 14.0,
+  assert: [
+    ExpectEvent("Collision"),
+    FinalPositionWithin(min: (70.0, -3.0), max: (78.6, 3.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

@@ -290,8 +290,7 @@ impl Plugin for VehiclePlugin {
             .writes_resource("Events<VehicleEvent>");
         app.add_system(Stage::Post, "detect_collisions", detect_collisions)
             .reads::<Pose>()
-            .reads::<Vehicle>()
-            .reads_resource("VehicleLibrary")
+            .reads::<wp_physics::Collider>()
             .writes_resource("Contacts")
             .writes_resource("Events<VehicleEvent>");
     }
@@ -312,7 +311,18 @@ pub fn spawn_vehicle(world: &mut World, def: &VehicleDef, position: Vec2, headin
     world.insert(e, RigidBody::new(def.mass_kg, def.yaw_inertia_kgm2));
     world.insert(e, Vehicle::new(def));
     world.insert(e, VehicleInput::default());
+    world.insert(e, vehicle_collider(def));
     e
+}
+
+/// The physics box for a vehicle's body.
+pub fn vehicle_collider(def: &VehicleDef) -> wp_physics::Collider {
+    let fp = vehicle_footprint(def);
+    wp_physics::Collider {
+        front: fp.front,
+        rear: fp.rear,
+        half_width: fp.width / 2.0,
+    }
 }
 
 /// Set a vehicle rolling straight ahead at `speed` m/s, wheels turning to

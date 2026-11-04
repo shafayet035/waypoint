@@ -220,6 +220,19 @@ impl Project {
             }
         }
         for scene in self.scenes.values() {
+            for p in &scene.value.parked {
+                if !self.vehicles.contains_key(&p.vehicle) {
+                    out.push(
+                        scene
+                            .error_at(
+                                "WP-W008",
+                                "parked",
+                                format!("parked vehicle `{}` does not exist", p.vehicle),
+                            )
+                            .help(format!("known vehicles: {}", list(self.vehicles.keys()))),
+                    );
+                }
+            }
             let Some(traffic) = &scene.value.traffic else {
                 continue;
             };
@@ -384,21 +397,24 @@ impl Project {
             name,
             scenario: s,
             roads: self.scene_roads(scene),
-            traffic: self.scene_traffic(scene)?,
+            traffic: self.scene_vehicles(scene)?,
             scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,
         })
     }
 
-    /// The vehicles a scene's traffic may use (empty without traffic).
+    /// The vehicles a scene uses for traffic and parked vehicles, once each.
     /// `None` if one is missing (`wp check` reports it).
-    pub fn scene_traffic(&self, scene: &SceneDef) -> Option<Vec<&wp_vehicle::VehicleDef>> {
-        let Some(t) = &scene.traffic else {
-            return Some(Vec::new());
-        };
-        t.vehicles
-            .iter()
+    pub fn scene_vehicles(&self, scene: &SceneDef) -> Option<Vec<&wp_vehicle::VehicleDef>> {
+        let mut names: Vec<&String> = scene.parked.iter().map(|p| &p.vehicle).collect();
+        if let Some(t) = &scene.traffic {
+            names.extend(&t.vehicles);
+        }
+        names.sort();
+        names.dedup();
+        names
+            .into_iter()
             .map(|v| self.vehicles.get(v).map(|l| &l.value))
             .collect()
     }

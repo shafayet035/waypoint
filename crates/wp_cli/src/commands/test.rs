@@ -214,6 +214,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
         docks: vec![],
         roads: None,
         traffic: None,
+        parked: vec![],
     };
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut results = Vec::new();

@@ -1,0 +1,11 @@
+// A city bus parked across the road (brakes on), for crash tests.
+(
+  name: "crash",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  spawns: [
+    (name: "run_up", position: (0.0, 0.0), heading_deg: 0.0),
+  ],
+  parked: [
+    (vehicle: "city_bus", position: (80.0, 0.0), heading_deg: 90.0),
+  ],
+)

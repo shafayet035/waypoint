@@ -177,7 +177,12 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-W007",
         title: "A scene has traffic but no road network",
         fix: "Traffic drives on roads: add `roads: Some(\"roads/<name>.road.ron\")` to the scene, or remove `traffic`.",
+    },    ErrorDoc {
+        code: "WP-W008",
+        title: "A scene parks a vehicle that does not exist",
+        fix: "Use a vehicle name that has a vehicles/<name>.vehicle.ron file.",
     },
+
     ErrorDoc {
         code: "WP-P001",
         title: "A window could not be opened",

@@ -63,10 +63,11 @@ pub struct TrafficSetup {
     pub def: TrafficDef,
 }
 
-/// Put traffic in a world whose scene has been applied: the vehicles it may
-/// use are added to the vehicle library, and the plugin spawns them on the
+/// Put a scene's parked vehicles and traffic in a world whose scene has been
+/// applied: the vehicles they use are added to the vehicle library, parked
+/// vehicles are placed now (brakes on), and the plugin spawns traffic on the
 /// first tick.
-pub fn setup(world: &mut World, def: &TrafficDef, vehicles: &[&VehicleDef]) {
+pub fn setup(world: &mut World, scene: &wp_world::SceneDef, vehicles: &[&VehicleDef]) {
     if !world.has_resource::<VehicleLibrary>() {
         world.insert_resource(VehicleLibrary::default());
     }
@@ -76,7 +77,28 @@ pub fn setup(world: &mut World, def: &TrafficDef, vehicles: &[&VehicleDef]) {
             .0
             .insert(v.name.clone(), (*v).clone());
     }
-    world.insert_resource(TrafficSetup { def: def.clone() });
+    for p in &scene.parked {
+        let def = world
+            .resource::<VehicleLibrary>()
+            .0
+            .get(&p.vehicle)
+            .cloned();
+        if let Some(def) = def {
+            let at = Vec2::new(p.position.0, p.position.1);
+            let e = wp_vehicle::spawn_vehicle(world, &def, at, p.heading_deg.to_radians());
+            world.insert(e, wp_world::Name(format!("parked {}", p.vehicle)));
+            world.insert(
+                e,
+                VehicleInput {
+                    brake: 1.0,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    if let Some(def) = &scene.traffic {
+        world.insert_resource(TrafficSetup { def: def.clone() });
+    }
 }
 
 pub struct TrafficPlugin;
@@ -850,6 +872,7 @@ fn spawn_one(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
             world.insert(e, Velocity::default());
             // It may come back as a different model: its body too.
             world.insert(e, RigidBody::new(def.mass_kg, def.yaw_inertia_kgm2));
+            world.insert(e, wp_vehicle::vehicle_collider(&def));
             world.insert(e, Vehicle::new(&def));
             world.insert(e, VehicleInput::default());
             e

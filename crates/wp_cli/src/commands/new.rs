@@ -94,6 +94,14 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../../examples/sandbox/tests/town_traffic.scenario.ron"),
     ),
     (
+        "scenes/crash.scene.ron",
+        include_str!("../../../../examples/sandbox/scenes/crash.scene.ron"),
+    ),
+    (
+        "tests/crash_into_bus.scenario.ron",
+        include_str!("../../../../examples/sandbox/tests/crash_into_bus.scenario.ron"),
+    ),
+    (
         "tests/keyboard_slalom.scenario.ron",
         include_str!("../../../../examples/sandbox/tests/keyboard_slalom.scenario.ron"),
     ),

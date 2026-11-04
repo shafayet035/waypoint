@@ -20,7 +20,7 @@ pub struct ScenarioInput<'a> {
     pub roads: Option<&'a wp_road::RoadNetworkDef>,
     /// Semi-trailer to couple to the player, if the scenario names one.
     pub trailer: Option<&'a wp_vehicle::TrailerDef>,
-    /// Vehicles the scene's traffic may use (empty without traffic).
+    /// Vehicles the scene uses for traffic and parked vehicles.
     pub traffic: Vec<&'a VehicleDef>,
 }
 
@@ -174,9 +174,7 @@ pub fn prepare(
     app.world
         .insert_reflected_resource("SimRng", SimRng::new(s.seed));
     wp_world::apply_scene(&mut app.world, input.scene, input.roads);
-    if let Some(t) = &input.scene.traffic {
-        wp_traffic::setup(&mut app.world, t, &input.traffic);
-    }
+    wp_traffic::setup(&mut app.world, input.scene, &input.traffic);
     let (pos, heading) = wp_world::spawn_transform(spawn);
     let player = wp_vehicle::spawn_vehicle(&mut app.world, input.vehicle, pos, heading);
     if s.player.initial_kmh > 0.0 {
@@ -609,6 +607,13 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
             ),
             None => (false, "the scene has no traffic".into()),
         },
+        Assertion::FinalPositionWithin { min, max } => {
+            let [x, y] = m.final_position;
+            (
+                x >= min.0 && x <= max.0 && y >= min.1 && y <= max.1,
+                format!("ended at ({x:.2}, {y:.2})"),
+            )
+        }
         Assertion::NoCollisions => (
             m.collisions == 0,
             format!("{} collisions between vehicles", m.collisions),

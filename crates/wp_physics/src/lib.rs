@@ -7,6 +7,9 @@
 //! Coordinates: `x` east, `y` north, metres. Heading is radians,
 //! counter-clockwise from +x. Body frame: `x` forward, `y` left.
 
+pub mod contact;
+
+pub use contact::{Collider, Contact, box_contact, solve_contacts};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use wp_app::{App, Plugin};
@@ -129,6 +132,7 @@ impl Plugin for PhysicsPlugin {
         let ground = w.remove_resource::<Ground>().unwrap_or_default();
         w.insert_reflected_resource("Ground", ground);
         w.register::<PinJoint>();
+        w.register::<Collider>();
         // Force producers (vehicles, trailers) run before "integrate_velocities".
         app.add_system(Stage::Physics, "integrate_velocities", integrate_velocities)
             .reads::<RigidBody>()
@@ -139,8 +143,14 @@ impl Plugin for PhysicsPlugin {
             .reads::<Pose>()
             .reads::<RigidBody>()
             .writes::<Velocity>();
-        app.add_system(Stage::Physics, "integrate_bodies", integrate_bodies)
+        app.add_system(Stage::Physics, "solve_contacts", solve_contacts)
             .after("solve_joints")
+            .reads::<Collider>()
+            .reads::<RigidBody>()
+            .writes::<Velocity>()
+            .writes::<Pose>();
+        app.add_system(Stage::Physics, "integrate_bodies", integrate_bodies)
+            .after("solve_contacts")
             .writes::<Pose>()
             .writes::<RigidBody>();
     }
@@ -192,11 +202,11 @@ const JOINT_ITERATIONS: usize = 8;
 /// Share of position drift corrected per substep (Baumgarte stabilisation).
 const JOINT_BAUMGARTE: f32 = 0.2;
 
-fn cross_sv(w: f32, r: Vec2) -> Vec2 {
+pub(crate) fn cross_sv(w: f32, r: Vec2) -> Vec2 {
     Vec2::new(-w * r.y, w * r.x)
 }
 
-fn cross_vv(a: Vec2, b: Vec2) -> f32 {
+pub(crate) fn cross_vv(a: Vec2, b: Vec2) -> f32 {
     a.x * b.y - a.y * b.x
 }
 

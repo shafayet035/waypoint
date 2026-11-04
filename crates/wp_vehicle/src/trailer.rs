@@ -225,6 +225,15 @@ pub fn spawn_trailer(world: &mut World, def: &TrailerDef, tractor: Entity) -> Op
         },
     );
     world.insert(e, RigidBody::new(def.mass_kg, def.yaw_inertia_kgm2));
+    let front = def.cg_behind_kingpin_m + def.body.kingpin_from_front_m;
+    world.insert(
+        e,
+        wp_physics::Collider {
+            front,
+            rear: front - def.body.length_m,
+            half_width: def.body.width_m / 2.0,
+        },
+    );
     let speed = tvel.linear.length();
     let wheels = (0..def.axles_behind_kingpin_m.len() * 2)
         .map(|_| WheelState {

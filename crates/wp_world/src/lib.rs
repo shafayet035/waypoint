@@ -28,6 +28,22 @@ pub struct SceneDef {
     /// AI traffic on the road network.
     #[serde(default)]
     pub traffic: Option<TrafficDef>,
+    /// Vehicles standing still in the scene, brakes on (obstacles, set dressing).
+    #[serde(default)]
+    pub parked: Vec<ParkedDef>,
+}
+
+/// A vehicle parked in a scene.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParkedDef {
+    /// Vehicle name (`vehicles/<name>.vehicle.ron`).
+    pub vehicle: String,
+    /// Centre of mass, m (x east, y north).
+    pub position: (f32, f32),
+    /// Heading, degrees counter-clockwise from east.
+    #[serde(default)]
+    pub heading_deg: f32,
 }
 
 /// AI traffic for a scene: vehicles that drive themselves around the road

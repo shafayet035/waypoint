@@ -1,14 +1,13 @@
-//! Collision detection between vehicles and trailers: their body footprints
-//! as rectangles, tested once per tick. A `Collision` event is sent when two
-//! bodies first touch (not again while they stay in contact). No contact
-//! forces yet: vehicles pass through each other, but tests and traffic can
-//! see when they would have hit.
+//! Collision events between vehicles and trailers. The physics contact
+//! solver (`wp_physics::contact`) makes bodies bump and push each other; this
+//! reports, once per tick, which pairs have just started touching, as a
+//! `Collision` event to each of them.
 
-use crate::{Trailer, TrailerLibrary, Vehicle, VehicleDef, VehicleEvent, VehicleLibrary};
+use crate::{VehicleDef, VehicleEvent};
 use glam::Vec2;
 use std::collections::BTreeSet;
 use wp_ecs::{Entity, Events, World};
-use wp_physics::{PinJoint, Pose};
+use wp_physics::{Collider, PinJoint, Pose};
 
 /// A body's extent along its heading from its pose (front positive), and width, m.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,39 +71,21 @@ pub fn overlap(a: &[Vec2; 4], b: &[Vec2; 4]) -> bool {
     true
 }
 
-/// Find touching bodies and send `Collision` events for new contacts.
+/// Find touching bodies (any with a physics [`Collider`]) and send
+/// `Collision` events for new contacts. The contact solver pushes bodies
+/// apart, so a contact is "touching within a few centimetres".
 pub fn detect_collisions(world: &mut World) {
-    let vehicles = world.get_resource::<VehicleLibrary>();
-    let trailers = world.get_resource::<TrailerLibrary>();
     let mut bodies: Vec<(Entity, [Vec2; 4], Vec2, f32)> = Vec::new();
-    world.query::<(&Pose, &Vehicle)>().for_each(|e, (pose, v)| {
-        if let Some(def) = vehicles.as_ref().and_then(|l| l.0.get(&v.model)) {
-            let fp = vehicle_footprint(def);
-            bodies.push((
-                e,
-                fp.corners(pose),
-                pose.position,
-                fp.front.max(-fp.rear) + fp.width,
-            ));
-        }
-    });
-    world.query::<(&Pose, &Trailer)>().for_each(|e, (pose, t)| {
-        if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&t.model)) {
-            let front = def.cg_behind_kingpin_m + def.body.kingpin_from_front_m;
-            let fp = Footprint {
-                front,
-                rear: front - def.body.length_m,
-                width: def.body.width_m,
+    world
+        .query::<(&Pose, &Collider)>()
+        .for_each(|e, (pose, c)| {
+            let grown = Collider {
+                front: c.front + TOUCH_M,
+                rear: c.rear - TOUCH_M,
+                half_width: c.half_width + TOUCH_M,
             };
-            bodies.push((
-                e,
-                fp.corners(pose),
-                pose.position,
-                fp.front.max(-fp.rear) + fp.width,
-            ));
-        }
-    });
-    drop((vehicles, trailers));
+            bodies.push((e, grown.corners(pose), pose.position, grown.radius()));
+        });
     // A tractor and its own trailer overlap at the fifth wheel by design.
     let coupled: BTreeSet<(Entity, Entity)> = world
         .query::<&PinJoint>()
@@ -146,6 +127,9 @@ pub fn detect_collisions(world: &mut World) {
         }
     }
 }
+
+/// Bodies closer than this count as touching, m.
+const TOUCH_M: f32 = 0.03;
 
 fn ordered(a: Entity, b: Entity) -> (Entity, Entity) {
     if a <= b { (a, b) } else { (b, a) }
