@@ -1,0 +1,18 @@
+// M3 gate: the 10-minute bus route. The traffic AI drives the city bus
+// round two laps of route 1 (14 stops) through the town's traffic and
+// lights: every stop served, no collisions, red lights or people hit, and a
+// good score.
+(
+  scene: "scenes/town_traffic.scene.ron",
+  seed: 7,
+  mission: Some("route_1"),
+  player: (vehicle: "city_bus", spawn: "avenue_start", driver: Autopilot),
+  duration_s: 1100.0,
+  assert: [
+    MissionComplete,
+    MissionScore(min: 70),
+    NoCollisions,
+    NoRedLightViolations,
+    NoNaN,
+  ],
+)

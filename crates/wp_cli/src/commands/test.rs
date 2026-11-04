@@ -166,6 +166,7 @@ fn manoeuvre(name: &str, vehicle: &str) -> Option<ScenarioDef> {
         seed: 0,
         player,
         duration_s,
+        mission: None,
         assert,
     })
 }
@@ -230,6 +231,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             trailer: None,
             roads: None,
             traffic: Vec::new(),
+            mission: None,
         };
         let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         all_ok &= r.passed;

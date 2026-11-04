@@ -12,6 +12,7 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp schema <type>             JSON Schema: game | vehicle | trailer | road | scene | scenario
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
   wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera, R reset, P pause
+  wp run --mission route_1     play a mission (its scene, vehicle and spawn); the title shows the objective
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
   wp run --control <port>      also accept control-protocol requests on 127.0.0.1:<port> (0 = any free port)
   wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
@@ -52,6 +53,7 @@ Scenario files: tests/<name>.scenario.ron  (full schema: wp schema scenario)
 Drivers
   Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0, steer: 0.0)])   keys hold until the next
   Keyboard([(at_s: 1.0, steer: 1.0), (at_s: 2.0, brake: 1.0)])   key presses through the player's driver aids
+  Autopilot                     the traffic AI drives the scenario's `mission` (set mission: Some(\"route_1\"))
   Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
   FollowRoute(to_road: \"east_curve\", kmh: 50.0)  plans a lane route on the scene's road network and drives it
   ReverseToDock(dock: \"bay_1\", kmh: 3.0)       backs the towed trailer into a scene dock (pulls up to retry)
@@ -64,6 +66,7 @@ Assertions
   TrafficFlows(min_trips: 10)   the scene's AI traffic keeps reaching destinations (no gridlock)
   NoRedLightViolations   no vehicle enters a signalled junction on red
   NoPedestrianHits   no vehicle hits a person on foot
+  MissionComplete   every stop served   MissionScore(min: 70)   punctuality, comfort and safety (out of 100)
   FinalPositionWithin(min: (70.0, -3.0), max: (78.0, 3.0))   where the player ends up
   NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic   NoCollisions
   RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre

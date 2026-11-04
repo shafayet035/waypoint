@@ -26,6 +26,8 @@ fn tools() -> Value {
         "scene": { "type": "string", "description": "Scene path (default: game.toml start_scene)." },
         "vehicle": { "type": "string" },
         "spawn": { "type": "string" },
+        "mission": { "type": "string", "description": "Play this mission (its scene, vehicle and spawn)." },
+        "trailer": { "type": "string" },
         "throttle": { "type": "number", "minimum": 0, "maximum": 1 },
         "brake": { "type": "number", "minimum": 0, "maximum": 1 },
         "steer": { "type": "number", "minimum": -1, "maximum": 1, "description": "Positive steers left." },
@@ -59,7 +61,7 @@ fn tools() -> Value {
         { "name": "screenshot", "description": "Render one frame headless at a simulated time and return it as an image.",
           "inputSchema": { "type": "object", "properties": shot_props } },
         { "name": "schema", "description": "JSON Schema of a project file type, with field descriptions and units.",
-          "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["game", "vehicle", "scene", "scenario"] } }, "required": ["type"] } },
+          "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["game", "vehicle", "trailer", "road", "scene", "scenario", "mission"] } }, "required": ["type"] } },
         { "name": "docs", "description": "Offline docs. Topics: cli, scenario, vehicle, errors, errors/<CODE>.",
           "inputSchema": { "type": "object", "properties": { "topic": { "type": "string" } } } },
         { "name": "session_start", "description": "Start a live simulation (replacing any previous one) at t = 0 with the player spawned. Returns sim.status.",
@@ -331,6 +333,7 @@ impl Server<'_> {
                     steer: n("steer").unwrap_or(0.0) as f32,
                     seed: n("seed").unwrap_or(0.0) as u64,
                     trailer: s("trailer"),
+                    mission: s("mission"),
                     reverse: args
                         .get("reverse")
                         .and_then(Value::as_bool)

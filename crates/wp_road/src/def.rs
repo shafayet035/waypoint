@@ -16,6 +16,30 @@ pub struct RoadNetworkDef {
     /// Junctions and road ends.
     pub nodes: Vec<NodeDef>,
     pub roads: Vec<RoadDef>,
+    /// Bus stops beside the kerb-side lane of a road.
+    #[serde(default)]
+    pub stops: Vec<StopDef>,
+}
+
+/// A bus stop.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StopDef {
+    pub id: String,
+    /// Name shown to the player.
+    pub name: String,
+    /// The road it stands beside.
+    pub road: String,
+    /// Served by traffic running from the road's `from` node to its `to`
+    /// node (true), or the other way.
+    #[serde(default = "yes")]
+    pub forward: bool,
+    /// Where along the road, m from its `from` node.
+    pub at_m: f32,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -233,6 +257,49 @@ impl RoadNetworkDef {
                             chord / 2.0
                         )),
                     );
+                }
+            }
+        }
+        let mut stop_ids = std::collections::BTreeSet::new();
+        for st in &net.stops {
+            if !stop_ids.insert(&st.id) {
+                out.push(
+                    file.error_at(
+                        "WP-N010",
+                        "stops",
+                        format!("bus stop `{}` is defined twice", st.id),
+                    )
+                    .help("give every stop a unique id"),
+                );
+            }
+            match net.roads.iter().find(|r| r.id == st.road) {
+                None => out.push(
+                    file.error_at(
+                        "WP-N011",
+                        "stops",
+                        format!(
+                            "bus stop `{}` is on road `{}`, which does not exist",
+                            st.id, st.road
+                        ),
+                    )
+                    .help("use the id of a road in this file"),
+                ),
+                Some(r) => {
+                    let lanes = if st.forward {
+                        r.lanes_forward
+                    } else {
+                        r.lanes_backward
+                    };
+                    if lanes == 0 || st.at_m < 0.0 {
+                        out.push(
+                            file.error_at(
+                                "WP-N011",
+                                "stops",
+                                format!("bus stop `{}` has no lane to stop in", st.id),
+                            )
+                            .help("check `forward` (the direction buses travel) and at_m ≥ 0"),
+                        );
+                    }
                 }
             }
         }

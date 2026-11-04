@@ -18,8 +18,9 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
         ],
     ]
     .concat();
-    let verification = [simulation.clone(), vec!["wp_test"]].concat();
-    let presentation = [simulation.clone(), vec!["wp_rhi", "wp_render"]].concat();
+    let gameplay = [simulation.clone(), vec!["wp_mission"]].concat();
+    let verification = [gameplay.clone(), vec!["wp_test"]].concat();
+    let presentation = [gameplay.clone(), vec!["wp_rhi", "wp_render"]].concat();
     let agent = [presentation.clone(), vec!["wp_control"]].concat();
     let platform = [agent.clone(), vec!["wp_platform"]].concat();
     let everything = [
@@ -51,6 +52,7 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
             ]
             .concat(),
         ),
+        ("wp_mission", simulation.clone()),
         ("wp_test", verification),
         ("wp_rhi", vec!["wp_core"]),
         ("wp_render", presentation),
@@ -74,6 +76,7 @@ const SIMULATION_LAYERS: &[&str] = &[
     "wp_world",
     "wp_vehicle",
     "wp_traffic",
+    "wp_mission",
     "wp_test",
 ];
 

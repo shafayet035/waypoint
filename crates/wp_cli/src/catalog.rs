@@ -129,6 +129,31 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Pick another port with --control <port>, or 0 for any free port.",
     },
     ErrorDoc {
+        code: "WP-M001",
+        title: "A mission's scene does not exist",
+        fix: "Point `scene` at a scenes/<name>.scene.ron file.",
+    },
+    ErrorDoc {
+        code: "WP-M002",
+        title: "A mission's vehicle does not exist",
+        fix: "Use a vehicle name that has a vehicles/<name>.vehicle.ron file.",
+    },
+    ErrorDoc {
+        code: "WP-M003",
+        title: "A mission's spawn point is not in its scene",
+        fix: "Use a name from the scene's `spawns`.",
+    },
+    ErrorDoc {
+        code: "WP-M004",
+        title: "A mission's stop is not in the scene's road network, or it has none",
+        fix: "Add the stop to the road file's `stops` (id, name, road, at_m), or fix the id.",
+    },
+    ErrorDoc {
+        code: "WP-M005",
+        title: "A mission's script file does not exist",
+        fix: "Paths are relative to the project root, e.g. missions/route_1.lua.",
+    },
+    ErrorDoc {
         code: "WP-N001",
         title: "A road network node is defined twice",
         fix: "Give every node a unique id.",
@@ -172,6 +197,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-N009",
         title: "A junction's signal timing is out of range",
         fix: "Use green_s 5–180, amber_s 2–8 and all_red_s 0–10 seconds.",
+    },
+    ErrorDoc {
+        code: "WP-N010",
+        title: "A bus stop is defined twice",
+        fix: "Give every stop a unique id.",
+    },
+    ErrorDoc {
+        code: "WP-N011",
+        title: "A bus stop is on a road that does not exist, or has no lane in its direction",
+        fix: "Use an existing road id; set `forward` to the direction buses travel (from → to is true).",
     },
     ErrorDoc {
         code: "WP-W005",
@@ -387,6 +422,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-S020",
         title: "A scenario refers to a dock that is not in its scene",
         fix: "Use a dock name from the scene's `docks` list.",
+    },
+    ErrorDoc {
+        code: "WP-S021",
+        title: "A scenario's mission does not exist, or is set in another scene",
+        fix: "Name a missions/<name>.mission.ron whose `scene` is the scenario's scene.",
+    },
+    ErrorDoc {
+        code: "WP-S022",
+        title: "The Autopilot driver has no mission, or no route to its first stop",
+        fix: "Give the scenario a `mission`, and spawn the vehicle on a lane that leads to the first stop.",
     },
     ErrorDoc {
         code: "WP-S021",

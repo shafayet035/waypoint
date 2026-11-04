@@ -206,6 +206,31 @@ impl Junction {
         })
     }
 
+    /// Seconds until the light shown to traffic on `road` next changes.
+    pub fn time_left(&self, road: usize, t: f64) -> Option<f64> {
+        let crate::def::Control::Signals(timing) = &self.control else {
+            return None;
+        };
+        let phase = self.phases.iter().position(|p| p.contains(&road))?;
+        let slot = (timing.green_s + timing.amber_s + timing.all_red_s) as f64;
+        let period = slot * self.phases.len() as f64;
+        let local = (t + timing.offset_s as f64).rem_euclid(period);
+        let now = (local / slot) as usize;
+        let within = local - now as f64 * slot;
+        let (g, a) = (timing.green_s as f64, timing.amber_s as f64);
+        Some(if now != phase {
+            // Red until this phase's slot starts.
+            let start = phase as f64 * slot;
+            (start - local).rem_euclid(period)
+        } else if within < g {
+            g - within
+        } else if within < g + a {
+            g + a - within
+        } else {
+            period - within
+        })
+    }
+
     /// Whether traffic arriving on `road` must give way here (a priority
     /// junction where `road` is not a major road).
     pub fn gives_way(&self, road_id: &str) -> bool {
@@ -241,6 +266,24 @@ pub struct RoadNetwork {
     pub junctions: Vec<Junction>,
     /// Where pedestrians walk: sidewalks, crossings and corners.
     pub sidewalks: crate::sidewalk::SidewalkGraph,
+    /// Bus stops, placed on their kerb-side lane.
+    pub stops: Vec<Stop>,
+}
+
+/// A bus stop, placed: buses stop in `lane` at `s`.
+#[derive(Clone, Debug)]
+pub struct Stop {
+    pub id: String,
+    pub name: String,
+    pub road: usize,
+    pub lane: LaneId,
+    /// Distance along the lane's path, m.
+    pub s: f32,
+    /// Where a bus's centre should be, and the way it faces.
+    pub position: Vec2,
+    pub direction: Vec2,
+    /// Beside the road on the kerb side: where the sign and shelter stand.
+    pub kerb: Vec2,
 }
 
 impl RoadNetwork {
@@ -595,6 +638,42 @@ impl RoadNetwork {
             })
             .collect();
         let sidewalks = crate::sidewalk::SidewalkGraph::build(&roads, &arms_at);
+        let kerb_side = -side; // right of travel in right-hand traffic
+        let stops = def
+            .stops
+            .iter()
+            .filter_map(|st| {
+                let ri = roads.iter().position(|g| g.def.id == st.road)?;
+                let g = &roads[ri];
+                let n = if st.forward {
+                    g.def.lanes_forward
+                } else {
+                    g.def.lanes_backward
+                };
+                let tag = if st.forward { 'f' } else { 'b' };
+                let name = format!("{}:{tag}{}", g.def.id, n.checked_sub(1)?);
+                let lane = lanes.iter().position(|l| l.name == name)?;
+                let along =
+                    (st.at_m - trim_start[ri]).clamp(2.0, (g.centre.length() - 2.0).max(2.0));
+                let (on_centre, _) = g.centre.sample(along);
+                let path = &lanes[lane].path;
+                let (s, _, _) = path.project(on_centre);
+                let (position, direction) = path.sample(s);
+                let right = Vec2::new(direction.y, -direction.x) * -kerb_side;
+                let kerb = position
+                    + right * (g.def.lane_width_m / 2.0 + 0.6 + g.def.sidewalk_m.max(0.0) * 0.6);
+                Some(Stop {
+                    id: st.id.clone(),
+                    name: st.name.clone(),
+                    road: ri,
+                    lane,
+                    s,
+                    position,
+                    direction,
+                    kerb,
+                })
+            })
+            .collect();
         RoadNetwork {
             name: def.name.clone(),
             drive_side: def.drive_side,
@@ -602,6 +681,7 @@ impl RoadNetwork {
             lanes,
             junctions,
             sidewalks,
+            stops,
         }
     }
 
@@ -645,11 +725,38 @@ impl RoadNetwork {
     /// lane change.
     pub fn route(&self, from: LaneId, to_road: &str) -> Option<Vec<LaneId>> {
         let goal_road = self.roads.iter().position(|r| r.def.id == to_road)?;
-        let is_goal = |l: LaneId| matches!(self.lanes[l].kind, LaneKind::Road { road, .. } if road == goal_road);
         let goal_point = self.roads[goal_road]
             .centre
             .sample(self.roads[goal_road].centre.length() / 2.0)
             .0;
+        self.route_where(
+            from,
+            |l| matches!(self.lanes[l].kind, LaneKind::Road { road, .. } if road == goal_road),
+            goal_point,
+        )
+    }
+
+    /// Fastest lane sequence from `from` to lane `to` itself (changing lanes
+    /// on the way where needed). `None` if it cannot be reached.
+    pub fn route_to_lane(&self, from: LaneId, to: LaneId) -> Option<Vec<LaneId>> {
+        if from == to {
+            return Some(vec![from]);
+        }
+        let goal_point = self.lanes[to]
+            .path
+            .sample(self.lanes[to].path.length() / 2.0)
+            .0;
+        self.route_where(from, |l| l == to, goal_point)
+    }
+
+    /// A* from `from` to the first lane (other than `from`) where `is_goal`
+    /// holds, guided towards `goal_point`.
+    fn route_where(
+        &self,
+        from: LaneId,
+        is_goal: impl Fn(LaneId) -> bool,
+        goal_point: Vec2,
+    ) -> Option<Vec<LaneId>> {
         let cost = |l: LaneId| {
             self.lanes[l].path.length() / (self.lanes[l].speed_limit_kmh / 3.6).max(1.0)
         };
@@ -1049,6 +1156,7 @@ mod tests {
             control: Default::default(),
         };
         RoadNetworkDef {
+            stops: Vec::new(),
             name: "cross".into(),
             drive_side: DriveSide::Right,
             nodes: vec![
@@ -1122,6 +1230,7 @@ mod tests {
         let mut wide = road("a", "p", "q");
         wide.lanes_forward = 2;
         let def = RoadNetworkDef {
+            stops: Vec::new(),
             name: "bend".into(),
             drive_side: DriveSide::Right,
             nodes: vec![
@@ -1183,6 +1292,7 @@ mod tests {
             ..road(id, from, to)
         };
         RoadNetworkDef {
+            stops: Vec::new(),
             name: "drop".into(),
             drive_side: DriveSide::Right,
             nodes: vec![node("p", 0.0), node("q", 200.0), node("r", 400.0)],

@@ -325,6 +325,7 @@ pub fn import(
     };
     Ok((
         RoadNetworkDef {
+            stops: Vec::new(),
             name: name.to_string(),
             drive_side,
             nodes,

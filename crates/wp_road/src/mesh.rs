@@ -317,6 +317,7 @@ mod tests {
     #[test]
     fn meshes_cover_roads_and_face_up() {
         let net = RoadNetwork::build(&RoadNetworkDef {
+            stops: Vec::new(),
             name: "t".into(),
             drive_side: DriveSide::Right,
             nodes: vec![

@@ -98,6 +98,8 @@ impl DriverState {
                     _ => VehicleInput::default(),
                 }
             }
+            // The traffic AI drives the vehicle itself (see the runner).
+            Driver::Autopilot => VehicleInput::default(),
             Driver::Script(keys) => keys
                 .iter()
                 .rev()

@@ -1,8 +1,9 @@
 // A small town: a 4-lane avenue (west–east) with sidewalks, a crossroads at
 // "centre", a loop to the north-east (straight, arc and curve), and a curved
 // link from "south" back to the avenue's west end. Right-hand traffic.
-// River Bend and Old Quarry Road continue the avenue's four lanes: lane drops
-// (tapers) are not modelled yet, so lane counts only change at junctions.
+// Traffic lights at the centre. Bus stops form route 1, a loop round town
+// (avenue east, River Bend, Park Lane, Mill Road, avenue west, Old Quarry
+// Road, Market Street).
 (
   name: "town",
   drive_side: Right,
@@ -27,5 +28,14 @@
     (id: "south_road", name: Some("Market Street"), from: "centre", to: "south", sidewalk_m: 2.0),
     (id: "southwest_link", name: Some("Old Quarry Road"), from: "south", to: "west",
      shape: Curve(through: [(-105.0, -95.0)]), lanes_forward: 2, lanes_backward: 2, speed_limit_kmh: 40.0),
+  ],
+  stops: [
+    (id: "station", name: "Station", road: "avenue_east", forward: true, at_m: 90.0),
+    (id: "riverside", name: "Riverside", road: "east_curve", forward: false, at_m: 80.0),
+    (id: "park", name: "Park", road: "top_road", forward: false, at_m: 90.0),
+    (id: "mill", name: "Mill Road", road: "north_road", forward: false, at_m: 70.0),
+    (id: "west_end", name: "West End", road: "avenue_west", forward: false, at_m: 70.0),
+    (id: "quarry", name: "Quarry", road: "southwest_link", forward: false, at_m: 120.0),
+    (id: "market", name: "Market", road: "south_road", forward: false, at_m: 60.0),
   ],
 )

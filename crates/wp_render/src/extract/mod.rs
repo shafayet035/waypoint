@@ -5,6 +5,7 @@ mod camera;
 mod dock;
 mod pedestrian;
 mod signal;
+mod stop;
 mod trailer;
 mod vehicle;
 
@@ -12,6 +13,7 @@ pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
 use pedestrian::pedestrian_items;
 use signal::signal_items;
+use stop::stop_items;
 use trailer::trailer_items;
 pub use vehicle::{BodyShape, body_shape};
 use vehicle::{palette, vehicle_items};
@@ -111,6 +113,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
             .get_resource::<wp_core::SimTime>()
             .map_or(0.0, |t| t.seconds());
         signal_items(&mut items, &roads.0, t);
+        stop_items(&mut items, &mut shadows, &roads.0);
     }
     if let Some(docks) = world.get_resource::<wp_world::Docks>() {
         for d in &docks.0 {

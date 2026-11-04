@@ -15,6 +15,9 @@ pub struct ScenarioDef {
     pub player: PlayerDef,
     /// Simulated length of the test, seconds.
     pub duration_s: f32,
+    /// Mission to run (name of a `missions/<name>.mission.ron`; same scene).
+    #[serde(default)]
+    pub mission: Option<String>,
     /// Everything that must hold for the test to pass.
     pub assert: Vec<Assertion>,
 }
@@ -43,6 +46,10 @@ pub enum Driver {
     /// keyboard (progressive brakes, speed-sensitive steering, brake to
     /// reverse). Use it to test how the game feels; `reverse` is ignored.
     Keyboard(Vec<InputKey>),
+    /// Let the traffic AI drive the scenario's mission: lanes, distance
+    /// keeping, lights and junctions, stopping at each stop until the
+    /// passengers are aboard.
+    Autopilot,
     /// Hold a speed with a speed controller and a fixed steering input.
     Cruise {
         kmh: f32,
@@ -135,6 +142,10 @@ pub enum Assertion {
     NoRedLightViolations,
     /// No vehicle (player or traffic) hits a person on foot.
     NoPedestrianHits,
+    /// The scenario's mission finished (every stop served, not failed).
+    MissionComplete,
+    /// The mission's overall score is at least `min` (out of 100).
+    MissionScore { min: u32 },
     /// The player ends inside the box from `min` to `max` (x, y in m).
     FinalPositionWithin { min: (f32, f32), max: (f32, f32) },
     /// The scene's AI traffic reaches at least `min_trips` destinations in
@@ -192,6 +203,8 @@ impl Assertion {
             Self::NoCollisions => "NoCollisions".into(),
             Self::NoRedLightViolations => "NoRedLightViolations".into(),
             Self::NoPedestrianHits => "NoPedestrianHits".into(),
+            Self::MissionComplete => "MissionComplete".into(),
+            Self::MissionScore { min } => format!("MissionScore(≥ {min})"),
             Self::FinalPositionWithin { min, max } => format!(
                 "FinalPositionWithin(({:.1}, {:.1})–({:.1}, {:.1}))",
                 min.0, min.1, max.0, max.1

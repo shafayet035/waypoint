@@ -46,6 +46,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
 | `wp_world` | `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
 | `wp_traffic` | AI traffic: routes, lane following, IDM car-following, junction claims; shared path controllers |
+| `wp_mission` | Missions: bus stops on routes, timetable, passengers, score; `MissionPlugin` |
 | `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
 | `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
@@ -131,7 +132,12 @@ and `Priority(major)` (minor roads give way to major-road traffic within 6 s). A
 lights. Pedestrians (`wp_traffic::pedestrian`) walk a sidewalk graph built from the roads
 (`wp_road::sidewalk`: sidewalk centre lines, zebra crossings at junction arms and dead ends, corner
 links), cross with the lights or when no vehicle is within 5 s, and are obstacles to AI drivers, who
-stop short of zebras; `HitPedestrian` and `NoPedestrianHits` (village: 30 people, none hit). `town_traffic` gate: 12
+stop short of zebras; `HitPedestrian` and `NoPedestrianHits` (village: 30 people, none hit).
+Missions (`wp_mission`, gameplay layer): road files have bus `stops`; `missions/<name>.mission.ron` lists
+stops with a timetable, passengers board/alight while the doors are open, and a score (punctuality,
+comfort ≤ 0.3 g, safety). `wp run --mission route_1` to play; the `Autopilot` driver lets the traffic AI
+drive a scenario's mission (`wp_traffic::autopilot` waypoints, held until released). M3 gate `bus_route`:
+two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 85, no collisions. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

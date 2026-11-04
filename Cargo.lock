@@ -2332,6 +2332,7 @@ dependencies = [
  "wp_core",
  "wp_data",
  "wp_ecs",
+ "wp_mission",
  "wp_physics",
  "wp_road",
  "wp_test",
@@ -2882,6 +2883,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wp_mission"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "schemars",
+ "serde",
+ "wp_app",
+ "wp_core",
+ "wp_data",
+ "wp_ecs",
+ "wp_physics",
+ "wp_road",
+ "wp_traffic",
+ "wp_vehicle",
+ "wp_world",
+]
+
+[[package]]
 name = "wp_physics"
 version = "0.1.0"
 dependencies = [
@@ -2901,6 +2920,7 @@ dependencies = [
  "wp_control",
  "wp_core",
  "wp_ecs",
+ "wp_mission",
  "wp_physics",
  "wp_render",
  "wp_rhi",
@@ -2971,6 +2991,7 @@ dependencies = [
  "wp_core",
  "wp_data",
  "wp_ecs",
+ "wp_mission",
  "wp_physics",
  "wp_road",
  "wp_traffic",

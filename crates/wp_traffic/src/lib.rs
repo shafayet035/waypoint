@@ -14,7 +14,7 @@ pub mod control;
 pub mod idm;
 pub mod pedestrian;
 
-use control::{TRACK_AHEAD_M, TRACK_BACK_M, route_speed_kmh, speed_control, stanley_steering};
+use control::{TRACK_AHEAD_M, TRACK_BACK_M, route_speed_kmh_with, speed_control, stanley_steering};
 use glam::Vec2;
 use idm::Idm;
 use serde::{Deserialize, Serialize};
@@ -161,6 +161,24 @@ struct Plan {
     dead_end: bool,
     /// Seconds spent (nearly) stopped.
     still_s: f32,
+    /// Set for an autopilot: stop at these places in turn instead of
+    /// wandering.
+    itinerary: Option<Itinerary>,
+}
+
+/// A place for an autopilot to stop: `s` metres along `lane`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Waypoint {
+    pub lane: LaneId,
+    pub s: f32,
+}
+
+#[derive(Clone, Debug)]
+struct Itinerary {
+    stops: Vec<Waypoint>,
+    next: usize,
+    holding: bool,
+    released: bool,
 }
 
 /// Traffic's own state between ticks (not part of snapshots).
@@ -189,6 +207,8 @@ struct Body {
     velocity: Vec2,
     rear: f32,
     width: f32,
+    /// The four corners of its footprint (people: their position).
+    corners: [Vec2; 4],
 }
 
 const IDM: Idm = Idm {
@@ -197,6 +217,21 @@ const IDM: Idm = Idm {
     headway_s: 1.4,
     min_gap_m: 2.5,
 };
+/// Buses and trucks: gentler, with more room.
+const IDM_HEAVY: Idm = Idm {
+    accel: 1.0,
+    decel: 1.5,
+    headway_s: 1.8,
+    min_gap_m: 3.0,
+};
+
+fn heavy(def: &VehicleDef) -> bool {
+    def.mass_kg > 5000.0
+}
+
+fn idm_for(def: &VehicleDef) -> Idm {
+    if heavy(def) { IDM_HEAVY } else { IDM }
+}
 /// Look this far ahead for vehicles to follow, m.
 const LOOK_AHEAD_M: f32 = 80.0;
 /// Extend the route when this little is left, m.
@@ -216,13 +251,15 @@ fn traffic(world: &mut World) {
         let seed = world
             .get_resource_mut::<SimRng>()
             .map_or(0, |mut r| r.next_u64());
+        // An autopilot may already have made the state: keep its plans.
+        let kept = world.remove_resource::<TrafficState>();
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
             target: setup.count,
             top_up_in: 60,
             clear_of_player_m: setup.clear_of_player_m,
             models: setup.vehicles.clone(),
-            plans: BTreeMap::new(),
+            plans: kept.map(|k| k.plans).unwrap_or_default(),
             claims: BTreeMap::new(),
             approach: BTreeMap::new(),
             respawns: 0,
@@ -238,7 +275,8 @@ fn traffic(world: &mut World) {
     let missing = {
         let mut st = world.resource_mut::<TrafficState>();
         st.top_up_in = st.top_up_in.saturating_sub(1);
-        let due = st.top_up_in == 0 && (st.plans.len() as u32) < st.target;
+        let wandering = st.plans.values().filter(|p| p.itinerary.is_none()).count() as u32;
+        let due = st.top_up_in == 0 && wandering < st.target;
         if st.top_up_in == 0 {
             st.top_up_in = 60;
         }
@@ -345,7 +383,7 @@ fn traffic(world: &mut World) {
 struct LaneTracker(BTreeMap<Entity, (LaneId, f32)>);
 
 /// Report vehicles (player or AI) that enter a junction against a red light:
-/// they leave the end of their lane while it shows red.
+/// their front leaves the end of their lane while it shows red.
 fn watch_signals(world: &mut World) {
     let Some(roads) = world.get_resource::<Roads>().map(|r| r.0.clone()) else {
         return;
@@ -361,27 +399,36 @@ fn watch_signals(world: &mut World) {
     let mut tracker = world.remove_resource::<LaneTracker>().unwrap_or_default();
     let mut ran = Vec::new();
     world.query::<(&Pose, &Vehicle)>().for_each(|e, (pose, _)| {
-        let here = roads.lane_at(pose.position).map(|(l, s, _)| (l, s));
-        if let Some(&(prev, prev_s)) = tracker.0.get(&e)
-            && here.map(|h| h.0) != Some(prev)
-            && let LaneKind::Road { road, forward, .. } = roads.lanes[prev].kind
-            && prev_s > roads.lanes[prev].path.length() - 3.0
-        {
-            let g = &roads.roads[road];
-            let node = if forward { g.to_node } else { g.from_node };
-            if roads.junction_at(node).and_then(|j| j.light(road, now)) == Some(wp_road::Light::Red)
-            {
-                let id = if forward { &g.def.to } else { &g.def.from };
-                ran.push((e, id.clone()));
+        // Entering a junction means the front crossing the stop line (the
+        // end of the lane it is approaching in).
+        let front = world
+            .get::<wp_physics::Collider>(e)
+            .map_or(0.0, |c| c.front);
+        let nose = pose.position + pose.forward() * front;
+        if let Some(&(lane, _)) = tracker.0.get(&e) {
+            let path = &roads.lanes[lane].path;
+            let (s, lat, _) = path.project(nose);
+            if s >= path.length() - 0.05 && lat.abs() < roads.lanes[lane].width_m {
+                // Crossed the end of the lane: into the junction.
+                if let LaneKind::Road { road, forward, .. } = roads.lanes[lane].kind {
+                    let g = &roads.roads[road];
+                    let node = if forward { g.to_node } else { g.from_node };
+                    if roads.junction_at(node).and_then(|j| j.light(road, now))
+                        == Some(wp_road::Light::Red)
+                    {
+                        let id = if forward { &g.def.to } else { &g.def.from };
+                        ran.push((e, id.clone()));
+                    }
+                }
+                tracker.0.remove(&e);
+                return;
             }
         }
-        match here {
-            Some(h) => {
-                tracker.0.insert(e, h);
-            }
-            None => {
-                tracker.0.remove(&e);
-            }
+        // Follow the lane the nose is in while still short of its end.
+        if let Some((l, s, _)) = roads.lane_at(nose)
+            && s < roads.lanes[l].path.length() - 0.5
+        {
+            tracker.0.insert(e, (l, s));
         }
     });
     world.insert_resource(tracker);
@@ -395,6 +442,66 @@ fn watch_signals(world: &mut World) {
     }
 }
 
+/// Let `e` (usually the player's vehicle) drive itself with the traffic
+/// AI (lanes, distance keeping, lights, junctions), stopping at each
+/// waypoint in turn and waiting there until [`release`]d. False if there is
+/// no road network or no route to the first waypoint.
+pub fn autopilot(world: &mut World, e: Entity, stops: Vec<Waypoint>) -> bool {
+    let Some(net) = world.get_resource::<Roads>().map(|r| r.0.clone()) else {
+        return false;
+    };
+    let Some(pos) = world.get::<Pose>(e).map(|p| p.position) else {
+        return false;
+    };
+    let (Some(first), Some((lane, s, _))) = (stops.first(), net.lane_at(pos)) else {
+        return false;
+    };
+    let Some(route) = net.route_to_lane(lane, first.lane) else {
+        return false;
+    };
+    if !world.has_resource::<TrafficState>() {
+        let seed = world
+            .get_resource_mut::<SimRng>()
+            .map_or(0, |mut r| r.next_u64());
+        world.insert_resource(TrafficState {
+            rng: SimRng::fork(seed, "traffic"),
+            target: 0,
+            top_up_in: 60,
+            clear_of_player_m: 0.0,
+            models: Vec::new(),
+            plans: BTreeMap::new(),
+            claims: BTreeMap::new(),
+            approach: BTreeMap::new(),
+            respawns: 0,
+        });
+    }
+    let mut plan = new_plan(&net, route, s);
+    plan.itinerary = Some(Itinerary {
+        stops,
+        next: 0,
+        holding: false,
+        released: false,
+    });
+    world.resource_mut::<TrafficState>().plans.insert(e, plan);
+    true
+}
+
+/// The waypoint an autopilot is waiting at, if it is stopped at one.
+pub fn holding_at(world: &World, e: Entity) -> Option<usize> {
+    let st = world.get_resource::<TrafficState>()?;
+    let it = st.plans.get(&e)?.itinerary.as_ref()?;
+    it.holding.then_some(it.next)
+}
+
+/// Send a waiting autopilot on to its next waypoint.
+pub fn release(world: &mut World, e: Entity) {
+    if let Some(mut st) = world.get_resource_mut::<TrafficState>()
+        && let Some(it) = st.plans.get_mut(&e).and_then(|p| p.itinerary.as_mut())
+    {
+        it.released = true;
+    }
+}
+
 /// Every vehicle and trailer, as obstacles.
 fn bodies(world: &World) -> Vec<Body> {
     let mut out = Vec::new();
@@ -403,12 +510,19 @@ fn bodies(world: &World) -> Vec<Body> {
         if let Some(def) = vehicles.as_ref().and_then(|l| l.0.get(&v.model)) {
             let fp = vehicle_footprint(def);
             let velocity = world.get::<Velocity>(e).map_or(Vec2::ZERO, |v| v.linear);
+            let corners = wp_physics::Collider {
+                front: fp.front,
+                rear: fp.rear,
+                half_width: fp.width / 2.0,
+            }
+            .corners(pose);
             out.push(Body {
                 entity: e,
                 position: pose.position,
                 velocity,
                 rear: fp.rear,
                 width: fp.width,
+                corners,
             });
         }
     });
@@ -423,6 +537,7 @@ fn bodies(world: &World) -> Vec<Body> {
                 velocity,
                 rear: -0.3,
                 width: 0.6,
+                corners: [pose.position; 4],
             });
         });
     let trailers = world.get_resource::<TrailerLibrary>();
@@ -430,12 +545,19 @@ fn bodies(world: &World) -> Vec<Body> {
         if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&t.model)) {
             let front = def.cg_behind_kingpin_m + def.body.kingpin_from_front_m;
             let velocity = world.get::<Velocity>(e).map_or(Vec2::ZERO, |v| v.linear);
+            let corners = wp_physics::Collider {
+                front,
+                rear: front - def.body.length_m,
+                half_width: def.body.width_m / 2.0,
+            }
+            .corners(pose);
             out.push(Body {
                 entity: e,
                 position: pose.position,
                 velocity,
                 rear: front - def.body.length_m,
                 width: def.body.width_m,
+                corners,
             });
         }
     });
@@ -487,11 +609,45 @@ fn drive(
             0.0
         };
     }
+    // An autopilot holding at a waypoint stays put until released, then
+    // heads for the next one.
+    if let Some(it) = state.plans[&me].itinerary.clone()
+        && it.holding
+    {
+        if !it.released || it.next + 1 >= it.stops.len() {
+            return (hold, Outcome::Waiting);
+        }
+        let plan = &state.plans[&me];
+        let k = plan
+            .ends
+            .partition_point(|&e| e <= plan.s)
+            .min(plan.route.len() - 1);
+        let element_start = if k == 0 { 0.0 } else { plan.ends[k - 1] };
+        let first_offset = if k == 0 {
+            net.lanes[plan.route[0]].path.length() - plan.ends[0]
+        } else {
+            0.0
+        };
+        let at = plan.s - element_start + first_offset;
+        let next = it.stops[it.next + 1];
+        let Some(route) = net.route_to_lane(plan.route[k], next.lane) else {
+            return (hold, Outcome::Waiting);
+        };
+        let mut fresh = new_plan(net, route, at.max(0.0));
+        fresh.itinerary = Some(Itinerary {
+            next: it.next + 1,
+            holding: false,
+            released: false,
+            ..it
+        });
+        state.plans.insert(me, fresh);
+    }
     let remaining = {
         let plan = &state.plans[&me];
         plan.path.length() - plan.s
     };
-    if remaining < EXTEND_WITHIN_M && !state.plans[&me].dead_end {
+    let wandering = state.plans[&me].itinerary.is_none();
+    if wandering && remaining < EXTEND_WITHIN_M && !state.plans[&me].dead_end {
         if extend(state, net, me) {
             outcome = Outcome::TripDone;
         } else if let Some(p) = state.plans.get_mut(&me) {
@@ -501,7 +657,7 @@ fn drive(
     let plan = &state.plans[&me];
     let (path, s) = (plan.path.clone(), plan.s);
     let remaining = path.length() - s;
-    if plan.still_s > STUCK_S || (plan.dead_end && remaining < 3.0) {
+    if wandering && (plan.still_s > STUCK_S || (plan.dead_end && remaining < 3.0)) {
         release_claims(state, me);
         return (hold, Outcome::Respawn);
     }
@@ -521,8 +677,25 @@ fn drive(
         }
         v0 = v0.min((limit(j).powi(2) + 2.0 * 1.5 * (start - s).max(0.0)).sqrt());
     }
-    let to_stop = if plan.dead_end { remaining } else { 1e4 };
-    let v0 = route_speed_kmh(&path, s, v0 * 3.6 * pace, to_stop) / 3.6;
+    let to_stop = if plan.dead_end || !wandering {
+        remaining
+    } else {
+        1e4
+    };
+    // Heavy vehicles corner and brake gently (standing passengers, high
+    // centre of gravity, air brakes).
+    let idm = idm_for(def);
+    let lateral = if heavy(def) { 1.8 } else { 2.5 };
+    let v0 = route_speed_kmh_with(
+        &path,
+        s,
+        v0 * 3.6 * pace,
+        to_stop,
+        lateral,
+        1.0,
+        3.0,
+        idm.decel,
+    ) / 3.6;
 
     // The nearest thing ahead in this lane.
     let fp = vehicle_footprint(def);
@@ -551,6 +724,22 @@ fn drive(
         } else {
             (0.5, lane_half)
         };
+        // Any corner of its body inside this vehicle's corridor ahead (an
+        // angled, merging or off-tracking vehicle can poke into the lane
+        // while its centre is outside it).
+        if b.width > 1.0 {
+            for c in b.corners {
+                let (sc, latc, _) = path.project_between(c, s, s + LOOK_AHEAD_M);
+                if sc > s + fp.front * 0.5 && latc.abs() < fp.width / 2.0 + 0.3 {
+                    let g = sc - s - fp.front;
+                    if g < gap {
+                        gap = g.max(0.1);
+                        let (_, dir) = path.sample(sc);
+                        lead_v = b.velocity.dot(dir).max(0.0);
+                    }
+                }
+            }
+        }
         let (sb, lat, _) = path.project_between(b.position, s + back, s + LOOK_AHEAD_M);
         if sb <= s + back || lat.abs() > reach + b.width / 2.0 - 0.4 {
             continue;
@@ -587,15 +776,32 @@ fn drive(
             .max(0.0);
         let stop_at = entry - if setback > 0.0 { setback + 0.5 } else { 0.0 };
         let ahead = entry - s;
-        if ahead > speed.max(0.0).powi(2) / (2.0 * IDM.decel) + 15.0 {
+        if ahead > speed.max(0.0).powi(2) / (2.0 * idm.decel) + 15.0 {
             break; // not near yet
         }
         // Signals: stop for red unless it would take an emergency stop, and
         // for amber unless too close to stop comfortably (even if the path
         // was claimed on green).
+        let to_line = ahead - fp.front;
         let must_stop = match net.light_for(route[j], now) {
-            Some(wp_road::Light::Red) => ahead - fp.front > speed.powi(2) / (2.0 * 6.0),
-            Some(wp_road::Light::Amber) => ahead - fp.front > speed.powi(2) / (2.0 * 3.0) + 1.0,
+            Some(wp_road::Light::Red) => to_line > speed.powi(2) / (2.0 * 6.0),
+            Some(wp_road::Light::Amber) => {
+                // Go only if the line is crossed before red; otherwise stop,
+                // unless even firm braking (5 m/s²) could not.
+                let amber_left = net.lanes[route[j]]
+                    .approach
+                    .zip(match net.lanes[route[j]].kind {
+                        LaneKind::Connector { node, .. } => net.junction_at(node),
+                        LaneKind::Road { .. } => None,
+                    })
+                    .and_then(|(r, jn)| jn.time_left(r, now))
+                    .unwrap_or(0.0) as f32;
+                // It will slow for the turn: arrive at the mean of now and the turn's speed.
+                let turn_speed = net.lanes[route[j]].speed_limit_kmh / 3.6;
+                let arrive = ((speed + speed.min(turn_speed)) / 2.0).max(0.1);
+                let clears = to_line <= 0.0 || to_line / arrive < amber_left - 0.5;
+                !clears && to_line > speed.powi(2) / (2.0 * 5.0)
+            }
             _ => false,
         };
         if must_stop {
@@ -678,6 +884,32 @@ fn drive(
             state.claims.remove(&l);
         }
     }
+    // An autopilot's waypoint: a stopped car just ahead of where its
+    // centre should come to rest.
+    if let Some(it) = state.plans[&me].itinerary.clone() {
+        let plan = &state.plans[&me];
+        let wp = it.stops[it.next];
+        if let Some(jw) = plan.route.iter().rposition(|&l| l == wp.lane) {
+            let target = if jw == 0 {
+                wp.s - (net.lanes[plan.route[0]].path.length() - plan.ends[0])
+            } else {
+                plan.ends[jw - 1] + wp.s
+            };
+            let g = target - s + idm.min_gap_m;
+            if g < gap {
+                gap = g.max(0.1);
+                lead_v = 0.0;
+            }
+            if (target - s).abs() < 1.5 && speed.abs() < 0.3 {
+                if let Some(p) = state.plans.get_mut(&me)
+                    && let Some(i) = p.itinerary.as_mut()
+                {
+                    i.holding = true;
+                }
+                return (hold, Outcome::Waiting);
+            }
+        }
+    }
     if let Some(entry) = stop_line {
         let g = entry - s - fp.front - 1.0;
         if g < gap {
@@ -692,7 +924,7 @@ fn drive(
     // Pedals from the IDM acceleration; steering along the path. Slowing
     // beyond what rolling and drag give is brake pressure in proportion to
     // this vehicle's brakes (no switching back and forth between modes).
-    let a = IDM.accel(speed, v0, gap, speed - lead_v);
+    let a = idm.accel(speed, v0, gap, speed - lead_v);
     let plan = state.plans.get_mut(&me).expect("planned above");
     let (throttle, brake) = if speed < 0.3 && a <= 0.0 {
         plan.integral = 0.0;
@@ -729,7 +961,13 @@ fn drive(
         kerb_side * ((lane_w - fp.width) / 2.0 * 0.5).max(0.0) * (fp.width > 2.2) as u8 as f32;
     // Stanley steers the axle onto the path; moving where it "sees" the
     // axle by -offset makes it hold the axle `offset` off the path.
-    let seen = front_axle + left * (swing - shy);
+    // Holding the axle off the path to the left by -(swing - shy): don't
+    // swing out towards oncoming traffic as much as towards the kerb.
+    let mut hold_left = -(swing - shy);
+    if hold_left * kerb_side < 0.0 {
+        hold_left *= 0.3;
+    }
+    let seen = front_axle - left * hold_left;
     let steer = stanley_steering(&path, seen, pose.heading, speed.max(0.0), s);
     let max_steer = def.steering.max_angle_deg.to_radians();
     (
@@ -965,6 +1203,7 @@ fn new_plan(net: &RoadNetwork, route: Vec<LaneId>, start_s: f32) -> Plan {
         integral: 0.0,
         dead_end: false,
         still_s: 0.0,
+        itinerary: None,
     }
 }
 
@@ -1140,6 +1379,7 @@ mod tests {
             sidewalk_m: 0.0,
         };
         RoadNetwork::build(&RoadNetworkDef {
+            stops: Vec::new(),
             name: "x".into(),
             drive_side: DriveSide::Right,
             nodes: vec![

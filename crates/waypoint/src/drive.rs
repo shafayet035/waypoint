@@ -21,6 +21,8 @@ pub struct DriveSpec {
     pub vehicle: Option<String>,
     /// Semi-trailer to couple to the vehicle's fifth wheel.
     pub trailer: Option<String>,
+    /// Mission to play (its scene, vehicle and spawn unless given).
+    pub mission: Option<String>,
     /// Constant driver controls (ignored for scenarios, which have their own driver).
     pub input: VehicleInput,
     pub seed: u64,
@@ -72,16 +74,35 @@ impl DriveSpec {
             });
         }
 
+        let mission = match &self.mission {
+            Some(m) => Some(
+                &project
+                    .missions
+                    .get(m)
+                    .ok_or_else(|| unknown("mission", m, project.missions.keys()))?
+                    .value,
+            ),
+            None => None,
+        };
         let scene_path = self
             .scene
             .clone()
+            .or_else(|| mission.map(|m| m.scene.clone()))
             .unwrap_or_else(|| project.game.value.start_scene.clone());
         let scene = &project
             .scenes
             .get(&scene_path)
             .ok_or_else(|| unknown("scene", &scene_path, project.scenes.keys()))?
             .value;
-        let vehicle = match &self.vehicle {
+        let vehicle_name = self
+            .vehicle
+            .clone()
+            .or_else(|| mission.map(|m| m.vehicle.clone()));
+        let spawn_name = self
+            .spawn
+            .clone()
+            .or_else(|| mission.map(|m| m.spawn.clone()));
+        let vehicle = match &vehicle_name {
             Some(v) => project
                 .vehicles
                 .get(v)
@@ -91,7 +112,7 @@ impl DriveSpec {
                     .help("add a vehicles/<name>.vehicle.ron file")
             })?,
         };
-        let spawn = match &self.spawn {
+        let spawn = match &spawn_name {
             Some(s) => scene
                 .spawn(s)
                 .ok_or_else(|| unknown("spawn point", s, scene.spawns.iter().map(|p| &p.name)))?,
@@ -116,6 +137,12 @@ impl DriveSpec {
         let player = wp_vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
         app.world.insert(player, Name(vehicle.value.name.clone()));
         app.world.insert(player, Player);
+        if let Some(m) = mission {
+            wp_mission::start(&mut app.world, m).map_err(|e| {
+                Diagnostic::error("WP-S021", format!("mission cannot start: {e}"))
+                    .help("run `wp check`")
+            })?;
+        }
         *app.world
             .get_mut::<VehicleInput>(player)
             .expect("spawned vehicles have inputs") = VehicleInput {

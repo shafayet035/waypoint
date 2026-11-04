@@ -391,8 +391,17 @@ impl Handler {
             } else {
                 ""
             };
+            let mission = w
+                .get_resource::<wp_mission::MissionStatus>()
+                .map(|m| {
+                    format!(
+                        " · {} · {} on board · score {}",
+                        m.objective, m.on_board, m.score.total
+                    )
+                })
+                .unwrap_or_default();
             gfx.window.set_title(&format!(
-                "{} · {model} · {status} · camera {:?}{paused}   [W/S drive (hold S when stopped to reverse), A/D steer, C camera, R reset, P pause]",
+                "{} · {model} · {status}{mission} · camera {:?}{paused}   [W/S drive (hold S when stopped to reverse), A/D steer, C camera, R reset, P pause]",
                 self.opts.title, self.camera
             ));
         }

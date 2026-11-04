@@ -13,6 +13,7 @@ wp_vehicle.workspace = true
 wp_rhi.workspace = true
 wp_render.workspace = true
 wp_control.workspace = true
+wp_mission.workspace = true
 winit.workspace = true
 serde.workspace = true
 

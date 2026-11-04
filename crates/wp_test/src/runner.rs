@@ -22,6 +22,8 @@ pub struct ScenarioInput<'a> {
     pub trailer: Option<&'a wp_vehicle::TrailerDef>,
     /// Vehicles the scene uses for traffic and parked vehicles.
     pub traffic: Vec<&'a VehicleDef>,
+    /// The scenario's mission, if it names one.
+    pub mission: Option<&'a wp_mission::MissionDef>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -66,6 +68,9 @@ pub struct Metrics {
     pub red_light_violations: u32,
     /// People on foot hit by any vehicle.
     pub pedestrians_hit: u32,
+    /// The mission at the end, if the scenario has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission: Option<wp_mission::MissionStatus>,
     /// Pedestrians at the end, if the scene has them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pedestrians: Option<wp_traffic::pedestrian::PedestrianStats>,
@@ -211,8 +216,54 @@ pub fn prepare(
         }
         _ => None,
     };
+    if let Some(m) = input.mission {
+        wp_mission::start(&mut app.world, m)
+            .map_err(|e| Diagnostic::error("WP-S021", format!("mission cannot start: {e}")))?;
+    }
+    let autopilot = matches!(s.player.driver, Driver::Autopilot);
+    if autopilot {
+        let stops = input
+            .mission
+            .ok_or_else(|| {
+                Diagnostic::error("WP-S022", "the Autopilot driver needs a mission")
+                    .help("set `mission: Some(\"<name>\")` in the scenario")
+            })?
+            .stops
+            .clone();
+        let roads = app
+            .world
+            .get_resource::<wp_world::Roads>()
+            .map(|r| r.0.clone());
+        let waypoints: Vec<wp_traffic::Waypoint> = stops
+            .iter()
+            .filter_map(|ms| {
+                let st = roads.as_ref()?.stops.iter().find(|x| x.id == ms.stop)?;
+                Some(wp_traffic::Waypoint {
+                    lane: st.lane,
+                    s: st.s,
+                })
+            })
+            .collect();
+        if !wp_traffic::autopilot(&mut app.world, player, waypoints) {
+            return Err(Diagnostic::error(
+                "WP-S022",
+                "the autopilot cannot find a route to the first stop",
+            )
+            .help("check the spawn point is on a road lane that leads to the stop"));
+        }
+    }
     let mut driver = DriverState::new(s.player.driver.clone(), dock);
     app.add_system(Stage::Agents, "scenario_driver", move |w| {
+        if autopilot {
+            // The traffic AI drives; let it go once the stop is served.
+            if let Some(i) = wp_traffic::holding_at(w, player)
+                && w.get_resource::<wp_mission::MissionState>()
+                    .is_some_and(|m| m.served(i))
+            {
+                wp_traffic::release(w, player);
+            }
+            return;
+        }
         let t = w.resource::<SimTime>().seconds() as f32;
         let dt = w.resource::<SimTime>().dt();
         let input = driver.next(t, dt, w, player);
@@ -342,6 +393,10 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         collisions: collision_reports / 2,
         red_light_violations: red_lights,
         pedestrians_hit: people_hit,
+        mission: app
+            .world
+            .get_resource::<wp_mission::MissionStatus>()
+            .map(|m| m.clone()),
         pedestrians: app
             .world
             .get_resource::<wp_traffic::pedestrian::PedestrianStats>()
@@ -634,6 +689,26 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
                 format!("ended at ({x:.2}, {y:.2})"),
             )
         }
+        Assertion::MissionComplete => match &m.mission {
+            Some(ms) => (
+                ms.completed && !ms.failed,
+                format!(
+                    "{}; stop {} of {}, score {} (punctuality {}, comfort {}, safety {})",
+                    ms.objective,
+                    (ms.next_stop + 1).min(ms.stops),
+                    ms.stops,
+                    ms.score.total,
+                    ms.score.punctuality,
+                    ms.score.comfort,
+                    ms.score.safety
+                ),
+            ),
+            None => (false, "the scenario has no mission".into()),
+        },
+        Assertion::MissionScore { min } => match &m.mission {
+            Some(ms) => (ms.score.total >= *min, format!("score {}", ms.score.total)),
+            None => (false, "the scenario has no mission".into()),
+        },
         Assertion::NoPedestrianHits => (
             m.pedestrians_hit == 0,
             match &m.pedestrians {

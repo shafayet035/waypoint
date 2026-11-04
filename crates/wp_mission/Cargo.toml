@@ -1,0 +1,23 @@
+[package]
+name = "wp_mission"
+description = "Missions (.mission.ron): bus routes with stops, timetables, passengers and a score."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_data.workspace = true
+wp_physics.workspace = true
+wp_road.workspace = true
+wp_world.workspace = true
+wp_vehicle.workspace = true
+wp_traffic.workspace = true
+glam.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true

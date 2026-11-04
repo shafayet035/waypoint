@@ -1,0 +1,29 @@
+// Route 1: two laps of the town loop in the city bus, with the town's AI
+// traffic and the traffic lights at the centre. Each stop has a timetabled
+// departure; people board (2.5 s each) and alight (1.5 s each) while the
+// doors are open. Score: punctuality, comfort (no harsh braking or cornering
+// over 0.3 g) and safety (no collisions, red lights or people hit).
+(
+  title: "Route 1: Town loop",
+  briefing: "Two laps: Station, Riverside, Park, Mill Road, West End, Quarry, Market. Keep to time and give your passengers a smooth ride.",
+  scene: "scenes/town_traffic.scene.ron",
+  vehicle: "city_bus",
+  spawn: "avenue_start",
+  stops: [
+    (stop: "station", depart_s: 60.0),
+    (stop: "riverside", depart_s: 120.0),
+    (stop: "park", depart_s: 180.0),
+    (stop: "mill", depart_s: 235.0),
+    (stop: "west_end", depart_s: 300.0),
+    (stop: "quarry", depart_s: 365.0),
+    (stop: "market", depart_s: 425.0),
+    (stop: "station", depart_s: 490.0),
+    (stop: "riverside", depart_s: 550.0),
+    (stop: "park", depart_s: 610.0),
+    (stop: "mill", depart_s: 665.0),
+    (stop: "west_end", depart_s: 730.0),
+    (stop: "quarry", depart_s: 795.0),
+    (stop: "market", depart_s: 855.0),
+  ],
+  time_limit_s: Some(1200.0),
+)

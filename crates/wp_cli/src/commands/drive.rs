@@ -34,6 +34,9 @@ pub struct DriveArgs {
     /// Start in reverse gear.
     #[arg(long)]
     pub(crate) reverse: bool,
+    /// Play a mission (missions/<name>.mission.ron): its scene, vehicle and spawn.
+    #[arg(long)]
+    pub(crate) mission: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -96,6 +99,7 @@ impl DriveArgs {
             spawn: self.spawn.clone(),
             vehicle: self.vehicle.clone(),
             trailer: self.trailer.clone(),
+            mission: self.mission.clone(),
             input: VehicleInput {
                 throttle: self.throttle,
                 brake: self.brake,

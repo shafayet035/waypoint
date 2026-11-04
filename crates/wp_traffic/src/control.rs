@@ -35,22 +35,38 @@ pub fn stanley_steering(
 /// Target speed: the requested speed, limited by bends ahead (2.5 m/s²
 /// lateral, comfortable for passengers) and by the distance left to stop.
 pub fn route_speed_kmh(path: &Polyline, s: f32, kmh: f32, remaining: f32) -> f32 {
-    const LATERAL: f32 = 2.5;
-    const BRAKING: f32 = 2.0;
+    route_speed_kmh_with(path, s, kmh, remaining, 2.5, 5.0, 5.0, 2.0)
+}
+
+/// [`route_speed_kmh`] with its settings: the sideways acceleration allowed
+/// in bends and the braking allowed before them (m/s²), and how curvature is
+/// sampled (every `step` metres over `window` metres; short, tight junction
+/// turns need small values).
+#[allow(clippy::too_many_arguments)]
+pub fn route_speed_kmh_with(
+    path: &Polyline,
+    s: f32,
+    kmh: f32,
+    remaining: f32,
+    lateral: f32,
+    step: f32,
+    window: f32,
+    braking: f32,
+) -> f32 {
     let mut v = kmh / 3.6;
     let mut d = 0.0;
     while d < 40.0 {
         let (_, t0) = path.sample(s + d);
-        let (_, t1) = path.sample(s + d + 5.0);
-        let curvature = t0.angle_to(t1).abs() / 5.0;
+        let (_, t1) = path.sample(s + d + window);
+        let curvature = t0.angle_to(t1).abs() / window;
         if curvature > 1e-4 {
             // Speed allowed at that bend, and what we can brake down to it from here.
-            let bend = (LATERAL / curvature).sqrt();
-            v = v.min((bend * bend + 2.0 * BRAKING * d).sqrt());
+            let bend = (lateral / curvature).sqrt();
+            v = v.min((bend * bend + 2.0 * braking * d).sqrt());
         }
-        d += 5.0;
+        d += step;
     }
-    v = v.min((2.0 * BRAKING * (remaining - 1.0).max(0.0)).sqrt() + 0.3);
+    v = v.min((2.0 * braking * (remaining - 1.0).max(0.0)).sqrt() + 0.3);
     v * 3.6
 }
 

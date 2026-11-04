@@ -56,6 +56,8 @@ pub struct Project {
     pub trailers: BTreeMap<String, Loaded<TrailerDef>>,
     /// Road networks by path relative to the root.
     pub roads: BTreeMap<String, Loaded<RoadNetworkDef>>,
+    /// By mission name (file name without `.mission.ron`).
+    pub missions: BTreeMap<String, Loaded<wp_mission::MissionDef>>,
     /// Files that exist but failed to parse, so references to them can say so.
     pub failed: Vec<String>,
 }
@@ -65,6 +67,7 @@ pub const SCENE_EXT: &str = ".scene.ron";
 pub const SCENARIO_EXT: &str = ".scenario.ron";
 pub const TRAILER_EXT: &str = ".trailer.ron";
 pub const ROAD_EXT: &str = ".road.ron";
+pub const MISSION_EXT: &str = ".mission.ron";
 
 fn stem<'a>(path: &'a str, ext: &str) -> &'a str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -174,7 +177,18 @@ impl Project {
             }
         }
 
+        let mut missions = BTreeMap::new();
+        for path in find_files(root, MISSION_EXT) {
+            match load_ron::<wp_mission::MissionDef>(root, &path) {
+                Ok(m) => {
+                    missions.insert(stem(&path, MISSION_EXT).to_string(), m);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
         let project = Project {
+            missions,
             root: root.to_path_buf(),
             game,
             vehicles,
@@ -272,8 +286,97 @@ impl Project {
                 );
             }
         }
+        for m in self.missions.values() {
+            let d = &m.value;
+            let Some(scene) = self.scenes.get(&d.scene) else {
+                out.push(
+                    m.error_at(
+                        "WP-M001",
+                        "scene",
+                        format!("scene `{}` does not exist", d.scene),
+                    )
+                    .help(format!("known scenes: {}", list(self.scenes.keys()))),
+                );
+                continue;
+            };
+            if !self.vehicles.contains_key(&d.vehicle) {
+                out.push(
+                    m.error_at(
+                        "WP-M002",
+                        "vehicle",
+                        format!("vehicle `{}` does not exist", d.vehicle),
+                    )
+                    .help(format!("known vehicles: {}", list(self.vehicles.keys()))),
+                );
+            }
+            if scene.value.spawn(&d.spawn).is_none() {
+                out.push(
+                    m.error_at(
+                        "WP-M003",
+                        "spawn",
+                        format!("spawn point `{}` is not in {}", d.spawn, d.scene),
+                    )
+                    .help("use a name from the scene's `spawns`"),
+                );
+            }
+            let roads = self.scene_roads(&scene.value);
+            for st in &d.stops {
+                if !roads.is_some_and(|r| r.stops.iter().any(|x| x.id == st.stop)) {
+                    out.push(
+                        m.error_at(
+                            "WP-M004",
+                            "stops",
+                            format!("stop `{}` is not in the scene's road network", st.stop),
+                        )
+                        .help("add it to the road file's `stops`, or fix the id"),
+                    );
+                }
+            }
+            if d.stops.is_empty() {
+                out.push(
+                    m.error_at("WP-M004", "stops", "the route has no stops")
+                        .help("list at least one stop"),
+                );
+            }
+            if let Some(script) = &d.script
+                && !self.root.join(script).exists()
+            {
+                out.push(
+                    m.error_at(
+                        "WP-M005",
+                        "script",
+                        format!("script `{script}` does not exist"),
+                    )
+                    .help("paths are relative to the project root, e.g. missions/route_1.lua"),
+                );
+            }
+        }
         for sc in self.scenarios.values() {
             let s = &sc.value;
+            if let Some(mname) = &s.mission {
+                match self.missions.get(mname) {
+                    None => out.push(
+                        sc.error_at(
+                            "WP-S021",
+                            "mission",
+                            format!("mission `{mname}` does not exist"),
+                        )
+                        .help(format!("known missions: {}", list(self.missions.keys()))),
+                    ),
+                    Some(m) if m.value.scene != s.scene => out.push(
+                        sc.error_at(
+                            "WP-S021",
+                            "mission",
+                            format!(
+                                "mission `{mname}` is set in {}, not {}",
+                                m.value.scene, s.scene
+                            ),
+                        )
+                        .help("use the mission's scene for the scenario"),
+                    ),
+                    _ => {}
+                }
+            }
             match self.scenes.get(&s.scene) {
                 None if self.failed.contains(&s.scene) => out.push(
                     sc.error_at(
@@ -398,6 +501,10 @@ impl Project {
             scenario: s,
             roads: self.scene_roads(scene),
             traffic: self.scene_vehicles(scene)?,
+            mission: match &s.mission {
+                Some(m) => Some(&self.missions.get(m)?.value),
+                None => None,
+            },
             scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,

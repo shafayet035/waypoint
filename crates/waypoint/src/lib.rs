@@ -11,6 +11,7 @@ pub use wp_app as app;
 pub use wp_core as core;
 pub use wp_data as data;
 pub use wp_ecs as ecs;
+pub use wp_mission as mission;
 pub use wp_physics as physics;
 pub use wp_road as road;
 pub use wp_test as test;
@@ -31,6 +32,7 @@ impl PluginGroup for DefaultPlugins {
             Box::new(wp_vehicle::VehiclePlugin),
             Box::new(wp_vehicle::TrailerPlugin),
             Box::new(wp_traffic::TrafficPlugin),
+            Box::new(wp_mission::MissionPlugin),
         ]
     }
 }

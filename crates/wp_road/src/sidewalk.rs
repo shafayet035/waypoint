@@ -201,6 +201,7 @@ mod tests {
             sidewalk_m: 2.0,
         };
         RoadNetwork::build(&RoadNetworkDef {
+            stops: Vec::new(),
             name: "x".into(),
             drive_side: DriveSide::Right,
             nodes: vec![

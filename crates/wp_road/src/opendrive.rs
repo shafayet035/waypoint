@@ -858,6 +858,7 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
     note("elevation, superelevation and road marks are ignored (the engine is planar)");
     stats.roads = out_roads.len();
     let net = RoadNetworkDef {
+        stops: Vec::new(),
         name: name.to_string(),
         drive_side: if lht {
             DriveSide::Left
