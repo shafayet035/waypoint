@@ -32,6 +32,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp asset info <file.glb>     what the engine sees in a model: triangles, size, materials and roles
   wp asset list                every model, its licence and the vehicles using it
   wp credits                   the credits screen: asset credits and map attributions
+  wp mod new <name>            start a mod in mods/<name>/ (wp docs mods)
+  wp mod list                  mods in load order, active or not, and the files each adds or replaces
   wp systems                   resolved system schedule
   wp plugins                   loaded plugins in load order
 
@@ -143,6 +145,20 @@ player vehicle 40k / 80k / 150k, traffic 8k / 15k / 30k (low / mid / flagship).
 tools/models/vehicles.py builds the sandbox's low-poly models from code.
 ";
 
+const DOCS_MODS: &str = "\
+Mods: folders under mods/, each with a mod.toml (wp schema mod):
+
+  name = \"night_bus\"   version = \"1.0.0\"   author = \"...\"   description = \"...\"   priority = 0
+
+A mod mirrors the game's layout. A file at the same path replaces the game's
+(mods/night_bus/vehicles/city_bus.vehicle.ron), a new path adds one (mods/night_bus/scenes/night.scene.ron).
+Vehicles, trailers, roads, scenes, scenarios, missions and their Lua scripts, models (with licence files)
+and replays all layer. Mods load by priority, then folder name; later wins. Every check runs on the
+result, and errors point at the file inside the mod. Switch one off with game.toml [mods] disabled = [\"night_bus\"]
+or enabled = false in its mod.toml. `wp mod list` shows what each mod adds and replaces.
+Not yet: WASM modules and per-mod capability permissions.
+";
+
 const DOCS_SCRIPTING: &str = "\
 Mission scripts: Lua (Luau, sandboxed). Set `script: Some(\"missions/route_1.lua\")` in a mission.
 `wp check` compiles every script (WP-L001 with the line); a runtime error fails the mission.
@@ -170,9 +186,10 @@ Luau extras over Lua 5.1: `+=`, `continue`, string interpolation, optional types
 
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
     let text = match topic {
-        None => "topics: cli, errors, errors/<CODE>, assets, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        None => "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
         Some("scripting") => DOCS_SCRIPTING.to_string(),
         Some("assets") => DOCS_ASSETS.to_string(),
+        Some("mods") => DOCS_MODS.to_string(),
         Some("cli") => DOCS_CLI.to_string(),
         Some("scenario") => DOCS_SCENARIO.to_string(),
         Some("vehicle") => DOCS_VEHICLE.to_string(),
@@ -199,7 +216,7 @@ pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
             format!("{}: {}\n\nHow to fix: {}\n", e.code, e.title, e.fix)
         }
         Some(other) => {
-            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, assets, scenario, scripting, vehicle"));
+            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scripting, vehicle"));
         }
     };
     if ctx.json {

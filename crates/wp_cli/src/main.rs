@@ -70,6 +70,17 @@ enum Cmd {
     Credits,
     /// Check a recorded replay still plays back identically, or record a golden one.
     Replay(ReplayArgs),
+    /// Mods: folders under mods/ that add or replace game files.
+    #[command(subcommand)]
+    Mod(ModCmd),
+}
+
+#[derive(Subcommand)]
+enum ModCmd {
+    /// Every mod, whether it is active, and the files it adds or replaces.
+    List,
+    /// Create mods/<name>/ with a manifest and a README.
+    New { name: String },
 }
 
 #[derive(clap::Args)]
@@ -165,6 +176,8 @@ fn main() {
         Cmd::Asset(AssetCmd::Info { file }) => commands::asset_info(&ctx, &file),
         Cmd::Asset(AssetCmd::List) => commands::asset_list(&ctx),
         Cmd::Credits => commands::credits(&ctx),
+        Cmd::Mod(ModCmd::List) => commands::mod_list(&ctx),
+        Cmd::Mod(ModCmd::New { name }) => commands::mod_new(&ctx, &name),
         Cmd::Replay(ReplayArgs {
             cmd:
                 Some(ReplayCmd::Record {

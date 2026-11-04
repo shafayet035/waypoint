@@ -558,6 +558,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         title: "A replay no longer plays back identically",
         fix: "Something changed the simulation. The divergence tick says when; look with `wp shot --at <t>`. If the change is intended, re-record the replay.",
     },
+    ErrorDoc {
+        code: "WP-X001",
+        title: "A folder under mods/ has no mod.toml",
+        fix: "Create the mod with `wp mod new <name>`, or add mods/<name>/mod.toml with name and version.",
+    },
+    ErrorDoc {
+        code: "WP-X002",
+        title: "game.toml disables a mod that is not in mods/",
+        fix: "Remove it from [mods] disabled, or check the folder name (`wp mod list`).",
+    },
 ];
 
 pub fn find(code: &str) -> Option<&'static ErrorDoc> {

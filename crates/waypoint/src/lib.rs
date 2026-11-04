@@ -5,6 +5,7 @@
 //! `vehicles/*.vehicle.ron`, `scenes/*.scene.ron` and `tests/*.scenario.ron`.
 
 pub mod drive;
+pub mod mods;
 pub mod project;
 
 pub use wp_app as app;

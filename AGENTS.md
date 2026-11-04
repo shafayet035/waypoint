@@ -182,7 +182,12 @@ Time of day and night: scene `time_of_day: Some((hour: 21.5, hours_per_hour: 60.
 Headlights come on at dusk or in heavy rain (two spot beams + tail lamps per vehicle); roads with sidewalks
 get street lamps every 30 m (`RoadNetwork::lamps`, lit at dusk). The shader adds the nearest local lights
 (Low 16, Mid 32, Flagship 64). Sandbox: `scenes/town_night.scene.ron`.
-Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`.
+Mods (`waypoint::mods`): `mods/<id>/mod.toml` (name, version, priority, enabled); files mirror the game's
+layout and are read through a layered `Vfs` (base, then mods by priority/id): same path replaces, new path
+adds. Diagnostics point at the real file in the mod; game.toml `[mods] disabled`. `wp mod new|list`,
+`wp docs mods`, WP-X001/X002.
+Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
+WASM mod modules and per-mod capability permissions.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back

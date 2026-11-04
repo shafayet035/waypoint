@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use wp_core::{Diagnostic, Diagnostics};
-use wp_data::{Loaded, find_files, load_ron, load_toml};
+use wp_data::{Loaded, load_ron, load_toml};
 use wp_road::RoadNetworkDef;
 use wp_test::ScenarioDef;
 use wp_vehicle::{TrailerDef, VehicleDef};
@@ -25,6 +25,17 @@ pub struct GameConfig {
     pub dev: DevConfig,
     #[serde(default)]
     pub quality: QualityConfig,
+    #[serde(default)]
+    pub mods: ModsConfig,
+}
+
+/// Mod settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModsConfig {
+    /// Mod folders under mods/ to ignore.
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 
 /// Quality settings.
@@ -56,6 +67,10 @@ pub struct PluginsConfig {
 
 pub struct Project {
     pub root: PathBuf,
+    /// Mods under mods/, in load order (active or not).
+    pub mods: Vec<crate::mods::Mod>,
+    /// The game's files seen through its active mods.
+    pub vfs: crate::mods::Vfs,
     pub game: Loaded<GameConfig>,
     /// By vehicle name.
     pub vehicles: BTreeMap<String, Loaded<VehicleDef>>,
@@ -113,10 +128,12 @@ impl Project {
             }
         };
 
+        let (vfs, mods, mod_diags) = crate::mods::Vfs::open(root, &game.value.mods.disabled);
+        diags.extend(mod_diags);
         let mut failed = Vec::new();
         let mut vehicles = BTreeMap::new();
-        for path in find_files(root, VEHICLE_EXT) {
-            match load_ron::<VehicleDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
+        for (path, real) in vfs.files(VEHICLE_EXT) {
+            match load_ron::<VehicleDef>(root, &real).inspect_err(|_| failed.push(path.clone())) {
                 Ok(v) => {
                     diags.extend(VehicleDef::validate(&v));
                     if v.value.name != stem(&path, VEHICLE_EXT) {
@@ -152,8 +169,8 @@ impl Project {
         }
 
         let mut trailers = BTreeMap::new();
-        for path in find_files(root, TRAILER_EXT) {
-            match load_ron::<TrailerDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
+        for (path, real) in vfs.files(TRAILER_EXT) {
+            match load_ron::<TrailerDef>(root, &real).inspect_err(|_| failed.push(path.clone())) {
                 Ok(t) => {
                     diags.extend(TrailerDef::validate(&t));
                     trailers.insert(t.value.name.clone(), t);
@@ -163,8 +180,8 @@ impl Project {
         }
 
         let mut roads = BTreeMap::new();
-        for path in find_files(root, ROAD_EXT) {
-            match load_ron::<RoadNetworkDef>(root, &path).inspect_err(|_| failed.push(path.clone()))
+        for (path, real) in vfs.files(ROAD_EXT) {
+            match load_ron::<RoadNetworkDef>(root, &real).inspect_err(|_| failed.push(path.clone()))
             {
                 Ok(r) => {
                     diags.extend(RoadNetworkDef::validate(&r));
@@ -175,8 +192,8 @@ impl Project {
         }
 
         let mut scenes = BTreeMap::new();
-        for path in find_files(root, SCENE_EXT) {
-            match load_ron::<SceneDef>(root, &path).inspect_err(|_| failed.push(path.clone())) {
+        for (path, real) in vfs.files(SCENE_EXT) {
+            match load_ron::<SceneDef>(root, &real).inspect_err(|_| failed.push(path.clone())) {
                 Ok(s) => {
                     diags.extend(SceneDef::validate(&s));
                     scenes.insert(path, s);
@@ -186,8 +203,8 @@ impl Project {
         }
 
         let mut scenarios = BTreeMap::new();
-        for path in find_files(root, SCENARIO_EXT) {
-            match load_ron::<ScenarioDef>(root, &path) {
+        for (path, real) in vfs.files(SCENARIO_EXT) {
+            match load_ron::<ScenarioDef>(root, &real) {
                 Ok(s) => {
                     diags.extend(ScenarioDef::validate(&s));
                     scenarios.insert(stem(&path, SCENARIO_EXT).to_string(), s);
@@ -197,8 +214,8 @@ impl Project {
         }
 
         let mut missions = BTreeMap::new();
-        for path in find_files(root, MISSION_EXT) {
-            match load_ron::<wp_mission::MissionDef>(root, &path) {
+        for (path, real) in vfs.files(MISSION_EXT) {
+            match load_ron::<wp_mission::MissionDef>(root, &real) {
                 Ok(m) => {
                     missions.insert(stem(&path, MISSION_EXT).to_string(), m);
                 }
@@ -209,8 +226,8 @@ impl Project {
         let mut models = Vec::new();
         let mut assets = BTreeMap::new();
         for ext in wp_asset::MODEL_EXTS {
-            for path in find_files(root, ext) {
-                match wp_asset::load_model(root, &path) {
+            for (path, real) in vfs.files(ext) {
+                match wp_asset::load_model(root, &real) {
                     Ok(m) => {
                         if m.skipped > 0 {
                             diags.push(
@@ -232,17 +249,17 @@ impl Project {
                         diags.push(d);
                     }
                 }
-                let meta = wp_asset::meta_path(&path);
-                if !root.join(&meta).is_file() {
+                let meta_virtual = wp_asset::meta_path(&path);
+                let Some(meta) = vfs.real(&meta_virtual) else {
                     diags.push(
                         Diagnostic::error("WP-F003", "asset has no licence file")
-                            .in_file(path.clone())
+                            .in_file(real.clone())
                             .help(format!(
-                                "add {meta}: (source: \"...\", author: \"...\", licence: Cc0) — see `wp schema asset`"
+                                "add {meta_virtual}: (source: \"...\", author: \"...\", licence: Cc0) — see `wp schema asset`"
                             )),
                     );
                     continue;
-                }
+                };
                 match load_ron::<wp_asset::AssetMeta>(root, &meta) {
                     Ok(m) => {
                         if m.value.licence.needs_credit()
@@ -268,16 +285,18 @@ impl Project {
         }
 
         let mut replays = BTreeMap::new();
-        for path in find_files(root, REPLAY_EXT) {
-            match load_ron::<wp_vehicle::replay::Replay>(root, &path) {
+        for (_, real) in vfs.files(REPLAY_EXT) {
+            match load_ron::<wp_vehicle::replay::Replay>(root, &real) {
                 Ok(r) => {
-                    replays.insert(path, r);
+                    replays.insert(real, r);
                 }
                 Err(d) => diags.push(d),
             }
         }
 
         let project = Project {
+            mods,
+            vfs,
             replays,
             assets,
             models: std::sync::Arc::new(wp_asset::ModelLibrary::new(models)),
@@ -628,8 +647,8 @@ impl Project {
                 );
             }
             if let Some(script) = &d.script {
-                match std::fs::read_to_string(self.root.join(script)) {
-                    Err(_) => out.push(
+                match self.vfs.read(script).map(|(_, src)| src).ok_or(()) {
+                    Err(()) => out.push(
                         m.error_at(
                             "WP-M005",
                             "script",
@@ -835,8 +854,7 @@ impl Project {
     /// A mission's script: (path, source), if it has one that can be read.
     pub fn mission_script(&self, def: &wp_mission::MissionDef) -> Option<(String, String)> {
         let path = def.script.as_ref()?;
-        let source = std::fs::read_to_string(self.root.join(path)).ok()?;
-        Some((path.clone(), source))
+        self.vfs.read(path)
     }
 
     /// The road network a scene refers to, if any (and if it loaded).

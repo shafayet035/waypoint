@@ -601,3 +601,81 @@ fn golden_replays_catch_behaviour_changes() {
     assert_eq!(code, 0, "{v}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn mods_add_and_replace_files() {
+    let dir = temp_dir("mods");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    let (code, v) = json(&game, &["mod", "new", "heavy_car"]);
+    assert_eq!(code, 0, "{v}");
+    let m = game.join("mods/heavy_car");
+    std::fs::create_dir_all(m.join("vehicles")).unwrap();
+    std::fs::create_dir_all(m.join("scenes")).unwrap();
+    let car = std::fs::read_to_string(game.join("vehicles/hatchback.vehicle.ron")).unwrap();
+    std::fs::write(
+        m.join("vehicles/hatchback.vehicle.ron"),
+        car.replace("mass_kg: 1250.0", "mass_kg: -1.0"),
+    )
+    .unwrap();
+    let flat = std::fs::read_to_string(game.join("scenes/flat.scene.ron")).unwrap();
+    std::fs::write(
+        m.join("scenes/flat_ice.scene.ron"),
+        flat.replace("friction_scale: 1.0", "friction_scale: 0.3"),
+    )
+    .unwrap();
+
+    // The mod's broken car replaces the game's, and the error points into the mod.
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-V001");
+    assert_eq!(
+        v["diagnostics"][0]["location"]["file"],
+        "mods/heavy_car/vehicles/hatchback.vehicle.ron"
+    );
+    std::fs::write(
+        m.join("vehicles/hatchback.vehicle.ron"),
+        car.replace("mass_kg: 1250.0", "mass_kg: 1600.0"),
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["mod", "list"]);
+    assert_eq!(code, 0, "{v}");
+    let heavy = &v["mods"][0];
+    assert_eq!(heavy["replaces"][0], "vehicles/hatchback.vehicle.ron");
+    assert_eq!(heavy["adds"][0], "scenes/flat_ice.scene.ron");
+    let (code, v) = json(
+        &game,
+        &[
+            "run",
+            "--headless",
+            "--scene",
+            "scenes/flat_ice.scene.ron",
+            "--vehicle",
+            "hatchback",
+            "--seconds",
+            "1",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+
+    // Disabled in game.toml: the game's own files again.
+    let toml = std::fs::read_to_string(game.join("game.toml")).unwrap();
+    std::fs::write(
+        game.join("game.toml"),
+        format!("{toml}\n[mods]\ndisabled = [\"heavy_car\"]\n"),
+    )
+    .unwrap();
+    let (code, v) = json(
+        &game,
+        &[
+            "run",
+            "--headless",
+            "--scene",
+            "scenes/flat_ice.scene.ron",
+            "--seconds",
+            "1",
+        ],
+    );
+    assert_eq!(code, 1, "the mod's scene is gone: {v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
