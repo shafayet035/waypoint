@@ -31,6 +31,15 @@ pub fn vehicle_dynamics(world: &mut World) {
         .map(|gr| gr.friction_scale)
         .unwrap_or(1.0);
     let library = world.resource::<VehicleLibrary>();
+    // Crash damage that changes how a vehicle drives (power, steering pull).
+    let mut harm: std::collections::BTreeMap<wp_ecs::Entity, Harm> = Default::default();
+    world
+        .query::<(&Vehicle, &crate::Damage)>()
+        .for_each(|e, (veh, d)| {
+            if let Some(def) = library.0.get(&veh.model) {
+                harm.insert(e, Harm::from_damage(def, d));
+            }
+        });
     let mut events = world.get_resource_mut::<Events<VehicleEvent>>();
     let mut local_events = Vec::new();
     world
@@ -49,6 +58,7 @@ pub fn vehicle_dynamics(world: &mut World) {
                     g,
                     surface,
                     entity: e.to_string(),
+                    harm: harm.get(&e).copied().unwrap_or_default(),
                 };
                 step_vehicle(&ctx, veh, input, pose, vel, body, &mut local_events);
             }
@@ -114,6 +124,47 @@ struct Ctx<'a> {
     g: f32,
     surface: f32,
     entity: String,
+    harm: Harm,
+}
+
+/// How crash damage changes driving.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Harm {
+    /// Share of engine power left (damaged cooling, intake, drivetrain).
+    pub power: f32,
+    /// Steady steering pull from bent front suspension, rad (left positive).
+    pub pull_rad: f32,
+}
+
+impl Default for Harm {
+    fn default() -> Self {
+        Harm {
+            power: 1.0,
+            pull_rad: 0.0,
+        }
+    }
+}
+
+impl Harm {
+    /// Full power above 70 % health, falling to 35 % when wrecked; a dent on
+    /// one front corner pulls the steering towards it (about 1° per 30 cm).
+    pub fn from_damage(def: &VehicleDef, d: &crate::Damage) -> Harm {
+        let h = d.health_pct.clamp(0.0, 100.0);
+        let power = if h >= 70.0 {
+            1.0
+        } else {
+            0.35 + 0.65 * h / 70.0
+        };
+        let half_track = def.track_width_m / 2.0;
+        let pull_rad = d
+            .dents
+            .iter()
+            .filter(|dent| dent.x > def.cg_to_front_axle_m - 0.6 && dent.y.abs() > half_track * 0.4)
+            .map(|dent| dent.depth_m * 0.06 * dent.y.signum())
+            .sum::<f32>()
+            .clamp(-0.05, 0.05);
+        Harm { power, pull_rad }
+    }
 }
 
 /// The body roll model, needed again for load transfer and tipping.
@@ -172,7 +223,8 @@ fn step_vehicle(
 /// Rate-limited steering towards the driver's input.
 fn update_steering(ctx: &Ctx, veh: &mut Vehicle, input: &VehicleInput) {
     let def = ctx.def;
-    let target = input.steer.clamp(-1.0, 1.0) * def.steering.max_angle_deg.to_radians();
+    let target =
+        input.steer.clamp(-1.0, 1.0) * def.steering.max_angle_deg.to_radians() + ctx.harm.pull_rad;
     let max_step = def.steering.rate_deg_per_s.to_radians() * ctx.dt;
     veh.steer_angle += (target - veh.steer_angle).clamp(-max_step, max_step);
 }
@@ -396,7 +448,10 @@ fn update_drivetrain(
     let engine_torque = if rpm_from_wheels >= engine.redline_rpm {
         0.0
     } else if throttle > 0.02 {
-        parts::curve_torque(&engine.torque_curve, veh.engine_rpm) * throttle * veh.tc_factor
+        parts::curve_torque(&engine.torque_curve, veh.engine_rpm)
+            * throttle
+            * veh.tc_factor
+            * ctx.harm.power
     } else if rpm_from_wheels > engine.idle_rpm {
         -engine.engine_brake_nm * (rpm_from_wheels / engine.redline_rpm)
     } else {
@@ -886,6 +941,57 @@ mod tests {
         assert!(
             tc_kmh >= raw_kmh * 0.95,
             "TC should not cost acceleration: {tc_kmh} vs {raw_kmh}"
+        );
+    }
+
+    #[test]
+    fn crash_damage_costs_power_and_pulls_the_steering() {
+        let def = sandbox_vehicle("hatchback");
+        let run = |damage: Option<crate::Damage>| {
+            let (mut app, e) = app_with(&def);
+            if let Some(d) = damage {
+                app.world.insert(e, d);
+            }
+            drive(
+                &mut app,
+                e,
+                VehicleInput {
+                    throttle: 1.0,
+                    ..Default::default()
+                },
+                6.0,
+            );
+            let t = crate::telemetry(&app.world, e).unwrap();
+            (t.speed_kmh, t.position[1])
+        };
+        let (fresh_kmh, fresh_y) = run(None);
+        // A hard hit on the front left corner.
+        let wreck = crate::Damage {
+            dents: vec![crate::Dent {
+                x: 1.6,
+                y: 0.8,
+                depth_m: 0.4,
+            }],
+            health_pct: 30.0,
+        };
+        let (kmh, y) = run(Some(wreck));
+        assert!(
+            kmh < fresh_kmh * 0.8,
+            "less power: {kmh:.1} vs {fresh_kmh:.1} km/h"
+        );
+        assert!(y > fresh_y + 0.5, "pulls left: {y:.2} m vs {fresh_y:.2} m");
+        let light = crate::Damage {
+            dents: vec![crate::Dent {
+                x: -2.0,
+                y: 0.0,
+                depth_m: 0.05,
+            }],
+            health_pct: 93.0,
+        };
+        assert_eq!(
+            super::Harm::from_damage(&def, &light),
+            super::Harm::default(),
+            "a rear scrape changes nothing"
         );
     }
 }

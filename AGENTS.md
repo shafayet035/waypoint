@@ -206,7 +206,9 @@ Cab camera (`CameraMode::Cab`, `--camera cab`, C in windows): the driver's eye f
 the right for left-hand traffic, moving with roll and pitch; the cab shows a dashboard with gauges (lit at
 night), a steering wheel that turns with the wheels, pillars and the roof edge.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-WASM mod modules and per-mod capability permissions; damage effects on driving; traffic vehicles' sound.
+WASM mod modules and per-mod capability permissions; traffic vehicles' sound.
+Damage drives worse (`dynamics::Harm`): full power above 70 % health falling to 35 % when wrecked; a dent on a
+front corner pulls the steering towards it (about 1° per 30 cm).
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
