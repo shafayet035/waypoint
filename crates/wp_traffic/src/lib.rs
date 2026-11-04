@@ -52,6 +52,8 @@ pub struct TrafficStats {
     pub trips: u32,
     /// Vehicles moved elsewhere after a dead end or being stuck.
     pub respawns: u32,
+    /// Vehicles brought back near the player after falling out of range.
+    pub recycled: u32,
     /// Vehicles waiting at a junction's stop line right now.
     pub waiting: u32,
     /// Mean speed of the AI vehicles right now, km/h.
@@ -184,6 +186,10 @@ struct Itinerary {
 /// Traffic's own state between ticks (not part of snapshots).
 struct TrafficState {
     rng: SimRng,
+    /// Keep traffic this close to the player, m (None: everywhere).
+    radius: Option<f32>,
+    /// Vehicles moved back near the player after falling out of range.
+    recycled: u32,
     /// How many AI vehicles to keep on the roads.
     target: u32,
     /// Ticks until the next try at adding missing vehicles.
@@ -255,6 +261,8 @@ fn traffic(world: &mut World) {
         let kept = world.remove_resource::<TrafficState>();
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
+            radius: setup.radius_m,
+            recycled: 0,
             target: setup.count,
             top_up_in: 60,
             clear_of_player_m: setup.clear_of_player_m,
@@ -344,7 +352,10 @@ fn traffic(world: &mut World) {
                     a.trips += 1;
                 }
             }
-            Outcome::Respawn => respawn.push(e),
+            Outcome::Respawn => {
+                respawn.push(e);
+                world.resource_mut::<TrafficState>().respawns += 1;
+            }
         }
         inputs.push((e, input));
     }
@@ -353,12 +364,38 @@ fn traffic(world: &mut World) {
             *i = input;
         }
     }
-    for e in respawn {
+    // Large maps: wandering vehicles that have fallen out of range of the
+    // player come back somewhere near them.
+    let player_at = world
+        .query::<&Player>()
+        .entities()
+        .first()
+        .and_then(|e| world.get::<Pose>(*e).map(|p| p.position));
+    let out_of_range: Vec<Entity> = match (world.resource::<TrafficState>().radius, player_at) {
+        (Some(r), Some(p)) => {
+            let st = world.resource::<TrafficState>();
+            st.plans
+                .iter()
+                .filter(|(e, plan)| {
+                    plan.itinerary.is_none()
+                        && !respawn.contains(*e)
+                        && world
+                            .get::<Pose>(**e)
+                            .is_some_and(|q| q.position.distance(p) > r * 1.1)
+                })
+                .map(|(e, _)| *e)
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    world.resource_mut::<TrafficState>().recycled += out_of_range.len() as u32;
+    for e in respawn.into_iter().chain(out_of_range) {
         spawn_one(world, &roads, Some(e));
     }
     let state = world.resource::<TrafficState>();
     let n = state.plans.len() as u32;
     let respawns = state.respawns;
+    let recycled = state.recycled;
     drop(state);
     let trips = world
         .query::<&TrafficAgent>()
@@ -372,6 +409,7 @@ fn traffic(world: &mut World) {
             vehicles: n,
             trips,
             respawns,
+            recycled,
             waiting,
             mean_kmh: if n > 0 { speeds / n as f32 } else { 0.0 },
         },
@@ -465,6 +503,8 @@ pub fn autopilot(world: &mut World, e: Entity, stops: Vec<Waypoint>) -> bool {
             .map_or(0, |mut r| r.next_u64());
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
+            radius: None,
+            recycled: 0,
             target: 0,
             top_up_in: 60,
             clear_of_player_m: 0.0,
@@ -1258,6 +1298,18 @@ fn spawn_one(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
     if candidates.is_empty() {
         return;
     }
+    let radius = world.resource::<TrafficState>().radius;
+    // Within range of the player, if traffic is kept near them.
+    let candidates: Vec<LaneId> = match (radius, player) {
+        (Some(r), Some(q)) => candidates
+            .into_iter()
+            .filter(|&l| net.lanes[l].path.points.iter().any(|p| p.distance(q) < r))
+            .collect(),
+        _ => candidates,
+    };
+    if candidates.is_empty() {
+        return;
+    }
     let mut state = world.resource_mut::<TrafficState>();
     let clear = state.clear_of_player_m;
     let mut found = None;
@@ -1266,7 +1318,9 @@ fn spawn_one(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
         let len = net.lanes[lane].path.length();
         let s = state.rng.range_f32(25.0, len - 25.0);
         let (p, dir) = net.lanes[lane].path.sample(s);
+        let too_far = matches!((radius, player), (Some(r), Some(q)) if q.distance(p) > r);
         if player.is_some_and(|q| q.distance(p) < clear)
+            || too_far
             || others.iter().any(|q| q.distance(p) < 25.0)
         {
             continue;
@@ -1288,9 +1342,7 @@ fn spawn_one(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
     let model = state.models[pick].clone();
     let pace = state.rng.range_f32(0.85, 1.05);
     let limit = net.lanes[lane].speed_limit_kmh;
-    if reuse.is_some() {
-        state.respawns += 1;
-    }
+
     let plan = new_plan(net, route, s);
     drop(state);
     let def = world.resource::<VehicleLibrary>().0.get(&model).cloned();

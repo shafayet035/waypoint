@@ -142,7 +142,10 @@ two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 
 Mission scripts (`wp_script`): Luau via mlua (vendored C++; the Android build sets
 CXX_aarch64_linux_android), sandboxed, no `os`/clock, `math.random` seeded. Hooks on_start/on_tick/
 on_arrive/on_depart/on_complete/on_fail; `mission.*` API queues commands. `wp check` compiles scripts
-(WP-L001 with the line); `wp docs scripting`. route_1.lua adds a school group on lap two. `town_traffic` gate: 12
+(WP-L001 with the line); `wp docs scripting`. route_1.lua adds a school group on lap two.
+Scale: `RoadNetwork::lane_at` uses a 25 m lane grid (results identical to a full scan); scene traffic
+can set `radius_m` so AI vehicles that fall out of range of the player are recycled near them (big OSM
+maps: Gulshan, 25 cars within 250 m of a moving player). `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

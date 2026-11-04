@@ -75,7 +75,8 @@ Assertions
 Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
 Collision (bodies touching), RanRedLight, HitPedestrian.
 
-Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"])), pedestrians: Some((count: 30)) (they walk
+Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
+near the player on big maps), pedestrians: Some((count: 30)) (they walk
 roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))].
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))

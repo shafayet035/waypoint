@@ -70,6 +70,11 @@ pub struct TrafficDef {
     /// No AI vehicle starts closer than this to the player, m.
     #[serde(default = "default_clear_of_player_m")]
     pub clear_of_player_m: f32,
+    /// Keep traffic within this distance of the player, m: vehicles that
+    /// fall further behind reappear ahead or around (for large maps). None:
+    /// traffic everywhere.
+    #[serde(default)]
+    pub radius_m: Option<f32>,
 }
 
 fn default_clear_of_player_m() -> f32 {

@@ -268,6 +268,46 @@ pub struct RoadNetwork {
     pub sidewalks: crate::sidewalk::SidewalkGraph,
     /// Bus stops, placed on their kerb-side lane.
     pub stops: Vec<Stop>,
+    /// Road lanes by grid cell, for finding the lane under a point quickly.
+    lane_grid: std::collections::BTreeMap<(i32, i32), Vec<LaneId>>,
+}
+
+/// Size of a lane-grid cell, m.
+const GRID_M: f32 = 25.0;
+
+fn cell_of(p: Vec2) -> (i32, i32) {
+    ((p.x / GRID_M).floor() as i32, (p.y / GRID_M).floor() as i32)
+}
+
+/// Every cell a lane's path (grown by its half width and a margin) touches.
+fn lane_grid(lanes: &[Lane]) -> std::collections::BTreeMap<(i32, i32), Vec<LaneId>> {
+    let mut grid: std::collections::BTreeMap<(i32, i32), Vec<LaneId>> = Default::default();
+    for (id, lane) in lanes.iter().enumerate() {
+        if !matches!(lane.kind, LaneKind::Road { .. }) {
+            continue;
+        }
+        let reach = lane.width_m / 2.0 + 0.6;
+        for w in lane.path.points.windows(2) {
+            let (lo, hi) = (
+                w[0].min(w[1]) - Vec2::splat(reach),
+                w[0].max(w[1]) + Vec2::splat(reach),
+            );
+            let (c0, c1) = (cell_of(lo), cell_of(hi));
+            for x in c0.0..=c1.0 {
+                for y in c0.1..=c1.1 {
+                    let list = grid.entry((x, y)).or_default();
+                    if list.last() != Some(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+        }
+    }
+    for list in grid.values_mut() {
+        list.sort_unstable();
+        list.dedup();
+    }
+    grid
 }
 
 /// A bus stop, placed: buses stop in `lane` at `s`.
@@ -674,6 +714,7 @@ impl RoadNetwork {
                 })
             })
             .collect();
+        let lane_grid = lane_grid(&lanes);
         RoadNetwork {
             name: def.name.clone(),
             drive_side: def.drive_side,
@@ -682,6 +723,7 @@ impl RoadNetwork {
             junctions,
             sidewalks,
             stops,
+            lane_grid,
         }
     }
 
@@ -707,10 +749,10 @@ impl RoadNetwork {
     /// The road lane nearest to `p` within its width: (lane, arc length, lateral offset).
     pub fn lane_at(&self, p: Vec2) -> Option<(LaneId, f32, f32)> {
         let mut best: Option<(LaneId, f32, f32, f32)> = None;
-        for (i, lane) in self.lanes.iter().enumerate() {
-            if !matches!(lane.kind, LaneKind::Road { .. }) {
-                continue;
-            }
+        // Only lanes passing through this grid cell can be within reach.
+        let candidates = self.lane_grid.get(&cell_of(p))?;
+        for &i in candidates {
+            let lane = &self.lanes[i];
             let (s, lat, dist) = lane.path.project(p);
             if dist <= lane.width_m / 2.0 + 0.5 && best.is_none_or(|b| dist < b.3) {
                 best = Some((i, s, lat, dist));
