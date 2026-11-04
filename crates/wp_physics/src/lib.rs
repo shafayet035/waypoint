@@ -9,7 +9,7 @@
 
 pub mod contact;
 
-pub use contact::{Collider, Contact, box_contact, solve_contacts};
+pub use contact::{Collider, Contact, Walls, box_contact, solve_contacts};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use wp_app::{App, Plugin};

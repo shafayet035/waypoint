@@ -389,11 +389,17 @@ pub fn apply_scene(
 ) {
     let net = roads.map(|def| std::sync::Arc::new(wp_road::RoadNetwork::build(def)));
     match scenery {
-        Some(def) => world.insert_resource(scenery::CurrentScenery(std::sync::Arc::new(
-            scenery::Scenery::build(def, net.as_deref()),
-        ))),
+        Some(def) => {
+            let built = scenery::Scenery::build(def, net.as_deref());
+            // Buildings are solid.
+            world.insert_resource(wp_physics::Walls::new(
+                built.buildings.iter().map(|b| b.footprint.as_slice()),
+            ));
+            world.insert_resource(scenery::CurrentScenery(std::sync::Arc::new(built)));
+        }
         None => {
             world.remove_resource::<scenery::CurrentScenery>();
+            world.remove_resource::<wp_physics::Walls>();
         }
     }
     match net {

@@ -1,0 +1,9 @@
+// A building straight ahead of the start, for crash tests.
+(
+  name: "crash_wall",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  scenery: Some("scenery/wall.scenery.ron"),
+  spawns: [
+    (name: "run_up", position: (0.0, 0.0), heading_deg: 0.0),
+  ],
+)

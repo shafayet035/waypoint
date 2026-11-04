@@ -1,12 +1,13 @@
 //! Collision events between vehicles and trailers. The physics contact
 //! solver (`wp_physics::contact`) makes bodies bump and push each other; this
 //! reports, once per tick, which pairs have just started touching, as a
-//! `Collision` event to each of them.
+//! `Collision` event to each of them. A body that runs into a building
+//! (`wp_physics::Walls`) gets a `Collision` with `other: "building"`.
 
 use crate::{VehicleDef, VehicleEvent};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use wp_ecs::{Component, Entity, Events, World};
 use wp_physics::{Collider, PinJoint, Pose, RigidBody, Velocity};
 
@@ -86,6 +87,13 @@ pub fn vehicle_footprint(def: &VehicleDef) -> Footprint {
 #[derive(Clone, Debug, Default)]
 pub struct Contacts(pub BTreeSet<(Entity, Entity)>);
 
+/// Bodies touching a building at the last check.
+#[derive(Clone, Debug, Default)]
+pub struct WallContacts(pub BTreeSet<Entity>);
+
+/// What a body hit, as named in `Collision` events.
+pub const BUILDING: &str = "building";
+
 /// Separating-axis test for two convex quadrilaterals.
 pub fn overlap(a: &[Vec2; 4], b: &[Vec2; 4]) -> bool {
     let axes = |q: &[Vec2; 4]| [q[1] - q[0], q[2] - q[1]];
@@ -145,10 +153,41 @@ pub fn detect_collisions(world: &mut World) {
         .unwrap_or_default();
     let new: Vec<(Entity, Entity)> = now.difference(&before).copied().collect();
     world.insert_resource(Contacts(now));
+    // Bodies against buildings.
+    let mut walls_now: BTreeMap<Entity, [Vec2; 4]> = BTreeMap::new();
+    if let Some(walls) = world.get_resource::<wp_physics::Walls>() {
+        for (e, grown, pos, r) in &bodies {
+            if let Some(w) = walls
+                .near(*pos, *r)
+                .into_iter()
+                .find(|w| overlap(grown, &walls.boxes[*w as usize]))
+            {
+                walls_now.insert(*e, walls.boxes[w as usize]);
+            }
+        }
+    }
+    let walls_before = world
+        .get_resource::<WallContacts>()
+        .map(|c| c.0.clone())
+        .unwrap_or_default();
+    let new_walls: Vec<(Entity, [Vec2; 4])> = walls_now
+        .iter()
+        .filter(|(e, _)| !walls_before.contains(e))
+        .map(|(e, q)| (*e, *q))
+        .collect();
+    if !walls_now.is_empty() || world.has_resource::<WallContacts>() {
+        world.insert_resource(WallContacts(walls_now.keys().copied().collect()));
+    }
     let impacts = wp_physics::contact::take_impacts(world);
-    if new.is_empty() {
+    if new.is_empty() && new_walls.is_empty() {
         return;
     }
+    let velocity_at = |world: &World, e: Entity, p: Vec2| {
+        let pos = world.get::<Pose>(e).map(|p| p.position).unwrap_or_default();
+        let v = world.get::<Velocity>(e).map(|v| *v).unwrap_or_default();
+        let r = p - pos;
+        v.linear + Vec2::new(-v.angular * r.y, v.angular * r.x)
+    };
     let corners = |e: Entity| bodies.iter().find(|b| b.0 == e).map(|b| b.1);
     let mut hits = Vec::new();
     for &(a, b) in &new {
@@ -156,26 +195,38 @@ pub fn detect_collisions(world: &mut World) {
             continue;
         };
         let contact = wp_physics::contact::box_contact(&ca, &cb);
-        let solved = impacts.0.get(&(a, b)).copied();
+        let solved = impacts.pairs.get(&(a, b)).copied();
         let point = solved.map(|(_, p)| p).or(contact.map(|c| c.point));
         // Closing speed at first contact (from the solver), else now.
         let kmh = match (solved, contact) {
             (Some((closing, _)), _) => closing.max(0.0) * 3.6,
             (None, Some(c)) => {
-                let at = |e: Entity| {
-                    let p = world.get::<Pose>(e).map(|p| p.position).unwrap_or_default();
-                    let v = world.get::<Velocity>(e).map(|v| *v).unwrap_or_default();
-                    let r = c.point - p;
-                    v.linear + Vec2::new(-v.angular * r.y, v.angular * r.x)
-                };
-                (at(a) - at(b)).dot(c.normal).abs() * 3.6
+                (velocity_at(world, a, c.point) - velocity_at(world, b, c.point))
+                    .dot(c.normal)
+                    .abs()
+                    * 3.6
             }
             (None, None) => 0.0,
         };
         let mass = |e: Entity| world.get::<RigidBody>(e).map_or(1000.0, |b| b.mass);
         let (ma, mb) = (mass(a), mass(b));
-        hits.push((a, b, kmh, point, mb / (ma + mb)));
-        hits.push((b, a, kmh, point, ma / (ma + mb)));
+        hits.push((a, b.to_string(), kmh, point, mb / (ma + mb)));
+        hits.push((b, a.to_string(), kmh, point, ma / (ma + mb)));
+    }
+    // A building does not give: the body takes all of the crush.
+    for (e, wall) in new_walls {
+        let Some(corners) = corners(e) else {
+            continue;
+        };
+        let contact = wp_physics::contact::box_contact(&wall, &corners);
+        let solved = impacts.walls.get(&e).copied();
+        let point = solved.map(|(_, p)| p).or(contact.map(|c| c.point));
+        let kmh = match (solved, contact) {
+            (Some((closing, _)), _) => closing.max(0.0) * 3.6,
+            (None, Some(c)) => velocity_at(world, e, c.point).dot(c.normal).abs() * 3.6,
+            (None, None) => 0.0,
+        };
+        hits.push((e, BUILDING.to_string(), kmh, point, 1.0));
     }
     for &(e, _, kmh, point, share) in &hits {
         let depth = dent_depth_m(kmh, share);
@@ -206,7 +257,7 @@ pub fn detect_collisions(world: &mut World) {
         for (e, other, kmh, _, _) in hits {
             events.send(VehicleEvent::Collision {
                 entity: e.to_string(),
-                other: other.to_string(),
+                other,
                 impact_kmh: kmh,
             });
         }

@@ -4,6 +4,9 @@
 //! and spin each other instead of passing through. Solved every substep,
 //! after joints. Bodies joined by a [`PinJoint`] (a tractor and its trailer)
 //! never collide with each other.
+//!
+//! Buildings are [`Walls`]: fixed, immovable segments (a world resource built
+//! from the scene's scenery). Bodies stop against them the same way.
 
 use crate::{PinJoint, Pose, RigidBody, Velocity, cross_sv, cross_vv};
 use glam::Vec2;
@@ -121,12 +124,92 @@ struct Body {
     radius: f32,
 }
 
-/// Push touching bodies apart (velocity impulses, then a little position).
-/// Hardest closing speed (m/s) and where, per touching pair since the last
-/// [`take_impacts`]: the contact solver stops bodies within a substep, so
-/// this is the only place the impact speed is still known.
+/// Hardest closing speed (m/s) and where, per touching pair (and per body
+/// against walls) since the last [`take_impacts`]: the contact solver stops
+/// bodies within a substep, so this is the only place the impact speed is
+/// still known.
 #[derive(Clone, Debug, Default)]
-pub struct Impacts(pub std::collections::BTreeMap<(Entity, Entity), (f32, Vec2)>);
+pub struct Impacts {
+    pub pairs: std::collections::BTreeMap<(Entity, Entity), (f32, Vec2)>,
+    pub walls: std::collections::BTreeMap<Entity, (f32, Vec2)>,
+}
+
+/// How far walls reach into the building behind their face, m: thick enough
+/// that a fast body cannot pass through within one physics step.
+pub const WALL_THICKNESS_M: f32 = 0.5;
+/// Grid cell for finding walls near a body, m.
+const WALL_CELL_M: f32 = 16.0;
+
+/// Fixed walls (building sides) that bodies cannot pass. Each is a thin box
+/// behind a face segment; build with [`Walls::new`] from outlines.
+#[derive(Clone, Debug, Default)]
+pub struct Walls {
+    /// Corners of each wall's box, going round it; the first two are the face.
+    pub boxes: Vec<[Vec2; 4]>,
+    grid: std::collections::BTreeMap<(i32, i32), Vec<u32>>,
+}
+
+impl Walls {
+    /// Walls round counter-clockwise outlines (seen from above): each edge
+    /// faces outwards and is backed by [`WALL_THICKNESS_M`] of wall.
+    pub fn new<'a>(outlines: impl IntoIterator<Item = &'a [Vec2]>) -> Self {
+        let mut walls = Walls::default();
+        for outline in outlines {
+            let n = outline.len();
+            for i in 0..n {
+                let (a, b) = (outline[i], outline[(i + 1) % n]);
+                let len = a.distance(b);
+                if len < 0.05 {
+                    continue;
+                }
+                let d = (b - a) / len;
+                let inward = Vec2::new(-d.y, d.x) * WALL_THICKNESS_M;
+                walls.push([a, b, b + inward, a + inward]);
+            }
+        }
+        walls
+    }
+
+    fn push(&mut self, q: [Vec2; 4]) {
+        let k = self.boxes.len() as u32;
+        let (lo, hi) = bounds(&q);
+        for cx in cell(lo.x)..=cell(hi.x) {
+            for cy in cell(lo.y)..=cell(hi.y) {
+                self.grid.entry((cx, cy)).or_default().push(k);
+            }
+        }
+        self.boxes.push(q);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.boxes.is_empty()
+    }
+
+    /// Indices of walls whose cells touch the circle at `p` of radius `r`, in order.
+    pub fn near(&self, p: Vec2, r: f32) -> Vec<u32> {
+        let mut out = Vec::new();
+        for cx in cell(p.x - r)..=cell(p.x + r) {
+            for cy in cell(p.y - r)..=cell(p.y + r) {
+                if let Some(v) = self.grid.get(&(cx, cy)) {
+                    out.extend_from_slice(v);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+fn cell(x: f32) -> i32 {
+    (x / WALL_CELL_M).floor() as i32
+}
+
+fn bounds(q: &[Vec2; 4]) -> (Vec2, Vec2) {
+    let lo = q.iter().copied().fold(Vec2::splat(f32::MAX), Vec2::min);
+    let hi = q.iter().copied().fold(Vec2::splat(f32::MIN), Vec2::max);
+    (lo, hi)
+}
 
 /// The impacts recorded since the last call, emptied.
 pub fn take_impacts(world: &mut World) -> Impacts {
@@ -136,6 +219,8 @@ pub fn take_impacts(world: &mut World) -> Impacts {
         .unwrap_or_default()
 }
 
+/// Push touching bodies apart (velocity impulses, then a little position),
+/// and out of walls.
 pub fn solve_contacts(world: &mut World) {
     let mut bodies: Vec<Body> = Vec::new();
     world
@@ -151,7 +236,7 @@ pub fn solve_contacts(world: &mut World) {
                 radius: c.radius(),
             });
         });
-    if bodies.len() < 2 {
+    if bodies.is_empty() {
         return;
     }
     let joined: BTreeSet<(Entity, Entity)> = world
@@ -183,7 +268,25 @@ pub fn solve_contacts(world: &mut World) {
             }
         }
     }
-    if contacts.is_empty() {
+    // Walls: (body, contact from the wall to the body, bounce, normal and
+    // friction impulse so far).
+    let mut wall_contacts: Vec<(usize, Contact, f32, f32, f32)> = Vec::new();
+    let mut wall_impacts = Vec::new();
+    if let Some(walls) = world.get_resource::<Walls>() {
+        for (k, b) in bodies.iter().enumerate() {
+            for w in walls.near(b.pose.position, b.radius) {
+                let q = &walls.boxes[w as usize];
+                if let Some(c) = box_contact(q, &b.corners) {
+                    let r = c.point - b.pose.position;
+                    let vn = (b.vel.linear + cross_sv(b.vel.angular, r)).dot(c.normal);
+                    let bounce = if vn < -0.5 { -RESTITUTION * vn } else { 0.0 };
+                    wall_impacts.push((b.entity, -vn, c.point));
+                    wall_contacts.push((k, c, bounce, 0.0, 0.0));
+                }
+            }
+        }
+    }
+    if contacts.is_empty() && wall_contacts.is_empty() {
         return;
     }
     if !world.has_resource::<Impacts>() {
@@ -192,7 +295,13 @@ pub fn solve_contacts(world: &mut World) {
     {
         let mut rec = world.resource_mut::<Impacts>();
         for (pair, closing, point) in impacts {
-            let e = rec.0.entry(pair).or_insert((0.0, point));
+            let e = rec.pairs.entry(pair).or_insert((0.0, point));
+            if closing > e.0 {
+                *e = (closing, point);
+            }
+        }
+        for (body, closing, point) in wall_impacts {
+            let e = rec.walls.entry(body).or_insert((0.0, point));
             if closing > e.0 {
                 *e = (closing, point);
             }
@@ -235,6 +344,24 @@ pub fn solve_contacts(world: &mut World) {
             contact.4 = new_pn;
             contact.5 = new_pt;
         }
+        for contact in wall_contacts.iter_mut() {
+            let (k, c, bounce, pn, pt) = *contact;
+            let b = &bodies[k];
+            let r = c.point - b.pose.position;
+            let n = c.normal;
+            let t = Vec2::new(-n.y, n.x);
+            let v = b.vel.linear + cross_sv(b.vel.angular, r);
+            let mass_along = |d: Vec2| b.inv_mass + b.inv_inertia * cross_vv(r, d).powi(2);
+            let new_pn = (pn - (v.dot(n) - bounce) / mass_along(n)).max(0.0);
+            let limit = BODY_FRICTION * new_pn;
+            let new_pt = (pt - v.dot(t) / mass_along(t)).clamp(-limit, limit);
+            let p = n * (new_pn - pn) + t * (new_pt - pt);
+            let (im, ii) = (b.inv_mass, b.inv_inertia);
+            bodies[k].vel.linear += p * im;
+            bodies[k].vel.angular += cross_vv(r, p) * ii;
+            contact.3 = new_pn;
+            contact.4 = new_pt;
+        }
     }
     // Remove most of the overlap, the lighter body moving more.
     for &(i, j, c, ..) in &contacts {
@@ -244,7 +371,15 @@ pub fn solve_contacts(world: &mut World) {
         bodies[i].pose.position -= c.normal * push * si;
         bodies[j].pose.position += c.normal * push * sj;
     }
-    let touched: BTreeSet<usize> = contacts.iter().flat_map(|c| [c.0, c.1]).collect();
+    // Walls do not move: the body takes all of the push.
+    for &(k, c, ..) in &wall_contacts {
+        bodies[k].pose.position += c.normal * (c.depth - SLOP_M).max(0.0) * PUSH_OUT;
+    }
+    let touched: BTreeSet<usize> = contacts
+        .iter()
+        .flat_map(|c| [c.0, c.1])
+        .chain(wall_contacts.iter().map(|c| c.0))
+        .collect();
     for k in touched {
         let b = &bodies[k];
         if let Some(mut v) = world.get_mut::<Velocity>(b.entity) {

@@ -241,4 +241,9 @@ like road tiles (`TileCache`). WP-B001–B007; `wp docs scenery`, `wp schema sce
 `wp import osm` also writes `scenery/<name>.scenery.ron` from `building=*` outlines (`osm::import_with_buildings`: height
 from `height`, else `building:levels` × 3 m + 0.5, else typical for the kind; style from the kind), leaving out buildings that
 stand on the imported roads (a 0.8 × 0.66 km Gulshan export: 290 kept, 92 left out).
+Buildings are solid: `apply_scene` turns their outlines into `wp_physics::Walls` (a 0.5 m thin box behind each face, in a
+16 m grid); the contact solver stops bodies against them (immovable, same restitution and friction), records
+`Impacts.walls`, and `detect_collisions` sends `Collision { other: "building" }` with the whole dent on the vehicle.
+Gate `crash_into_building`: 75 km/h into a warehouse wall, stops at the wall, never through. Chase, side and
+showcase cameras pull in front of the first wall between them and the car (`Scenery::first_hit`).
 Not yet: testing on physical phones; running on an iOS simulator.

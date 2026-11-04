@@ -1,0 +1,7 @@
+// One warehouse whose front wall crosses the run-up at x = 60 m, for crash tests.
+(
+  name: "wall",
+  buildings: [
+    (footprint: [(60.0, -15.0), (85.0, -15.0), (85.0, 15.0), (60.0, 15.0)], height_m: 9.0, style: Some("industrial")),
+  ],
+)

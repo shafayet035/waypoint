@@ -319,6 +319,18 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         }
         None => mode.camera(&Pose::default(), 4.2),
     };
+    // Outside cameras stay out of buildings: pull in in front of the first wall.
+    let mut camera = camera;
+    if matches!(
+        mode,
+        CameraMode::Chase | CameraMode::Side | CameraMode::Showcase
+    ) && let Some(scenery) = world.get_resource::<wp_world::scenery::CurrentScenery>()
+        && let Some(t) = scenery.0.first_hit(camera.target, camera.eye)
+    {
+        let span = camera.eye - camera.target;
+        let keep = ((t * span.length() - 0.5) / span.length()).max(0.08);
+        camera.eye = camera.target + span * keep;
+    }
     if weather.rain > 0.01 {
         let t = world
             .get_resource::<wp_core::SimTime>()

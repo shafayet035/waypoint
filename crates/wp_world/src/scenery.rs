@@ -276,6 +276,49 @@ pub struct Scenery {
     pub buildings: Vec<Building>,
 }
 
+impl Scenery {
+    /// Where the straight line from `from` to `to` first enters a building,
+    /// as a share of its length (0–1), if it does. Cameras use it to stay
+    /// out of walls.
+    pub fn first_hit(&self, from: Vec3, to: Vec3) -> Option<f32> {
+        let (a, b) = (from.truncate(), to.truncate());
+        let (lo, hi) = (a.min(b), a.max(b));
+        let d = b - a;
+        let mut best: Option<f32> = None;
+        for bld in &self.buildings {
+            if from.z.min(to.z) > bld.height_m {
+                continue;
+            }
+            let p = &bld.footprint;
+            let (blo, bhi) = p.iter().fold(
+                (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)),
+                |(l, h), q| (l.min(*q), h.max(*q)),
+            );
+            if bhi.x < lo.x || bhi.y < lo.y || blo.x > hi.x || blo.y > hi.y {
+                continue;
+            }
+            for i in 0..p.len() {
+                let (c, e) = (p[i], p[(i + 1) % p.len()]);
+                let f = e - c;
+                let den = d.perp_dot(f);
+                if den.abs() < 1e-9 {
+                    continue;
+                }
+                let t = (c - a).perp_dot(f) / den;
+                let u = (c - a).perp_dot(d) / den;
+                if !(0.0..=1.0).contains(&t) || !(0.0..=1.0).contains(&u) {
+                    continue;
+                }
+                let z = from.z + (to.z - from.z) * t;
+                if z <= bld.height_m && best.is_none_or(|x| t < x) {
+                    best = Some(t);
+                }
+            }
+        }
+        best
+    }
+}
+
 /// World resource: the current scene's scenery (read by rendering).
 #[derive(Clone, Debug)]
 pub struct CurrentScenery(pub std::sync::Arc<Scenery>);
@@ -935,6 +978,36 @@ mod tests {
             let face = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
             assert!(face.dot(Vec3::from(m.normals[t[0] as usize])) > 0.0);
         }
+    }
+
+    #[test]
+    fn lines_of_sight_stop_at_walls() {
+        let s = Scenery::build(
+            &SceneryDef {
+                name: "t".into(),
+                buildings: vec![BuildingDef {
+                    footprint: vec![(10.0, -5.0), (20.0, -5.0), (20.0, 5.0), (10.0, 5.0)],
+                    height_m: 8.0,
+                    style: None,
+                }],
+                ..Default::default()
+            },
+            None,
+        );
+        let t = s
+            .first_hit(Vec3::new(0.0, 0.0, 2.0), Vec3::new(20.0, 0.0, 2.0))
+            .unwrap();
+        assert!((t - 0.5).abs() < 1e-5);
+        assert!(
+            s.first_hit(Vec3::new(0.0, 0.0, 9.0), Vec3::new(20.0, 0.0, 9.0))
+                .is_none(),
+            "over the roof"
+        );
+        assert!(
+            s.first_hit(Vec3::new(0.0, 8.0, 2.0), Vec3::new(20.0, 8.0, 2.0))
+                .is_none(),
+            "beside it"
+        );
     }
 
     #[test]

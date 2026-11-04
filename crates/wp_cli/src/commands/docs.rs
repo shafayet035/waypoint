@@ -91,7 +91,7 @@ Assertions
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
 Events: GearShift, AbsEngaged, AbsReleased, EscEngaged, EscReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
-Collision (bodies touching; impact_kmh, and a dent in each: telemetry health_pct), RanRedLight, HitPedestrian.
+Collision (bodies touching, or other: \"building\"; impact_kmh, and a dent in each: telemetry health_pct), RanRedLight, HitPedestrian.
 
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
@@ -225,7 +225,8 @@ node to its `to` node. Heights round to whole storeys. The same seed always buil
 Styles: walls (sRGB, one picked per building), roof, storey_m, bay_m (window spacing; each wall fits a
 whole number of bays), window (glass share of a bay, 0 = blank), lit (share of windows lit at night),
 shops (shop windows on the ground floor). Windows are drawn by the renderer, not modelled.
-Buildings cast shadows and stream in 400 m tiles like the roads. `wp check`: WP-B001–B007 (B007 warns
+Buildings are solid (vehicles stop against their walls, get a Collision with other: \"building\" and take
+the whole dent), cast shadows, keep outside cameras in front of them, and stream in 400 m tiles like the roads. `wp check`: WP-B001–B007 (B007 warns
 when a hand-placed building stands on a road or sidewalk). Schema: `wp schema scenery`.
 `wp import osm` writes the map's building outlines (height from height or building:levels, else typical
 for the kind; style from the building kind) and leaves out any standing on the imported roads.
