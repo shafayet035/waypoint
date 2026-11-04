@@ -14,7 +14,7 @@ pub mod mesh;
 
 pub use extract::{
     BlobShadow, Camera, CameraMode, ChaseSmoothing, DeformedModel, DrawItem, Environment,
-    FrameView, MeshId, PointLight, extract, extract_with,
+    FrameView, MeshId, PointLight, ViewOptions, extract, extract_view, extract_with,
 };
 
 use bytemuck::{Pod, Zeroable};

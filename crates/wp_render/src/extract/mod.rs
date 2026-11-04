@@ -129,6 +129,28 @@ pub fn extract(world: &World, mode: CameraMode) -> FrameView {
 /// instead of the vehicle's exact heading: a window smooths it over frames
 /// (see [`ChaseSmoothing`]) so the view trails small yaw motions.
 pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>) -> FrameView {
+    extract_view(
+        world,
+        mode,
+        &ViewOptions {
+            chase_heading,
+            ..Default::default()
+        },
+    )
+}
+
+/// Per-frame camera controls from a window.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewOptions {
+    /// Smoothed heading for the chase camera (see [`ChaseSmoothing`]).
+    pub chase_heading: Option<f32>,
+    /// Head turn in the cab: yaw (left positive) and pitch (up positive), rad.
+    pub look: (f32, f32),
+}
+
+/// [`extract`] with window camera controls.
+pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> FrameView {
+    let chase_heading = view.chase_heading;
     let mut items = Vec::new();
     let mut shadows = Vec::new();
     let mut lights = Vec::new();
@@ -277,9 +299,13 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
                     let body = body_matrix(&def, &pose, &veh);
                     vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
                     let at = body.transform_point3(eye);
+                    let (yaw, pitch) = view.look;
+                    let gaze = Quat::from_rotation_z(yaw.clamp(-2.4, 2.4))
+                        * Quat::from_rotation_y(-pitch.clamp(-0.6, 0.6))
+                        * Vec3::new(1.0, 0.0, -0.06);
                     Camera {
                         eye: at,
-                        target: at + body.transform_vector3(Vec3::new(1.0, 0.0, -0.06)) * 10.0,
+                        target: at + body.transform_vector3(gaze) * 10.0,
                         up: body.transform_vector3(Vec3::Z),
                         fov_y_deg: fov,
                     }

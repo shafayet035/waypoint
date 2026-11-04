@@ -3,6 +3,7 @@
 //! The simulation always advances in whole 60 Hz ticks (so it stays
 //! deterministic); rendering runs at display rate and only reads the world.
 //! Controls: W/↑ throttle, S/↓ brake (hold at a standstill to reverse), A/← and D/→ steer, C camera,
+//! Q/E or a mouse drag to look around in the cab,
 //! R reset, P pause, Esc quit. On touch screens: left thumb drags to steer,
 //! right thumb high for throttle, low for brake, tap the top edge for camera. A control client (`wp run --control <port>`)
 //! can query and drive the same session while it runs.
@@ -22,7 +23,7 @@ use wp_control::{Session, tcp::Pending};
 use wp_core::Diagnostic;
 use wp_ecs::Entity;
 use wp_physics::Pose;
-use wp_render::{CameraMode, ChaseSmoothing, Renderer, extract_with};
+use wp_render::{CameraMode, ChaseSmoothing, Renderer, ViewOptions, extract_view};
 use wp_rhi::{Gpu, GpuInfo, wgpu};
 use wp_vehicle::{Controls, DriverAids, Vehicle, VehicleInput, VehicleLibrary};
 
@@ -117,6 +118,9 @@ fn run_with_event_loop(
         ticks: 0,
         last_title: Instant::now(),
         audio: None,
+        look: (0.0, 0.0),
+        drag: None,
+        mouse_down: false,
     };
     if handler.opts.audio {
         handler.audio = Some(audio::EngineAudio::start());
@@ -153,6 +157,9 @@ struct Keys {
     brake: bool,
     left: bool,
     right: bool,
+    /// Q / E: glance left / right in the cab.
+    look_left: bool,
+    look_right: bool,
 }
 
 impl Keys {
@@ -230,6 +237,10 @@ struct Handler {
     last_title: Instant,
     /// Engine sound, if a sound device opened.
     audio: Option<audio::EngineAudio>,
+    /// Head turn in the cab (yaw, pitch), rad, and the mouse drag driving it.
+    look: (f32, f32),
+    drag: Option<(f64, f64)>,
+    mouse_down: bool,
 }
 
 impl Handler {
@@ -285,6 +296,8 @@ impl Handler {
             KeyCode::KeyS | KeyCode::ArrowDown => self.keys.brake = down,
             KeyCode::KeyA | KeyCode::ArrowLeft => self.keys.left = down,
             KeyCode::KeyD | KeyCode::ArrowRight => self.keys.right = down,
+            KeyCode::KeyQ => self.keys.look_left = down,
+            KeyCode::KeyE => self.keys.look_right = down,
             KeyCode::KeyC if down && !event.repeat => self.camera = self.camera.next(),
             KeyCode::KeyP if down && !event.repeat => self.session.paused = !self.session.paused,
             KeyCode::KeyR if down && !event.repeat => self.reset_player(),
@@ -386,7 +399,31 @@ impl Handler {
             .player
             .and_then(|e| self.session.app.world.get::<Pose>(e))
             .map(|p| self.chase.update(p.heading, real_dt as f32));
-        let frame = extract_with(&self.session.app.world, self.camera, heading);
+        // Glance with Q / E, or drag with the mouse; let go and the view
+        // swings back to the road.
+        let dt = real_dt as f32;
+        let glance = match (self.keys.look_left, self.keys.look_right) {
+            (true, false) => Some(1.4),
+            (false, true) => Some(-1.4),
+            _ => None,
+        };
+        let ease = |v: f32, to: f32, rate: f32| v + (to - v) * (1.0 - (-rate * dt).exp());
+        match glance {
+            Some(to) => self.look = (ease(self.look.0, to, 8.0), ease(self.look.1, 0.0, 8.0)),
+            None if !self.mouse_down => {
+                self.look = (ease(self.look.0, 0.0, 4.0), ease(self.look.1, 0.0, 4.0))
+            }
+            None => {}
+        }
+        self.look = (self.look.0.clamp(-2.4, 2.4), self.look.1.clamp(-0.6, 0.6));
+        let frame = extract_view(
+            &self.session.app.world,
+            self.camera,
+            &ViewOptions {
+                chase_heading: heading,
+                look: self.look,
+            },
+        );
         let Some(gfx) = self.gfx.as_mut() else { return };
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)
@@ -489,6 +526,25 @@ impl ApplicationHandler for Handler {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => self.key(&event, event_loop),
+            WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                self.mouse_down = state == winit::event::ElementState::Pressed;
+                if !self.mouse_down {
+                    self.drag = None;
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.mouse_down && self.camera == CameraMode::Cab {
+                    if let Some((x, y)) = self.drag {
+                        self.look.0 -= ((position.x - x) * 0.005) as f32;
+                        self.look.1 -= ((position.y - y) * 0.004) as f32;
+                    }
+                    self.drag = Some((position.x, position.y));
+                }
+            }
             WindowEvent::Touch(t) => {
                 use winit::event::TouchPhase;
                 if let Some(g) = &self.gfx {

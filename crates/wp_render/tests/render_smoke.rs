@@ -276,3 +276,29 @@ fn art_styles_change_the_picture() {
     );
     assert!(differ(&toon, &flat) > (w * h) as usize);
 }
+
+/// In the cab the driver can turn their head; other cameras ignore it.
+#[test]
+fn cab_view_looks_around() {
+    let app = world_with_car();
+    let look = |yaw: f32| {
+        let f = wp_render::extract_view(
+            &app.world,
+            CameraMode::Cab,
+            &wp_render::ViewOptions {
+                look: (yaw, 0.0),
+                ..Default::default()
+            },
+        );
+        (f.camera.target - f.camera.eye).normalize()
+    };
+    let ahead = look(0.0);
+    let left = look(1.4);
+    assert!(
+        ahead.dot(left) < 0.3,
+        "a glance turns the view: {ahead} vs {left}"
+    );
+    assert!(ahead.cross(left).z > 0.0, "positive yaw looks left");
+    let frame = extract(&app.world, CameraMode::Cab);
+    assert!(frame.items.len() > 20, "the cab adds a dashboard and wheel");
+}

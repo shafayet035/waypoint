@@ -204,7 +204,8 @@ saturation, fog, exposure, toon_bands. Every tier keeps the game's style; only d
 Cab camera (`CameraMode::Cab`, `--camera cab`, C in windows): the driver's eye from the vehicle's optional
 `cab: Some((eye_m: (x, y, z), fov_deg))` or placed from the body style, on the left for right-hand traffic and
 the right for left-hand traffic, moving with roll and pitch; the cab shows a dashboard with gauges (lit at
-night), a steering wheel that turns with the wheels, pillars and the roof edge.
+night), a steering wheel that turns with the wheels, pillars and the roof edge. Look around: Q/E glance
+left/right, mouse drag to look anywhere; the view swings back when released (`ViewOptions.look`).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 WASM mod modules and per-mod capability permissions; traffic vehicles' sound.
 Damage drives worse (`dynamics::Harm`): full power above 70 % health falling to 35 % when wrecked; a dent on a

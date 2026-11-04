@@ -11,7 +11,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp check                     validate all files (schemas + cross-references)
   wp schema <type>             JSON Schema: game | vehicle | trailer | road | scene | scenario
   wp docs [topic]              offline docs: cli | errors | errors/<CODE> | scenario | vehicle
-  wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera (incl. cab view), R reset, P pause
+  wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera (incl. cab view),
+                               Q/E or mouse drag to look around in the cab, R reset, P pause
   wp run --mission route_1     play a mission (its scene, vehicle and spawn); the title shows the objective
   wp run --quality low         quality tier: low|mid|flagship (default game.toml [quality] tier)
                                art style: game.toml [look] style = \"realistic\"|\"toon\"|\"flat\", plus colour
