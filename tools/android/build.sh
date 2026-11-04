@@ -1,12 +1,16 @@
 #!/bin/sh
 # Build target/android/waypoint.apk (arm64) with the game folder bundled as assets.
-#   tools/android/build.sh [project-dir]
+#   tools/android/build.sh [project-dir] [low|mid|flagship]
+# The game is packed for one quality tier by `wp asset build` (default: game.toml's
+# tier): textures sized for it, tests and docs left out. WITH_TESTS=1 keeps the
+# scenario files so a dev build can start one (--scenario).
 # Needs ANDROID_HOME (default ~/Library/Android/sdk) with platforms;android-36,
 # build-tools, an NDK, and rustup's aarch64-linux-android target.
 # Install and start:  tools/android/run.sh
 set -eu
 
 PROJECT=${1:-examples/sandbox}
+TIER=${2:-}
 PACKAGE=${PACKAGE:-dev.waypoint.player}
 LABEL=${LABEL:-Waypoint}
 MIN_SDK=26
@@ -42,17 +46,15 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/assets/game"
 cp "target/$TARGET/release/libwp_player.so" "$STAGE/lib/arm64-v8a/"
 
-# Game data as assets, plus the file list the player uses to unpack them.
-(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' -o -name '*.lua' -o -name '*.glb' -o -name '*.gltf' -o -name '*.bin' \) -not -path './target/*' | sed 's|^\./||' | sort) > "$STAGE/files.txt"
-while read -r f; do
-  mkdir -p "$STAGE/assets/game/$(dirname "$f")"
-  cp "$PROJECT/$f" "$STAGE/assets/game/$f"
-done < "$STAGE/files.txt"
+# Game data as assets, packed for the tier, plus the file list the player uses to unpack them.
+cargo build -p wp_cli
+target/debug/wp --project "$PROJECT" asset build ${TIER:+--tier "$TIER"} ${WITH_TESTS:+--with-tests} --out "$STAGE/assets/game"
+(cd "$STAGE/assets/game" && find . -type f | sed 's|^\./||' | sort) > "$STAGE/files.txt"
 mv "$STAGE/files.txt" "$STAGE/assets/game/files.txt"
 
 # The control port (dev builds only) needs the INTERNET permission, even for localhost.
 PERMISSIONS=""
-if grep -Eq '^[[:space:]]*control_port[[:space:]]*=' "$PROJECT/game.toml"; then
+if grep -Eq '^[[:space:]]*control_port[[:space:]]*=' "$STAGE/assets/game/game.toml"; then
   PERMISSIONS='<uses-permission android:name="android.permission.INTERNET"/>'
 fi
 

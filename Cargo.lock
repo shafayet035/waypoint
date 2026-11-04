@@ -3286,6 +3286,7 @@ dependencies = [
  "png",
  "schemars",
  "serde",
+ "serde_json",
  "wp_core",
  "wp_data",
 ]
@@ -3301,6 +3302,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "toml",
  "waypoint",
  "wp_audio",
  "wp_control",

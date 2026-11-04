@@ -175,7 +175,12 @@ pub fn credits(ctx: &Ctx) -> CmdResult {
 
 /// `wp asset build`: check every model and report its levels of detail
 /// against each quality tier's triangle budget. Exit 1 on any error.
-pub fn asset_build(ctx: &Ctx) -> CmdResult {
+pub fn asset_build(
+    ctx: &Ctx,
+    tier: Option<&str>,
+    out: Option<&Path>,
+    with_tests: bool,
+) -> CmdResult {
     let (project, diags) = Project::load(&ctx.project);
     let Some(project) = project else {
         return Err(diags.0);
@@ -203,9 +208,9 @@ pub fn asset_build(ctx: &Ctx) -> CmdResult {
     let errors = asset_diags
         .iter()
         .any(|d| d.severity == waypoint::core::Severity::Error);
-    if ctx.json {
+    if ctx.json && (out.is_none() || errors) {
         print_json(&json!({ "ok": !errors, "assets": rows, "diagnostics": asset_diags }));
-    } else {
+    } else if !ctx.json {
         for d in &asset_diags {
             print!("{}", d.render());
         }
@@ -237,7 +242,125 @@ pub fn asset_build(ctx: &Ctx) -> CmdResult {
                 fit("flagship")
             );
         }
-        println!("levels are built when the game loads; textures and KTX2 packing come later");
+        println!("levels are built when the game loads");
     }
-    Ok(if errors { 1 } else { 0 })
+    if errors {
+        return Ok(1);
+    }
+    match out {
+        Some(dir) => ship(ctx, &project, tier, dir, with_tests, rows),
+        None => Ok(0),
+    }
+}
+
+/// Files a game needs at runtime (tests, golden replays and docs stay home).
+fn runtime_file(path: &str, with_tests: bool) -> bool {
+    const KEEP: [&str; 10] = [
+        ".toml", ".ron", ".lua", ".glb", ".gltf", ".bin", ".png", ".jpg", ".wat", ".wasm",
+    ];
+    if path.ends_with(".replay.ron") {
+        return false;
+    }
+    if path.ends_with(".scenario.ron") {
+        return with_tests;
+    }
+    KEEP.iter().any(|ext| path.ends_with(ext))
+}
+
+/// `wp asset build --out`: a copy of the game for one tier, ready to bundle
+/// into a phone build. Textures are reduced to the tier's size; game.toml
+/// runs that tier; mods that are switched off are left out.
+fn ship(
+    ctx: &Ctx,
+    project: &Project,
+    tier: Option<&str>,
+    dir: &Path,
+    with_tests: bool,
+    assets: Vec<serde_json::Value>,
+) -> CmdResult {
+    let tier = match tier {
+        Some(t) => super::replay::parse_tier(t)?,
+        None => project.game.value.quality.tier,
+    };
+    let max_px = tier.max_texture_px();
+    if dir.exists() {
+        let empty = std::fs::read_dir(dir)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !empty && !dir.join("game.toml").is_file() {
+            return Err(cli_error(
+                format!("{} exists and is not a game build", dir.display()),
+                "choose an empty folder; an earlier build (with a game.toml) is replaced",
+            ));
+        }
+        std::fs::remove_dir_all(dir).map_err(|e| cli_error(e.to_string(), "check permissions"))?;
+    }
+    let inactive: Vec<String> = project
+        .mods
+        .iter()
+        .filter(|m| !m.active)
+        .map(|m| format!("mods/{}/", m.id))
+        .collect();
+    let files: Vec<String> = waypoint::data::find_files(&project.root, "")
+        .into_iter()
+        .filter(|f| runtime_file(f, with_tests) && !inactive.iter().any(|m| f.starts_with(m)))
+        .collect();
+    let (mut bytes_in, mut bytes_out, mut resized) = (0usize, 0usize, 0usize);
+    for f in &files {
+        let src = std::fs::read(project.root.join(f))
+            .map_err(|e| cli_error(format!("cannot read {f}: {e}"), "check the file"))?;
+        let data = if f == "game.toml" {
+            let mut game = project.game.value.clone();
+            game.quality.tier = tier;
+            game.mods.disabled.clear(); // switched-off mods are not shipped
+            toml::to_string(&game)
+                .map_err(|e| cli_error(e.to_string(), "report this bug"))?
+                .into_bytes()
+        } else if f.ends_with(".glb") {
+            let (packed, stats) = waypoint::asset::pack_glb(&src, max_px).map_err(|e| {
+                cli_error(
+                    format!("{f}: {e}"),
+                    "re-export the model as glTF 2.0 (.glb)",
+                )
+            })?;
+            resized += stats.resized;
+            packed
+        } else {
+            src.clone()
+        };
+        bytes_in += src.len();
+        bytes_out += data.len();
+        let to = dir.join(f);
+        std::fs::create_dir_all(to.parent().unwrap())
+            .map_err(|e| cli_error(e.to_string(), "check permissions"))?;
+        std::fs::write(&to, &data).map_err(|e| cli_error(e.to_string(), "check permissions"))?;
+    }
+    // The copy must load as cleanly as the original.
+    let (_, diags) = Project::load(dir);
+    if diags.has_errors() {
+        return Err(diags.0);
+    }
+    let tier_name = super::replay::tier_name(tier);
+    if ctx.json {
+        print_json(&json!({
+            "ok": true,
+            "path": dir,
+            "tier": tier_name,
+            "files": files.len(),
+            "bytes_in": bytes_in,
+            "bytes_out": bytes_out,
+            "textures_resized": resized,
+            "max_texture_px": max_px,
+            "assets": assets,
+        }));
+    } else {
+        println!(
+            "wrote {} for the {tier_name} tier: {} files, {:.2} MB → {:.2} MB ({resized} textures reduced to ≤ {max_px} px)",
+            dir.display(),
+            files.len(),
+            bytes_in as f64 / 1e6,
+            bytes_out as f64 / 1e6
+        );
+    }
+    Ok(0)
 }

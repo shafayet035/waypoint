@@ -13,10 +13,12 @@
 mod lod;
 mod meta;
 mod model;
+mod pack;
 
 pub use lod::{LOD_RATIOS, simplify};
 pub use meta::{AssetMeta, Licence, meta_path};
 pub use model::{Material, Model, Part, Role, Texture, load_model, parse_model};
+pub use pack::{PackStats, pack_glb};
 
 use std::sync::Arc;
 

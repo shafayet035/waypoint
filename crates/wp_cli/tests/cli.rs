@@ -766,3 +766,56 @@ fn code_mods_compile_and_run_with_capabilities() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn asset_build_writes_a_tier_shipping_copy() {
+    let dir = temp_dir("ship");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    let out = dir.join("ship");
+    let (code, v) = json(
+        &game,
+        &[
+            "asset",
+            "build",
+            "--tier",
+            "low",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["tier"], "low");
+    assert!(out.join("assets/vehicles/hatchback.glb").is_file());
+    assert!(!out.join("tests").exists(), "no tests in a shipping build");
+    assert!(!out.join("AGENTS.md").exists(), "no docs either");
+    let toml = std::fs::read_to_string(out.join("game.toml")).unwrap();
+    assert!(toml.contains("tier = \"low\""), "{toml}");
+    let (code, v) = json(&out, &["check"]);
+    assert_eq!(code, 0, "the copy loads cleanly: {v}");
+    // Dev builds can keep scenarios (but never golden replays).
+    let (code, _) = json(
+        &game,
+        &[
+            "asset",
+            "build",
+            "--with-tests",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(out.join("tests/skidpad.scenario.ron").is_file());
+    // An unrelated folder is never overwritten.
+    let (code, v) = json(
+        &game,
+        &[
+            "asset",
+            "build",
+            "--out",
+            game.join("vehicles").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 1, "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

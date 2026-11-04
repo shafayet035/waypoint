@@ -114,8 +114,19 @@ enum AssetCmd {
     Info { file: String },
     /// Every model in the project with its licence and the vehicles using it.
     List,
-    /// Check every model and report its levels of detail against the tier budgets.
-    Build,
+    /// Check every model and report its levels of detail against the tier budgets;
+    /// with --out, write a shipping copy of the game for one quality tier.
+    Build {
+        /// low, mid or flagship (default: game.toml's tier).
+        #[arg(long)]
+        tier: Option<String>,
+        /// Folder for the shipping copy: runtime files only, textures sized for the tier.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Also ship scenario files (for --scenario in dev builds); never golden replays.
+        #[arg(long)]
+        with_tests: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -179,7 +190,11 @@ fn main() {
         Cmd::Check => commands::check(&ctx),
         Cmd::Asset(AssetCmd::Info { file }) => commands::asset_info(&ctx, &file),
         Cmd::Asset(AssetCmd::List) => commands::asset_list(&ctx),
-        Cmd::Asset(AssetCmd::Build) => commands::asset_build(&ctx),
+        Cmd::Asset(AssetCmd::Build {
+            tier,
+            out,
+            with_tests,
+        }) => commands::asset_build(&ctx, tier.as_deref(), out.as_deref(), with_tests),
         Cmd::Credits => commands::credits(&ctx),
         Cmd::Mod(ModCmd::List) => commands::mod_list(&ctx),
         Cmd::Mod(ModCmd::New { name }) => commands::mod_new(&ctx, &name),

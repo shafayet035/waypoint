@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build Waypoint.app for iOS.
-#   tools/ios/build.sh [sim|device] [project-dir]
+#   tools/ios/build.sh [sim|device] [project-dir] [low|mid|flagship]
+# The game is packed for one quality tier by `wp asset build` (default: game.toml's
+# tier); WITH_TESTS=1 keeps scenario files for --scenario.
 # sim    → target/ios/sim/Waypoint.app    (iPhone/iPad simulator on Apple Silicon)
 # device → target/ios/device/Waypoint.app (needs CODESIGN_IDENTITY and a provisioning profile to install)
 # Install on a booted simulator:
@@ -10,6 +12,7 @@ set -eu
 
 KIND=${1:-sim}
 PROJECT=${2:-examples/sandbox}
+TIER=${3:-}
 BUNDLE_ID=${BUNDLE_ID:-dev.waypoint.player}
 export IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET:-16.0}
 # Prefer rustup's toolchain (it has the iOS targets) over a system Rust.
@@ -33,10 +36,9 @@ APP="target/ios/$KIND/Waypoint.app"
 rm -rf "$APP"
 mkdir -p "$APP"
 cp "target/$TARGET/release/waypoint-player" "$APP/waypoint-player"
-mkdir -p "$APP/game"
-# Ship only the game's data, not build output or VCS folders.
-(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' -o -name '*.lua' -o -name '*.glb' -o -name '*.gltf' -o -name '*.bin' \) -not -path './target/*') |
-  while read -r f; do mkdir -p "$APP/game/$(dirname "$f")"; cp "$PROJECT/$f" "$APP/game/$f"; done
+# Ship the game packed for the tier: runtime files only, textures sized for it.
+cargo build -p wp_cli
+target/debug/wp --project "$PROJECT" asset build ${TIER:+--tier "$TIER"} ${WITH_TESTS:+--with-tests} --out "$APP/game"
 
 SDK_VERSION=$(xcrun --sdk "$SDK" --show-sdk-version)
 cat > "$APP/Info.plist" <<PLIST

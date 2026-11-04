@@ -170,6 +170,10 @@ and reports its levels against the tier budgets. Materials: glTF base colour, no
 derivatives, no stored tangents), metallic-roughness, emissive and occlusion maps (PNG/JPEG, TEXCOORD_0), CPU-built
 mipmaps, one bind group per material (group 1; neutral maps for untextured meshes), each image uploaded once and
 capped to the tier's size (Low 1024, Mid 2048, Flagship 4096 px).
+Shipping: `wp asset build --tier low --out <dir>` writes the game for one tier: runtime files only (no tests,
+replays or docs; `--with-tests` keeps scenarios), switched-off mods left out, game.toml set to the tier, and images
+inside each .glb reduced to the tier's size and re-encoded (`wp_asset::pack_glb`: colour maps → JPEG, data maps
+stay PNG). `tools/android/build.sh <project> [tier]` and `tools/ios/build.sh sim|device <project> [tier]` bundle it.
 Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
 Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn
