@@ -1,0 +1,2 @@
+// The driver's view: dashboard, steering wheel, pillars, and the avenue ahead.
+(scenario: Some("town_route"), at_s: 8.0, camera: Cab)

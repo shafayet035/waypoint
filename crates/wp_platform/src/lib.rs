@@ -271,13 +271,8 @@ impl Handler {
         surface.configure(&gpu.device, &config);
         let mut renderer = Renderer::new(&gpu, config.format, config.width, config.height);
         if let Some(q) = self.opts.quality {
-            renderer.set_max_height(&gpu, Some(q.max_height()));
+            renderer.set_quality(&gpu, q);
             renderer.set_streaming(Some(q.view_distance_m()));
-            let (size, extent_m) = q.shadow_map();
-            renderer.set_shadows(&gpu, Some(wp_render::ShadowSettings { size, extent_m }));
-            renderer.set_max_lights(q.max_lights());
-            renderer.set_lod_bias(q.lod_bias());
-            renderer.set_max_texture_size(q.max_texture_px());
         }
         Ok(Gfx {
             window,

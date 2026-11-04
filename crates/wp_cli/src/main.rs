@@ -53,8 +53,13 @@ enum Cmd {
     Serve(commands::ServeArgs),
     /// Model Context Protocol server on stdin/stdout, for Claude and other agents.
     Mcp,
-    /// Run scenario tests (all, or those whose name contains FILTER).
-    Test { filter: Option<String> },
+    /// Run scenario and screenshot tests (all, or those whose name contains FILTER).
+    Test {
+        filter: Option<String>,
+        /// Render the matching screenshot tests and save them as the approved pictures.
+        #[arg(long)]
+        approve: bool,
+    },
     /// Print the resolved system schedule.
     Systems,
     /// Print loaded plugins in load order.
@@ -234,7 +239,7 @@ fn main() {
         Cmd::Audio(args) => commands::audio(&ctx, &args),
         Cmd::Serve(args) => commands::serve(&ctx, &args),
         Cmd::Mcp => mcp::serve(&ctx),
-        Cmd::Test { filter } => commands::test(&ctx, filter.as_deref()),
+        Cmd::Test { filter, approve } => commands::test(&ctx, filter.as_deref(), approve),
         Cmd::Systems => commands::systems(&ctx),
         Cmd::Plugins => commands::plugins(&ctx),
         Cmd::Import(ImportCmd::Osm {

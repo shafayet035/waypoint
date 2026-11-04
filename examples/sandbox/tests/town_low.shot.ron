@@ -1,0 +1,2 @@
+// The town on a Low-tier phone: smaller shadow map, fewer lights, simpler models.
+(scenario: Some("town_route"), at_s: 8.0, camera: Chase, quality: Some(low))

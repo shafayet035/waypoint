@@ -1,0 +1,2 @@
+// The toon harbour on a wet evening: warehouses, palms on the quay, rain, traffic.
+(scenario: Some("night_run"), at_s: 40.0, camera: Chase)

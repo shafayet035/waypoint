@@ -1,0 +1,2 @@
+// The town at night: lit windows, street lamps, headlights and traffic.
+(scene: Some("scenes/town_night.scene.ron"), throttle: 0.3, at_s: 6.0, camera: Showcase)

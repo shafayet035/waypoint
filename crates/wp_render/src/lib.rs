@@ -9,6 +9,7 @@
 //! a sky/ground ambient term and sky reflections, all with 4× MSAA and ACES
 //! tonemapping. Tile-friendly: one render pass, no full-screen post passes.
 
+pub mod compare;
 pub mod extract;
 pub mod mesh;
 
@@ -1161,6 +1162,18 @@ impl Renderer {
     /// Stream road tiles: keep those within `range_m` of the camera on the
     /// GPU and build new maps on a worker thread. `None` (the default) keeps
     /// everything resident and builds synchronously.
+    /// Render at a quality tier: internal height, sun shadow map, local
+    /// lights, model detail and texture size (not streaming, which only
+    /// windows use).
+    pub fn set_quality(&mut self, gpu: &Gpu, q: wp_world::QualityTier) {
+        self.set_max_height(gpu, Some(q.max_height()));
+        let (size, extent_m) = q.shadow_map();
+        self.set_shadows(gpu, Some(ShadowSettings { size, extent_m }));
+        self.set_max_lights(q.max_lights());
+        self.set_lod_bias(q.lod_bias());
+        self.set_max_texture_size(q.max_texture_px());
+    }
+
     pub fn set_streaming(&mut self, range_m: Option<f32>) {
         self.stream_range = range_m;
     }
@@ -1849,8 +1862,23 @@ pub fn render_rgba_with_stats(
     width: u32,
     height: u32,
 ) -> Result<(Vec<u8>, RenderStats), Diagnostic> {
+    render_rgba_at(gpu, frame, width, height, None)
+}
+
+/// [`render_rgba_with_stats`] at a quality tier (`None`: the offscreen
+/// defaults `wp shot` uses).
+pub fn render_rgba_at(
+    gpu: &Gpu,
+    frame: &FrameView,
+    width: u32,
+    height: u32,
+    quality: Option<wp_world::QualityTier>,
+) -> Result<(Vec<u8>, RenderStats), Diagnostic> {
     let target = OffscreenTarget::new(gpu, width, height);
     let mut renderer = Renderer::new(gpu, wp_rhi::OFFSCREEN_FORMAT, width, height);
+    if let Some(q) = quality {
+        renderer.set_quality(gpu, q);
+    }
     renderer.render(gpu, frame, &target.view);
     Ok((target.read_rgba(gpu)?, renderer.stats()))
 }

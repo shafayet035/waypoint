@@ -259,8 +259,12 @@ fn runtime_file(path: &str, with_tests: bool) -> bool {
     const KEEP: [&str; 10] = [
         ".toml", ".ron", ".lua", ".glb", ".gltf", ".bin", ".png", ".jpg", ".wat", ".wasm",
     ];
-    if path.ends_with(".replay.ron") {
+    if path.ends_with(".replay.ron") || path.ends_with(".shot.ron") || path.starts_with("target/") {
         return false;
+    }
+    // Test folders hold scenarios and approved screenshots: only scenarios ship.
+    if path.starts_with("tests/") || path.contains("/tests/") {
+        return with_tests && path.ends_with(".scenario.ron");
     }
     if path.ends_with(".scenario.ron") {
         return with_tests;

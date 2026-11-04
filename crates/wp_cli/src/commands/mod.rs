@@ -10,6 +10,7 @@ mod mods;
 mod new;
 mod project;
 mod replay;
+mod shots;
 mod test;
 
 pub use asset::{asset_build, asset_info, asset_list, credits};

@@ -846,3 +846,31 @@ fn asset_build_writes_a_tier_shipping_copy() {
     assert_eq!(code, 1, "{v}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn screenshot_tests_fail_until_approved_then_pass() {
+    let dir = temp_dir("shots");
+    wp(&dir, &["new", "g", "--template", "minimal"]);
+    let game = dir.join("g");
+    assert!(game.join(".gitignore").is_file(), "target/ is ignored");
+    std::fs::write(
+        game.join("tests/flat_chase.shot.ron"),
+        "(scene: Some(\"scenes/flat.scene.ron\"), throttle: 0.5, at_s: 2.0, width: 160, height: 90)",
+    )
+    .unwrap();
+    let (_, v) = json(&game, &["check"]);
+    assert!(v.to_string().contains("WP-O002"), "no approved picture: {v}");
+    let (code, v) = json(&game, &["test", "flat_chase"]);
+    if v["skipped"] == 1 {
+        return; // no GPU here
+    }
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["shots"][0]["passed"], false);
+    assert!(game.join("target/shots/flat_chase.png").is_file());
+    let (code, v) = json(&game, &["test", "--approve", "flat_chase"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(game.join("tests/flat_chase.png").is_file());
+    let (code, v) = json(&game, &["test", "flat_chase"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["shots"][0]["diff"]["changed_pct"], 0.0);
+}

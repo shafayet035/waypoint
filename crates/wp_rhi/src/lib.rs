@@ -215,10 +215,62 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
     std::fs::write(path, bytes).map_err(|e| write_error(path, e))
 }
 
+/// Read a PNG as tightly packed RGBA8: (width, height, pixels).
+pub fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>), Diagnostic> {
+    let fail = |why: String| {
+        Diagnostic::error("WP-R010", format!("cannot read {}: {why}", path.display()))
+    };
+    let file = std::fs::File::open(path).map_err(|e| fail(e.to_string()))?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|e| fail(e.to_string()))?;
+    let mut buf = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or_else(|| fail("too large".into()))?
+    ];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| fail(e.to_string()))?;
+    buf.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => buf
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[g, a]| [g, g, g, a])
+            .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        other => return Err(fail(format!("unsupported colour type {other:?}"))),
+    };
+    Ok((info.width, info.height, rgba))
+}
+
 fn png_error(e: png::EncodingError) -> Diagnostic {
     Diagnostic::error("WP-R010", format!("PNG encoding failed: {e}"))
 }
 
 fn write_error(path: &Path, e: std::io::Error) -> Diagnostic {
     Diagnostic::error("WP-R010", format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod png_tests {
+    #[test]
+    fn png_round_trips() {
+        let dir = std::env::temp_dir().join(format!("wp_png_{}", std::process::id()));
+        let path = dir.join("x.png");
+        let rgba: Vec<u8> = (0..4 * 3 * 2).map(|i| (i * 10) as u8).collect();
+        super::write_png(&path, 3, 2, &rgba).unwrap();
+        assert_eq!(super::read_png(&path).unwrap(), (3, 2, rgba));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

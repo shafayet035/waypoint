@@ -81,7 +81,7 @@ for the maths with thin systems around them, and data files with schemas for con
 - **Data first.** A new vehicle, scene or test should need a file, not code. New data fields get
   doc comments (they become schema descriptions) and units in their names.
 - **Refactors** must keep every scenario's `final_hash` identical (`wp test --json`): that proves
-  behaviour did not change. Scenarios with a golden replay (`tests/<name>.replay.ron`) check this on
+  behaviour did not change. Screenshot tests (`tests/*.shot.ron`) guard the look the same way. Scenarios with a golden replay (`tests/<name>.replay.ron`) check this on
   every `wp test`; after an intended change, re-record with `wp replay record --scenario <name>`. Rendering refactors: compare `wp shot` PNGs byte for byte.
 - **Physics changes** must keep `examples/sandbox` scenarios passing and `wp vehicle test` plausible.
   Hatchback: about 8.5 s to 100 km/h, about 41 m to stop from 100 km/h (ABS), 0.74 g on the skidpad,
@@ -250,4 +250,10 @@ Trees: scenery `trees` (hand-placed) and `tree_rows` (along kerbs or verges; ski
 seeded). Kinds Round (lumpy icosphere crown), Cone, Palm (drooping fronds); built-in meshes `mesh::crown/cone/fronds`
 with far versions the renderer picks by size over distance × lod_bias; drawn within 450 m of the player; trunks are
 solid (`Walls` labelled "tree": `Collision { other: "tree" }`). `wp import osm` also imports `natural=tree` points.
+Screenshot tests: `tests/<name>.shot.ron` (`wp_test::ShotDef`: scenario or scene/spawn/vehicle/controls, at_s, camera,
+size, optional quality tier, tolerance) + the approved `tests/<name>.png`. `wp test` renders each (`Renderer::set_quality` for
+a tier) and compares with `wp_render::compare` (Oklab distance, 3×3 neighbourhood both ways, % of pixels over a threshold);
+failures write `target/shots/<name>.png` and `.diff.png`; `wp test --approve <name>` saves new pictures; no GPU: skipped.
+WP-O001–O003. Sandbox: town_day, town_night, town_cab, town_low, crash_building; harbour: harbour_quay. Shipping builds
+leave tests/ out (only scenarios with `--with-tests`).
 Not yet: testing on physical phones; running on an iOS simulator.

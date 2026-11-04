@@ -1,0 +1,3 @@
+// The town by day from the chase camera: buildings with windows and shop
+// fronts, street trees, lamps, markings, the car and sun shadows.
+(scenario: Some("town_route"), at_s: 8.0, camera: Chase)

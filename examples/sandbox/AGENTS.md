@@ -9,6 +9,8 @@ This folder is a Waypoint game. Everything is plain text; there is no editor.
   (front-drive car with ABS) and `city_bus` (12 m bus: air brakes, ABS, 80 km/h governor).
 - `scenes/*.scene.ron`: ground settings and named spawn points.
 - `tests/*.scenario.ron`: headless tests with a driver and assertions.
+- `tests/*.shot.ron` + `tests/*.png`: screenshot tests: a frame of a scenario or scene, compared
+  with the approved picture.
 
 ## The loop
 
@@ -16,6 +18,9 @@ This folder is a Waypoint game. Everything is plain text; there is no editor.
 2. `wp check --json`: schema and cross-reference errors, each with a code, file, line and fix.
 3. `wp test --json`: runs every scenario; `wp test <name>` runs one.
 4. On failure, read the assertion `detail` and the metrics, fix, and repeat.
+5. A screenshot test that fails leaves `target/shots/<name>.png` (the new picture) and
+   `<name>.diff.png` (changes in magenta). Open both. If the change is intended,
+   `wp test --approve <name>` saves the new picture.
 
 ## Useful commands
 

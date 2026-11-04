@@ -106,6 +106,13 @@ Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) 
 ≤ 0.15v + v²/130 = 36.7 m and MFDD ≥ 5.0 m/s²; cars (M1, R13-H) from 100 km/h ≤ 70 m and
 MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.
 
+Screenshot tests: tests/<name>.shot.ron renders one frame and compares it with tests/<name>.png:
+  (scenario: Some(\"town_route\"), at_s: 8.0, camera: Chase)      // or scene/spawn/vehicle/throttle/steer/seed
+  optional: width: 640, height: 360, quality: Some(low), tolerance: (pixel: 0.06, changed_pct: 0.5)
+Pixels are compared in Oklab (0.02 is just noticeable), each against the other picture's 3×3 neighbourhood, so
+one-pixel edge shifts between GPUs do not count. A failure writes target/shots/<name>.png and <name>.diff.png
+(changes in magenta); `wp test --approve <name>` saves the new picture. Without a GPU they are skipped.
+
 Runs are headless at 60 Hz gameplay / 480 Hz physics, and bit-identical for the same build and seed.
 Golden replays: tests/<name>.replay.ron (from `wp replay record --scenario <name>`) holds a world hash per
 second; `wp test` adds MatchesGoldenReplay and names the second the run first differed. Re-record after an

@@ -6,6 +6,10 @@ use super::*;
 
 const TEMPLATE_SANDBOX: &[(&str, &[u8])] = &[
     (
+        ".gitignore",
+        b"# Build output, and new pictures from failed screenshot tests (target/shots).\ntarget/\n",
+    ),
+    (
         "assets/vehicles/hatchback.glb",
         include_bytes!("../../../../examples/sandbox/assets/vehicles/hatchback.glb"),
     ),
@@ -178,6 +182,7 @@ const TEMPLATE_SANDBOX: &[(&str, &[u8])] = &[
 /// The `minimal` template: one car on a flat test ground with two tests,
 /// for starting a game from scratch.
 const TEMPLATE_MINIMAL: &[&str] = &[
+    ".gitignore",
     "game.toml",
     "AGENTS.md",
     "vehicles/hatchback.vehicle.ron",

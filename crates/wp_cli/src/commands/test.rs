@@ -4,26 +4,42 @@ use super::*;
 
 // ---- wp test --------------------------------------------------------------
 
-pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
+pub fn test(ctx: &Ctx, filter: Option<&str>, approve: bool) -> CmdResult {
     let project = load_project(ctx)?;
+    let matches = |name: &String| filter.is_none_or(|f| name.contains(f));
+    let shots: Vec<&String> = project.shots.keys().filter(|n| matches(n)).collect();
+    if approve {
+        if shots.is_empty() {
+            return Err(vec![
+                Diagnostic::error(
+                    "WP-C003",
+                    format!("no screenshot test matches `{}`", filter.unwrap_or("")),
+                )
+                .help(known(project.shots.keys())),
+            ]);
+        }
+        return super::shots::approve(ctx, &project, &shots);
+    }
     let selected: Vec<_> = project
         .scenarios
         .iter()
-        .filter(|(name, _)| filter.is_none_or(|f| name.contains(f)))
+        .filter(|(n, _)| matches(n))
         .collect();
-    if selected.is_empty() {
+    if selected.is_empty() && shots.is_empty() {
         return Err(vec![
             Diagnostic::error(
                 "WP-C003",
-                format!("no scenario matches `{}`", filter.unwrap_or("")),
+                format!(
+                    "no scenario or screenshot test matches `{}`",
+                    filter.unwrap_or("")
+                ),
             )
-            .help(known(project.scenarios.keys())),
+            .help(known(project.scenarios.keys().chain(project.shots.keys()))),
         ]);
     }
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut reports: Vec<(String, ScenarioReport)> = Vec::new();
     for (name, sc) in selected {
-        let _ = sc;
         let input = project.scenario_input(name).ok_or_else(|| {
             cli_error(format!("scenario `{name}` is incomplete"), "run `wp check`")
         })?;
@@ -36,7 +52,21 @@ pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
         }
         reports.push((sc.path.clone(), report));
     }
-    let failed = reports.iter().filter(|(_, r)| !r.passed).count();
+    let shot_results = if shots.is_empty() {
+        Vec::new()
+    } else {
+        let gpu = wp_rhi::Gpu::headless();
+        super::shots::run_shots(&project, &shots, &gpu)?
+    };
+    if !ctx.json {
+        for r in &shot_results {
+            super::shots::print_shot(r);
+        }
+    }
+    let failed = reports.iter().filter(|(_, r)| !r.passed).count()
+        + shot_results.iter().filter(|r| !r.passed).count();
+    let total = reports.len() + shot_results.len();
+    let skipped = shot_results.iter().filter(|r| r.skipped.is_some()).count();
     if ctx.json {
         let list: Vec<_> = reports
             .iter()
@@ -44,16 +74,23 @@ pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
             .collect();
         print_json(&json!({
             "passed": failed == 0,
-            "total": reports.len(),
+            "total": total,
             "failed": failed,
+            "skipped": skipped,
             "reports": list,
+            "shots": shot_results,
         }));
     } else {
         println!(
-            "\ntest result: {}. {} passed; {} failed",
+            "\ntest result: {}. {} passed; {} failed{}",
             if failed == 0 { "ok" } else { "FAILED" },
-            reports.len() - failed,
-            failed
+            total - failed - skipped,
+            failed,
+            if skipped > 0 {
+                format!("; {skipped} skipped (no GPU)")
+            } else {
+                String::new()
+            }
         );
     }
     Ok(if failed == 0 { 0 } else { 1 })

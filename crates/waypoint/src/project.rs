@@ -87,6 +87,8 @@ pub struct Project {
     pub trailers: BTreeMap<String, Loaded<TrailerDef>>,
     /// Road networks by path relative to the root.
     pub roads: BTreeMap<String, Loaded<RoadNetworkDef>>,
+    /// Screenshot tests by name (file name without `.shot.ron`).
+    pub shots: BTreeMap<String, Loaded<wp_test::ShotDef>>,
     /// Scenery (buildings) by path relative to the root.
     pub scenery: BTreeMap<String, Loaded<wp_world::scenery::SceneryDef>>,
     /// By mission name (file name without `.mission.ron`).
@@ -110,6 +112,7 @@ pub const ROAD_EXT: &str = ".road.ron";
 pub const SCENERY_EXT: &str = ".scenery.ron";
 pub const MISSION_EXT: &str = ".mission.ron";
 pub const REPLAY_EXT: &str = ".replay.ron";
+pub const SHOT_EXT: &str = ".shot.ron";
 
 fn stem<'a>(path: &'a str, ext: &str) -> &'a str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -235,6 +238,17 @@ impl Project {
             }
         }
 
+        let mut shots = BTreeMap::new();
+        for (path, real) in vfs.files(SHOT_EXT) {
+            match load_ron::<wp_test::ShotDef>(root, &real) {
+                Ok(s) => {
+                    diags.extend(wp_test::ShotDef::validate(&s));
+                    shots.insert(stem(&path, SHOT_EXT).to_string(), s);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
         let mut missions = BTreeMap::new();
         for (path, real) in vfs.files(MISSION_EXT) {
             match load_ron::<wp_mission::MissionDef>(root, &real) {
@@ -332,11 +346,13 @@ impl Project {
             trailers,
             roads,
             scenery,
+            shots,
             failed,
         };
         diags.extend(project.check_references());
         diags.extend(project.check_models());
         diags.extend(project.check_replays());
+        diags.extend(project.check_shots());
         (Some(project), diags)
     }
 
@@ -457,6 +473,63 @@ impl Project {
                         "AI-generated models are for background props, not vehicles",
                     )
                     .help("model the vehicle by hand, or use a CC0 or bought model"),
+                );
+            }
+        }
+        out
+    }
+
+    /// Where screenshot test `name`'s approved picture is (relative to the root).
+    pub fn shot_image(&self, name: &str) -> Option<String> {
+        Some(self.shots.get(name)?.path.replace(SHOT_EXT, ".png"))
+    }
+
+    /// Screenshot tests must refer to things that exist, and have a picture.
+    fn check_shots(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for (name, f) in &self.shots {
+            let s = &f.value;
+            let mut missing = |what: &str, key: &str, n: &str, known: String| {
+                out.push(
+                    f.error_at("WP-O001", key, format!("{what} `{n}` does not exist"))
+                        .help(known),
+                );
+            };
+            if let Some(n) = &s.scenario
+                && !self.scenarios.contains_key(n)
+            {
+                missing(
+                    "scenario",
+                    "scenario",
+                    n,
+                    format!("known scenarios: {}", list(self.scenarios.keys())),
+                );
+            }
+            if let Some(n) = &s.scene
+                && !self.scenes.contains_key(n)
+            {
+                missing(
+                    "scene",
+                    "scene",
+                    n,
+                    format!("known scenes: {}", list(self.scenes.keys())),
+                );
+            }
+            if let Some(n) = &s.vehicle
+                && !self.vehicles.contains_key(n)
+            {
+                missing(
+                    "vehicle",
+                    "vehicle",
+                    n,
+                    format!("known vehicles: {}", list(self.vehicles.keys())),
+                );
+            }
+            let png = self.shot_image(name).unwrap_or_default();
+            if !self.root.join(&png).is_file() {
+                out.push(
+                    f.warning_at("WP-O002", "at_s", format!("screenshot test `{name}` has no approved picture ({png})"))
+                        .help(format!("look at it with `wp test {name}`, then approve it with `wp test --approve {name}`")),
                 );
             }
         }

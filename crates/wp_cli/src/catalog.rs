@@ -9,6 +9,21 @@ pub struct ErrorDoc {
 
 pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
+        code: "WP-O001",
+        title: "A screenshot test refers to a scenario, scene or vehicle that does not exist",
+        fix: "Name an existing scenario, or a scene (and optionally spawn and vehicle); not both.",
+    },
+    ErrorDoc {
+        code: "WP-O002",
+        title: "A screenshot test has no approved picture (warning), or its picture changed",
+        fix: "Look at the new picture and the diff that `wp test` writes; if the change is intended, run `wp test --approve <name>`.",
+    },
+    ErrorDoc {
+        code: "WP-O003",
+        title: "A screenshot test's size, time or tolerance is out of range",
+        fix: "Use 16–4096 px a side, at_s ≥ 0, tolerance pixel 0–1 and changed_pct 0–100.",
+    },
+    ErrorDoc {
         code: "WP-B001",
         title: "A building's footprint has no area",
         fix: "List three or more distinct corners in order round the building, (x, y) in metres.",

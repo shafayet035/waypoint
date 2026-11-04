@@ -1,0 +1,2 @@
+// A car dented against a warehouse wall; the camera stays in front of the wall.
+(scenario: Some("crash_into_building"), at_s: 7.0, camera: Showcase)
