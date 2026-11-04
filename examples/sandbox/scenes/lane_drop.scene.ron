@@ -1,0 +1,10 @@
+// Harbour Road, where two lanes each way narrow to one. "outer_lane" is in the
+// eastbound lane that ends (5.25 m right of the centreline).
+(
+  name: "lane_drop",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/lane_drop.road.ron"),
+  spawns: [
+    (name: "outer_lane", position: (-350.0, -5.25), heading_deg: 0.0),
+  ],
+)

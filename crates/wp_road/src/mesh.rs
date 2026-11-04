@@ -3,7 +3,7 @@
 //! markings 3.5 cm, sidewalk tops 17 cm.
 
 use crate::geometry::Polyline;
-use crate::network::RoadNetwork;
+use crate::network::{RoadGeometry, RoadNetwork};
 use glam::{Vec2, Vec3};
 
 const ASPHALT_Z: f32 = 0.02;
@@ -82,7 +82,11 @@ pub struct RoadMeshes {
 
 /// A painted line `offset` metres left of `centre`, solid or dashed.
 fn line(mesh: &mut Mesh, centre: &Polyline, offset: f32, dashed: bool) {
-    let path = centre.offset(offset);
+    paint(mesh, centre.offset(offset), dashed);
+}
+
+/// A painted line along `path`, solid or dashed.
+fn paint(mesh: &mut Mesh, path: Polyline, dashed: bool) {
     let len = path.length();
     if len < 0.5 {
         return;
@@ -111,6 +115,10 @@ pub fn build_meshes(net: &RoadNetwork) -> RoadMeshes {
     for road in &net.roads {
         let c = road.centre.resample(1.0);
         if c.is_empty() {
+            continue;
+        }
+        if road.has_tapers() {
+            tapered_road(&mut m, road, &c);
             continue;
         }
         let left = c.offset(road.left_m);
@@ -186,6 +194,99 @@ pub fn build_meshes(net: &RoadNetwork) -> RoadMeshes {
         }
     }
     m
+}
+
+/// A road whose width changes at a lane taper: edges, lane lines and
+/// sidewalks follow the lanes as they narrow or open.
+fn tapered_road(m: &mut RoadMeshes, road: &RoadGeometry, c: &Polyline) {
+    let left = c.offset_with(|s| road.edges(s).0);
+    let right = c.offset_with(|s| road.edges(s).1);
+    m.asphalt.strip(&left.points, &right.points, ASPHALT_Z);
+
+    let d = &road.def;
+    let w = d.lane_width_m;
+    let len = c.length();
+    if d.lanes_forward > 0 && d.lanes_backward > 0 {
+        // The centre line sits between the innermost lanes of each direction.
+        let divider =
+            |s: f32| (road.lane_offset(true, 0, s).0 + road.lane_offset(false, 0, s).0) / 2.0;
+        if d.total_lanes() >= 4 {
+            paint(&mut m.markings, c.offset_with(|s| divider(s) + 0.12), false);
+            paint(&mut m.markings, c.offset_with(|s| divider(s) - 0.12), false);
+        } else {
+            paint(&mut m.markings, c.offset_with(divider), true);
+        }
+    }
+    // Lane lines between neighbours of one direction, only where both lanes
+    // are at least half open.
+    for (forward, n) in [(true, d.lanes_forward), (false, d.lanes_backward)] {
+        for k in 1..n as usize {
+            let open = |s: f32| {
+                road.lane_offset(forward, k, s).1 >= 0.5 * w
+                    && road.lane_offset(forward, k - 1, s).1 >= 0.5 * w
+            };
+            let (mut from, mut to) = (None, 0.0);
+            for &s in &c.lengths {
+                if open(s) {
+                    from.get_or_insert(s);
+                    to = s;
+                }
+            }
+            let Some(from) = from else { continue };
+            let between = |s: f32| {
+                let (a, wa) = road.lane_offset(forward, k - 1, s);
+                let (b, wb) = road.lane_offset(forward, k, s);
+                // The shared edge: halfway between the facing sides.
+                let (ea, eb) = if b > a {
+                    (a + wa / 2.0, b - wb / 2.0)
+                } else {
+                    (a - wa / 2.0, b + wb / 2.0)
+                };
+                (ea + eb) / 2.0
+            };
+            let part = c.slice(from, to.min(len));
+            if part.length() > 1.0 {
+                // `part` starts at `from`, so shift its arc lengths back.
+                paint(
+                    &mut m.markings,
+                    part.offset_with(|s| between(s + from)),
+                    true,
+                );
+            }
+        }
+    }
+    paint(
+        &mut m.markings,
+        c.offset_with(|s| road.edges(s).0 - 0.3),
+        false,
+    );
+    paint(
+        &mut m.markings,
+        c.offset_with(|s| road.edges(s).1 + 0.3),
+        false,
+    );
+
+    if d.sidewalk_m > 0.0 {
+        for side in [1.0f32, -1.0] {
+            let edge = |s: f32| {
+                let (l, r) = road.edges(s);
+                if side > 0.0 { l } else { r }
+            };
+            let inner = c.offset_with(edge);
+            let outer = c.offset_with(|s| edge(s) + side * d.sidewalk_m);
+            if side > 0.0 {
+                m.sidewalks.strip(&outer.points, &inner.points, CURB_Z);
+            } else {
+                m.sidewalks.strip(&inner.points, &outer.points, CURB_Z);
+            }
+            for i in 1..inner.points.len() {
+                let (a, b) = (inner.points[i - 1], inner.points[i]);
+                let t = (b - a).normalize_or(Vec2::X);
+                let towards_road = Vec2::new(-t.y, t.x) * -side;
+                m.sidewalks.wall(a, b, 0.0, CURB_Z, towards_road);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -529,47 +529,72 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
             let first = bounds.remove(0);
             bounds[0].0 = first.0;
         }
-        let mut pieces = Vec::new();
-        for (start, end, sec) in bounds {
-            let profile = profile(sec, end - start);
-            if profile.left + profile.right == 0 {
-                continue;
+        // Each section's profile, then its points moved onto its divider.
+        let profiles: Vec<(f64, f64, Profile)> = bounds
+            .into_iter()
+            .map(|(start, end, sec)| (start, end, profile(sec, end - start)))
+            .filter(|(_, _, p)| p.left + p.right > 0)
+            .collect();
+        // Where the divider jumps between touching sections (a one-way road
+        // losing a lane re-centres), blend it over up to 10 m each side so the
+        // line stays continuous; the network's taper then lines the lanes up.
+        let divider_at = |k: usize, s: f64| {
+            let (start, end, ref p) = profiles[k];
+            let blend = 10.0f64.min((end - start) / 4.0);
+            let mut d = p.divider_m;
+            let touching = |o: usize| {
+                (profiles[o].1 - start).abs() < 1e-6 || (profiles[o].0 - end).abs() < 1e-6
+            };
+            if k > 0 && touching(k - 1) && s - start < blend {
+                let mid = (p.divider_m + profiles[k - 1].2.divider_m) / 2.0;
+                d = mid + (p.divider_m - mid) * ((s - start) / blend);
             }
-            // Points in [start, end], moved onto the divider.
+            if k + 1 < profiles.len() && touching(k + 1) && end - s < blend {
+                let mid = (p.divider_m + profiles[k + 1].2.divider_m) / 2.0;
+                d = mid + (p.divider_m - mid) * ((end - s) / blend);
+            }
+            d
+        };
+        let at = |s: f64| {
+            let i = line.partition_point(|p| p.0 < s).clamp(1, line.len() - 1);
+            let (a, b) = (line[i - 1], line[i]);
+            let u = if b.0 > a.0 {
+                ((s - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (
+                s,
+                a.1 + (b.1 - a.1) * u,
+                a.2 + (b.2 - a.2) * u,
+                a.3 + (b.3 - a.3) * u,
+            )
+        };
+        let mut pieces = Vec::new();
+        for (k, &(start, end, _)) in profiles.iter().enumerate() {
             let shift = |p: &(f64, f64, f64, f64)| {
-                let d = profile.divider_m;
+                let d = divider_at(k, p.0);
                 (p.1 - d * p.3.sin(), p.2 + d * p.3.cos())
             };
-            let mut pts: Vec<(f64, f64)> = Vec::new();
-            let at = |s: f64| {
-                let i = line.partition_point(|p| p.0 < s).clamp(1, line.len() - 1);
-                let (a, b) = (line[i - 1], line[i]);
-                let u = if b.0 > a.0 {
-                    ((s - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                (
-                    s,
-                    a.1 + (b.1 - a.1) * u,
-                    a.2 + (b.2 - a.2) * u,
-                    a.3 + (b.3 - a.3) * u,
-                )
-            };
-            pts.push(shift(&at(start)));
+            let mut pts: Vec<(f64, f64)> = vec![shift(&at(start))];
             pts.extend(
                 line.iter()
                     .filter(|p| p.0 > start + 1e-6 && p.0 < end - 1e-6)
                     .map(shift),
             );
             pts.push(shift(&at(end)));
-            pieces.push(Piece {
+            pieces.push((start, end, pts));
+        }
+        let pieces: Vec<Piece> = pieces
+            .into_iter()
+            .zip(profiles)
+            .map(|((start, end, pts), (_, _, profile))| Piece {
                 start,
                 end,
                 profile,
                 pts,
-            });
-        }
+            })
+            .collect();
         if pieces.is_empty() {
             stats.skipped_roads += 1;
             continue;

@@ -63,9 +63,93 @@ pub struct RoadGeometry {
     pub def: RoadDef,
     /// Centreline from `from` to `to`, trimmed at both junctions.
     pub centre: Polyline,
-    /// Carriageway width left and right of the centreline (in its direction).
+    /// Carriageway width left and right of the centreline (in its direction),
+    /// away from any taper.
     pub left_m: f32,
     pub right_m: f32,
+    /// Where each lane's centre sits, m left of the centreline, away from tapers.
+    pub forward_offsets: Vec<f32>,
+    pub backward_offsets: Vec<f32>,
+    /// Tapers at the start and end, where the lane count changes into the next road.
+    pub tapers: [Option<Taper>; 2],
+}
+
+/// A lane taper at one end of a road, where it meets a road with more or
+/// fewer lanes: over `length_m`, each lane moves sideways by its shift (m,
+/// + left, reached at the road end) and lanes that close narrow to nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Taper {
+    pub length_m: f32,
+    /// (shift, closes) per forward lane, then per backward lane, by index.
+    pub forward: Vec<(f32, bool)>,
+    pub backward: Vec<(f32, bool)>,
+}
+
+impl RoadGeometry {
+    pub fn has_tapers(&self) -> bool {
+        self.tapers.iter().any(Option::is_some)
+    }
+
+    /// How far into taper `end` (0 = start, 1 = end) arc length `s` is: 0
+    /// outside it, rising smoothly to 1 at the road end.
+    fn taper_ramp(&self, end: usize, s: f32) -> f32 {
+        let Some(t) = &self.tapers[end] else {
+            return 0.0;
+        };
+        let l = t.length_m.max(1e-3);
+        let u = if end == 1 {
+            (s - (self.centre.length() - l)) / l
+        } else {
+            (l - s) / l
+        };
+        let u = u.clamp(0.0, 1.0);
+        u * u * (3.0 - 2.0 * u)
+    }
+
+    /// A lane's centre (m left of the centreline) and width at arc length `s`.
+    pub fn lane_offset(&self, forward: bool, index: usize, s: f32) -> (f32, f32) {
+        let base = if forward {
+            &self.forward_offsets
+        } else {
+            &self.backward_offsets
+        };
+        let (mut offset, mut width) = (base[index], self.def.lane_width_m);
+        for end in 0..2 {
+            if let Some(t) = &self.tapers[end] {
+                let (shift, closes) = if forward { &t.forward } else { &t.backward }[index];
+                let r = self.taper_ramp(end, s);
+                offset += shift * r;
+                if closes {
+                    width *= 1.0 - r;
+                }
+            }
+        }
+        (offset, width)
+    }
+
+    /// Carriageway edges at arc length `s`: (left, right), m left of the centreline.
+    pub fn edges(&self, s: f32) -> (f32, f32) {
+        if !self.has_tapers() {
+            return (self.left_m, -self.right_m);
+        }
+        let lanes = (0..self.forward_offsets.len())
+            .map(|i| self.lane_offset(true, i, s))
+            .chain((0..self.backward_offsets.len()).map(|i| self.lane_offset(false, i, s)));
+        lanes.fold((f32::MIN, f32::MAX), |(l, r), (o, w)| {
+            (l.max(o + w / 2.0), r.min(o - w / 2.0))
+        })
+    }
+}
+
+/// Length of a taper that moves traffic `w` metres sideways at `kmh`
+/// (MUTCD merging taper: L = W·S at 45 mph and above, W·S²/60 below; S in mph).
+pub fn taper_length_m(w: f32, kmh: f32) -> f32 {
+    let mph = kmh / 1.609;
+    if mph >= 45.0 {
+        w * mph
+    } else {
+        w * mph * mph / 60.0
+    }
 }
 
 /// A junction (any node joined by two or more roads).
@@ -146,7 +230,6 @@ impl RoadNetwork {
             DriveSide::Left => -1.0,
         };
         let mut roads = Vec::new();
-        let mut lanes = Vec::new();
         for (ri, (r, line)) in full.iter().enumerate() {
             let centre = line.trim(trim_start[ri], trim_end[ri]);
             let w = r.lane_width_m;
@@ -161,6 +244,52 @@ impl RoadNetwork {
             let shift = (right_m - left_m) / 2.0
                 * (r.lanes_forward == 0 || r.lanes_backward == 0) as u8 as f32;
             let (left_m, right_m) = (left_m + shift, right_m - shift);
+            roads.push(RoadGeometry {
+                def: r.clone(),
+                centre,
+                left_m,
+                right_m,
+                forward_offsets: (0..r.lanes_forward)
+                    .map(|i| shift - side * (i as f32 + 0.5) * w)
+                    .collect(),
+                backward_offsets: (0..r.lanes_backward)
+                    .map(|i| shift + side * (i as f32 + 0.5) * w)
+                    .collect(),
+                tapers: [None, None],
+            });
+        }
+
+        // Tapers where one road continues into another with a different
+        // number of lanes: the wider road narrows (or widens) over a taper so
+        // every lane meets its partner across the node.
+        for ends in at_node.values().filter(|e| e.len() == 2) {
+            add_tapers(&mut roads, [(ends[0].0, ends[0].1), (ends[1].0, ends[1].1)]);
+        }
+        for g in roads.iter_mut().filter(|g| g.has_tapers()) {
+            let len = g.centre.length();
+            let cap = if g.tapers[0].is_some() && g.tapers[1].is_some() {
+                0.45
+            } else {
+                0.8
+            };
+            for t in g.tapers.iter_mut().flatten() {
+                t.length_m = t.length_m.min(len * cap);
+            }
+        }
+
+        let mut lanes = Vec::new();
+        for (ri, g) in roads.iter().enumerate() {
+            let r = &g.def;
+            // Tapered roads are sampled every metre so the lanes bend smoothly.
+            let fine = g.has_tapers().then(|| g.centre.resample(1.0));
+            let path = |forward: bool, i: usize| match &fine {
+                Some(c) => c.offset_with(|s| g.lane_offset(forward, i, s).0),
+                None => g.centre.offset(if forward {
+                    g.forward_offsets[i]
+                } else {
+                    g.backward_offsets[i]
+                }),
+            };
             for i in 0..r.lanes_forward {
                 lanes.push(Lane {
                     name: format!("{}:f{i}", r.id),
@@ -169,8 +298,8 @@ impl RoadNetwork {
                         forward: true,
                         index: i,
                     },
-                    path: centre.offset(shift - side * (i as f32 + 0.5) * w),
-                    width_m: w,
+                    path: path(true, i as usize),
+                    width_m: r.lane_width_m,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
                     changes: Vec::new(),
@@ -184,21 +313,13 @@ impl RoadNetwork {
                         forward: false,
                         index: i,
                     },
-                    path: centre
-                        .offset(shift + side * (i as f32 + 0.5) * w)
-                        .reversed(),
-                    width_m: w,
+                    path: path(false, i as usize).reversed(),
+                    width_m: r.lane_width_m,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
                     changes: Vec::new(),
                 });
             }
-            roads.push(RoadGeometry {
-                def: r.clone(),
-                centre,
-                left_m,
-                right_m,
-            });
         }
 
         // Lanes of each road, and lane changes between neighbours.
@@ -241,14 +362,12 @@ impl RoadNetwork {
                 let mut corners: Vec<Vec2> = Vec::new();
                 for (ri, starts_here, _) in ends {
                     let g = &roads[*ri];
-                    let (pt, dir) = if *starts_here {
-                        g.centre.sample(0.0)
-                    } else {
-                        g.centre.sample(g.centre.length())
-                    };
+                    let at = if *starts_here { 0.0 } else { g.centre.length() };
+                    let (pt, dir) = g.centre.sample(at);
                     let left = Vec2::new(-dir.y, dir.x);
-                    corners.push(pt + left * g.left_m);
-                    corners.push(pt - left * g.right_m);
+                    let (l, r) = g.edges(at);
+                    corners.push(pt + left * l);
+                    corners.push(pt + left * r);
                 }
                 corners.sort_by(|a, b| (*a - p).to_angle().total_cmp(&(*b - p).to_angle()));
                 junctions.push(Junction {
@@ -333,7 +452,10 @@ impl RoadNetwork {
                             == Some(out)
                     };
                     let allowed = match turn {
-                        _ if continuation => i_out == i_in.min(n_out - 1),
+                        // A gained lane opens from the outer lane before it.
+                        _ if continuation => {
+                            i_out == i_in.min(n_out - 1) || (i_in == n_in - 1 && i_out > i_in)
+                        }
                         Turn::Straight => in_line(),
                         t if t == across => i_in == 0 && i_out == 0,
                         t if t == away => i_in == n_in - 1 && i_out == n_out - 1,
@@ -677,6 +799,76 @@ fn min_radius(path: &Polyline) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
+/// Add tapers where two roads meet end to end at a node (`ends`: road and
+/// whether it starts there) with different lane counts in a direction of
+/// travel. The wider road gets the taper at that end; each of its lanes
+/// shifts to meet its partner on the narrower road (lane i meets lane i, the
+/// extra outer lanes meet the outermost), and the extra lanes close.
+fn add_tapers(roads: &mut [RoadGeometry], ends: [(usize, bool); 2]) {
+    let offsets = |g: &RoadGeometry, forward: bool| {
+        if forward {
+            g.forward_offsets.clone()
+        } else {
+            g.backward_offsets.clone()
+        }
+    };
+    for (x, y) in [(ends[0], ends[1]), (ends[1], ends[0])] {
+        if x.0 == y.0 {
+            continue;
+        }
+        // Traffic arrives on road x and leaves on road y.
+        let (x_fwd, y_fwd) = (!x.1, y.1);
+        let count = |g: &RoadGeometry, fwd: bool| {
+            if fwd {
+                g.forward_offsets.len()
+            } else {
+                g.backward_offsets.len()
+            }
+        };
+        let (n_in, n_out) = (count(&roads[x.0], x_fwd), count(&roads[y.0], y_fwd));
+        if n_in == n_out || n_in == 0 || n_out == 0 {
+            continue;
+        }
+        // The wider road (`wide`, lanes in direction `fwd`) tapers towards `narrow`.
+        let (wide, narrow, wide_fwd, narrow_fwd, n_wide, n_narrow) = if n_in > n_out {
+            (x, y, x_fwd, y_fwd, n_in, n_out)
+        } else {
+            (y, x, y_fwd, x_fwd, n_out, n_in)
+        };
+        let (gw, gn) = (&roads[wide.0], &roads[narrow.0]);
+        // Both centrelines meet at the node, so lanes line up by their offset
+        // from it; flip the narrow road's offsets if it points the other way.
+        let flip = if wide.1 != narrow.1 { 1.0 } else { -1.0 };
+        let (wide_offs, narrow_offs) = (offsets(gw, wide_fwd), offsets(gn, narrow_fwd));
+        let w = gw.def.lane_width_m;
+        let mut moves = Vec::with_capacity(n_wide);
+        let mut widest_move: f32 = 0.0;
+        for (i, own) in wide_offs.iter().enumerate() {
+            let shift = flip * narrow_offs[i.min(n_narrow - 1)] - own;
+            let closes = i >= n_narrow;
+            widest_move = widest_move
+                .max(shift.abs())
+                .max(if closes { w } else { 0.0 });
+            moves.push((shift, closes));
+        }
+        let length = taper_length_m(widest_move, gw.def.speed_limit_kmh).max(10.0);
+        let g = &mut roads[wide.0];
+        let end = if wide.1 { 0 } else { 1 };
+        let (nf, nb) = (g.forward_offsets.len(), g.backward_offsets.len());
+        let t = g.tapers[end].get_or_insert_with(|| Taper {
+            length_m: 0.0,
+            forward: vec![(0.0, false); nf],
+            backward: vec![(0.0, false); nb],
+        });
+        t.length_m = t.length_m.max(length);
+        if wide_fwd {
+            t.forward = moves;
+        } else {
+            t.backward = moves;
+        }
+    }
+}
+
 fn lane_count(def: &RoadDef, kind: LaneKind) -> u8 {
     match kind {
         LaneKind::Road { forward: true, .. } => def.lanes_forward,
@@ -853,5 +1045,88 @@ mod tests {
         assert!(junction_clearance(&fork, w)[0] > 12.0 + KERB_RADIUS_M);
         let straight = [(0, true, at(0.0)), (1, true, at(179.0))];
         assert_eq!(junction_clearance(&straight, w), vec![0.0, 0.0]);
+    }
+
+    /// Three nodes in a line; `a` from p to q, `b` from q to r, one-way.
+    fn lane_drop(lanes_a: u8, lanes_b: u8) -> RoadNetworkDef {
+        let node = |id: &str, x: f32| NodeDef {
+            id: id.into(),
+            position: (x, 0.0),
+        };
+        let one_way = |id: &str, from: &str, to: &str, n: u8| RoadDef {
+            lanes_forward: n,
+            lanes_backward: 0,
+            ..road(id, from, to)
+        };
+        RoadNetworkDef {
+            name: "drop".into(),
+            drive_side: DriveSide::Right,
+            nodes: vec![node("p", 0.0), node("q", 200.0), node("r", 400.0)],
+            roads: vec![
+                one_way("a", "p", "q", lanes_a),
+                one_way("b", "q", "r", lanes_b),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_dropped_lane_tapers_into_its_neighbour() {
+        let net = RoadNetwork::build(&lane_drop(2, 1));
+        let a = &net.roads[0];
+        let t = a.tapers[1].as_ref().expect("a taper where a meets b");
+        assert!(a.tapers[0].is_none() && !net.roads[1].has_tapers());
+        // MUTCD at 50 km/h for one 3.5 m lane: 3.5 × 31.1² / 60 ≈ 56 m.
+        assert!((t.length_m - 56.3).abs() < 0.5, "taper {} m", t.length_m);
+        assert!(t.forward[1].1, "the outer lane closes");
+        // Full width before the taper, one lane at the node.
+        let len = a.centre.length();
+        let (l0, r0) = a.edges(10.0);
+        let (l1, r1) = a.edges(len);
+        assert!(((l0 - r0) - 7.0).abs() < 1e-3 && ((l1 - r1) - 3.5).abs() < 1e-3);
+        // Both lanes end where b's lane starts, so either can carry on.
+        let b0 = net.lanes[net.lane("b:f0").unwrap()].path.points[0];
+        for name in ["a:f0", "a:f1"] {
+            let lane = &net.lanes[net.lane(name).unwrap()];
+            let end = *lane.path.points.last().unwrap();
+            assert!(
+                (end.y - b0.y).abs() < 0.01,
+                "{name} ends at {end}, b at {b0}"
+            );
+            assert!(
+                net.route(net.lane(name).unwrap(), "b").is_some(),
+                "{name} reaches b"
+            );
+        }
+        // The road surface still faces up through the taper.
+        let m = crate::mesh::build_meshes(&net);
+        for t in m.asphalt.indices.chunks(3) {
+            let p = |i: u32| glam::Vec3::from(m.asphalt.positions[i as usize]);
+            assert!((p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).z >= -1e-4);
+        }
+    }
+
+    #[test]
+    fn a_gained_lane_opens_from_the_outer_lane() {
+        let net = RoadNetwork::build(&lane_drop(1, 2));
+        let b = &net.roads[1];
+        assert!(b.tapers[0].is_some(), "b widens at its start");
+        let into: Vec<&str> = net.lanes[net.lane("a:f0").unwrap()]
+            .next
+            .iter()
+            .map(|&c| net.lanes[net.lanes[c].next[0]].name.as_str())
+            .collect();
+        assert_eq!(into, ["b:f0", "b:f1"], "both of b's lanes can be entered");
+    }
+
+    #[test]
+    fn taper_lengths_follow_mutcd() {
+        assert!(
+            (taper_length_m(3.6, 100.0) - 223.7).abs() < 0.5,
+            "W·S above 45 mph"
+        );
+        assert!(
+            (taper_length_m(3.6, 50.0) - 57.9).abs() < 0.5,
+            "W·S²/60 below"
+        );
     }
 }

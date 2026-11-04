@@ -20,4 +20,6 @@ pub mod osm;
 pub use def::{DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape};
 pub use geometry::Polyline;
 pub use mesh::{Mesh, RoadMeshes, build_meshes};
-pub use network::{Junction, Lane, LaneId, LaneKind, RoadGeometry, RoadNetwork, Turn};
+pub use network::{
+    Junction, Lane, LaneId, LaneKind, RoadGeometry, RoadNetwork, Taper, Turn, taper_length_m,
+};

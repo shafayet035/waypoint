@@ -1,0 +1,19 @@
+// M2 lane-drop gate: start in the lane that ends and drive on at 70 km/h.
+// The taper must carry the car into the remaining lane smoothly: close to
+// the lane centre throughout, and a gentle sideways pull.
+(
+  scene: "scenes/lane_drop.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "outer_lane",
+    driver: FollowRoute(to_road: "narrow", kmh: 70.0),
+  ),
+  duration_s: 60.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.5),
+    MaxLateralG(0.12),
+    NoNaN,
+    Deterministic,
+  ],
+)

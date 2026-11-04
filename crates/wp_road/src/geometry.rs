@@ -90,9 +90,16 @@ impl Polyline {
     /// The path shifted sideways by `d` (positive = left), joining segments
     /// with mitred corners (limited so sharp corners do not spike).
     pub fn offset(&self, d: f32) -> Polyline {
+        self.offset_with(|_| d)
+    }
+
+    /// The path shifted sideways by `d(s)` at arc length `s` (positive = left),
+    /// e.g. a lane that narrows or moves over. Sample the path finely first.
+    pub fn offset_with(&self, d_at: impl Fn(f32) -> f32) -> Polyline {
         let n = self.points.len();
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
+            let d = d_at(self.lengths[i]);
             let normal = |t: Vec2| Vec2::new(-t.y, t.x);
             let p = self.points[i];
             let shift = if i == 0 || i == n - 1 {

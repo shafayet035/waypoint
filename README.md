@@ -78,8 +78,9 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 - **M0 (foundations):** simulation core, data formats, CLI, wgpu renderer (windowed and headless),
   control protocol and MCP server; the player app builds for Android and iOS.
 - **M1 (realistic drive):** suspension, rollover, ABS, air brakes, a city bus, and ECE R13 braking tests.
-- **M2 (in progress):** semi-trailers and reverse docking, road networks with routing and lane
-  changes, OpenStreetMap and OpenDRIVE import. Next: lane-drop tapers, then M3 (traffic and assets).
+- **M2 (roads and trucks):** semi-trailers and reverse docking, road networks with routing, lane
+  changes and lane-drop tapers, OpenStreetMap and OpenDRIVE import.
+- **Next, M3 (living city):** traffic, pedestrians, missions, streaming and the asset pipeline.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

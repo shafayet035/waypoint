@@ -95,7 +95,7 @@ been launched yet (no simulator runtime installed here).
 M1 (realistic drive): suspension roll/pitch, tipping and rollover, sliding friction, ABS, air
 brakes, speed governor, vehicle events (`events.poll`, `NoEvent`/`ExpectEvent`), a 12 m city bus,
 and regulation-based validation tests (ECE R13 braking, EU turning circle).
-M2 (in progress): pin joints, semi-trailers, reverse gear, tractor unit, docks and a reversing
+M2 (done): pin joints, semi-trailers, reverse gear, tractor unit, docks and a reversing
 driver; the docking gate test passes (`truck_docking`). Road networks with lanes, junctions, routing
 and road meshes; a Stanley route follower passes the town route test (`town_route`, ≤ 0.2 m off
 lane centre). Routes change lanes (smooth blends on roads ≥ 30 m); junction corners are trimmed
@@ -106,11 +106,14 @@ ends at the map edge). `wp import opendrive` reads ASAM OpenDRIVE: exact line/ar
 paramPoly3 reference lines, lane offsets, one road per lane section (lane counts can change), sidewalks,
 speed limits and LHT/RHT; junctions become nodes whose paths the engine rebuilds (straight-on lanes
 match by sideways position, so slip roads merge into the outer lane). On esmini's sample maps every
-reachable road drives within 0.8 m of the lane centre. Still to do in M2: lane-drop tapers.
+reachable road drives within 0.8 m of the lane centre. Where a road continues into one with more or
+fewer lanes, the wider road gets a MUTCD-length taper (`RoadGeometry::tapers`): lanes shift to meet
+their partners, extra lanes close (or open), and edges, markings and sidewalks follow; the
+`lane_drop` gate merges at 70 km/h within 0.04 m of the lane centre at 0.07 g.
 Driver aids (`wp_vehicle::assist`) sit between keys or thumbs and the car: brakes bite at 12 % and
 build to full in about 0.9 s, steering lock shrinks with speed (about 10° at 60 km/h), and counter-steer
 catches slides past 4° of sideslip. The window's input and the `Keyboard` scenario driver both use them;
 `keyboard_slalom` (no spin at 100 km/h) and `keyboard_brake_tap` guard the feel. The chase camera trails
 the car's heading (0.25 s) in windows only; `wp shot` stays rigid.
-Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes; reverse gear,
-ABS and traction control; event subscriptions (`events.subscribe`) and golden replays.
+Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;
+traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.
