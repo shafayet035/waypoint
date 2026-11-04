@@ -169,6 +169,8 @@ struct Plan {
     /// Progress along `path`, m.
     s: f32,
     integral: f32,
+    /// On the brake (pedal hysteresis: no flicking between pedals).
+    braking: bool,
     /// The route cannot be extended: stop at its end, then reappear elsewhere.
     dead_end: bool,
     /// Seconds spent (nearly) stopped.
@@ -243,8 +245,9 @@ const IDM_HEAVY: Idm = Idm {
     min_gap_m: 3.0,
 };
 
+/// Heavy vehicles (over 3.5 t: buses, minibuses, trucks) drive more gently.
 fn heavy(def: &VehicleDef) -> bool {
-    def.mass_kg > 5000.0
+    def.mass_kg > 3500.0
 }
 
 fn idm_for(def: &VehicleDef) -> Idm {
@@ -645,11 +648,14 @@ fn drive(
     now: f64,
     approaching: &[Approach],
 ) -> (VehicleInput, Outcome) {
+    let speed = vel.linear.dot(pose.forward());
+    // Stop without a jolt: about 1.2 m/s² while still rolling, then hold.
+    let capacity = def.brakes.max_torque_nm / def.wheel.radius_m / def.mass_kg;
+    let settle = (1.2 / capacity.max(1.0)).clamp(0.05, 1.0);
     let hold = VehicleInput {
-        brake: 1.0,
+        brake: if speed.abs() > 0.05 { settle } else { 1.0 },
         ..Default::default()
     };
-    let speed = vel.linear.dot(pose.forward());
     let mut outcome = Outcome::Driving;
 
     // Progress along the route, extending it before it runs out.
@@ -839,7 +845,11 @@ fn drive(
             .max(0.0);
         let stop_at = entry - if setback > 0.0 { setback + 0.5 } else { 0.0 };
         let ahead = entry - s;
-        if ahead > speed.max(0.0).powi(2) / (2.0 * idm.decel) + 15.0 {
+        // Decide while there is still room to stop gently: braking distance
+        // plus the following gap this driver keeps (longer for heavy
+        // vehicles and in the wet).
+        let v = speed.max(0.0);
+        if ahead > v * v / (2.0 * idm.decel) + v * idm.headway_s + 15.0 {
             break; // not near yet
         }
         // Signals: stop for red unless it would take an emergency stop, and
@@ -989,15 +999,22 @@ fn drive(
     // this vehicle's brakes (no switching back and forth between modes).
     let a = idm.accel(speed, v0, gap, speed - lead_v);
     let plan = state.plans.get_mut(&me).expect("planned above");
+    // Once on the brake, stay on it until the car clearly wants to speed up.
+    plan.braking = if plan.braking {
+        a < 0.0
+    } else {
+        a < -COAST_DECEL
+    };
     let (throttle, brake) = if speed < 0.3 && a <= 0.0 {
+        // Stopped or all but: hold firmly, without the jolt a full stamp on
+        // the pedal gives in the last instant before standstill.
         plan.integral = 0.0;
-        (0.0, 1.0)
-    } else if a < -COAST_DECEL {
+        (0.0, if speed < 0.05 { 1.0 } else { settle })
+    } else if plan.braking {
         plan.integral = 0.0;
-        let capacity = def.brakes.max_torque_nm / def.wheel.radius_m / def.mass_kg;
         (
             0.0,
-            ((-a - COAST_DECEL) / capacity.max(1.0)).clamp(0.0, 1.0),
+            ((-a - COAST_DECEL).max(0.0) / capacity.max(1.0)).clamp(0.0, 1.0),
         )
     } else {
         let target = (speed + a).max(0.0) * 3.6;
@@ -1264,6 +1281,7 @@ fn new_plan(net: &RoadNetwork, route: Vec<LaneId>, start_s: f32) -> Plan {
         path: Arc::new(path),
         s: 0.0,
         integral: 0.0,
+        braking: false,
         dead_end: false,
         still_s: 0.0,
         itinerary: None,

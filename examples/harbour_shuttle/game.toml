@@ -1,0 +1,21 @@
+# Harbour Shuttle: a night minibus service round a small harbour town.
+# Built from the `minimal` template with data files only (see README.md).
+name = "harbour_shuttle"
+version = "0.1.0"
+start_scene = "scenes/harbour.scene.ron"
+
+[quality]
+tier = "mid"
+
+[look]
+# A bold cel-shaded look; colours tuned for a harbour at dusk.
+style = "toon"
+ground = [96, 140, 92]
+sidewalk = [196, 186, 170]
+
+[plugins]
+disabled = []
+
+[mods]
+# The electric shuttle mod ships switched off; remove it from this list to play it.
+disabled = ["electric_shuttle"]

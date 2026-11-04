@@ -3,7 +3,8 @@
 
 Our own work, released as CC0. Run from the repo root:
 
-    python3 tools/models/vehicles.py examples/sandbox/assets/vehicles
+    python3 tools/models/vehicles.py examples/sandbox/assets/vehicles hatchback city_bus
+    python3 tools/models/vehicles.py examples/harbour_shuttle/assets/vehicles minibus
 
 Shapes are built in the engine's frame (x forward, y left, z up, metres) with
 the origin on the ground midway between the axles, then written in glTF axes
@@ -297,6 +298,84 @@ def city_bus():
     return m
 
 
+# --- minibus --------------------------------------------------------------------
+# harbour_shuttle's minibus.vehicle.ron: 7.0 m long, 2.1 m wide, 2.75 m high,
+# wheelbase 3.9, front overhang 1.1, wheel radius 0.36. Axle midpoint origin:
+# front 3.05, rear -3.95. A van-style nose with a raked windscreen.
+
+
+def minibus():
+    m = Mesh()
+    front, rear, axle = 3.05, -3.95, 1.95
+    # x: belt, window top, roof, body half-width, roof half-width
+    keys = [
+        (-3.95, (1.05, 2.30, 2.62, 1.02, 0.98)),
+        (-3.88, (1.00, 2.35, 2.72, 1.05, 1.00)),
+        (2.20, (1.00, 2.35, 2.72, 1.05, 1.00)),
+        (2.95, (1.00, 1.60, 1.75, 1.03, 0.98)),
+        (3.05, (0.95, 1.20, 1.25, 1.00, 0.95)),
+    ]
+    axles = (axle, -axle)
+
+    def ring(x):
+        belt, wtop, roof, wb, wr = lerp_keys(keys, x)
+        base = 0.30 if (x > axle + 0.5 or x < -axle - 0.5) else 0.26
+        zb = arch_z(x, axles, 0.5, 0.80, base)
+        return [
+            (wb - 0.05, zb),
+            (wb, zb + 0.08),
+            (wb, belt),
+            (wb, wtop),
+            (wb - 0.01, roof - 0.06),
+            (wr, roof),
+        ]
+
+    pillars = [-2.6, -1.3, 0.0, 1.2]
+    breaks = [k[0] for k in keys] + arch_stations(axles, 0.5)
+    for p in pillars:
+        breaks += [p - 0.06, p + 0.06]
+    xs = stations(front, rear, breaks)
+
+    def band_mat(i, x0, x1):
+        if i == 0:
+            return "trim"
+        if i == 2:
+            if not within(x0, x1, -3.88, 2.95):
+                return "paint"
+            if any(within(x0, x1, p - 0.06, p + 0.06) for p in pillars):
+                return "trim"
+            return "glass"
+        return "paint"
+
+    def top_mat(x0, x1):
+        return "glass" if within(x0, x1, 2.2, 2.95) else "paint"
+
+    def cap_mat(i, end):
+        if i == 0:
+            return "trim"
+        if i == 2 and end == "rear":
+            return "glass"
+        return "paint"
+
+    loft(m, xs, ring, band_mat, top_mat, cap_mat, 1.3)
+
+    # Sliding door on the kerb side, lamps, grille, bumpers, mirrors, roof rack.
+    m.box("trim", (0.25, -1.065, 0.32), (1.35, -1.052, 2.32))
+    m.box("glass", (0.32, -1.07, 1.05), (1.28, -1.06, 2.25))
+    m.box("grey", (3.03, -0.55, 0.45), (3.07, 0.55, 0.85))
+    m.box("trim", (2.98, -1.0, 0.28), (3.12, 1.0, 0.48))
+    m.box("trim", (-4.02, -1.0, 0.30), (-3.92, 1.0, 0.50))
+    m.box("plate", (3.12, -0.26, 0.30), (3.13, 0.26, 0.42))
+    m.box("plate", (-4.03, -0.26, 0.55), (-4.02, 0.26, 0.67))
+    m.mirrored_box("headlight", (3.0, 0.58, 0.88), (3.09, 0.92, 1.0))
+    m.mirrored_box("indicator", (3.0, 0.92, 0.88), (3.08, 0.99, 1.0))
+    m.mirrored_box("brake_light", (-3.98, 0.80, 0.85), (-3.93, 1.0, 1.45))
+    m.mirrored_box("trim", (2.55, 1.03, 1.55), (2.75, 1.25, 1.62))
+    m.mirrored_box("trim", (2.70, 1.20, 1.25), (2.78, 1.28, 1.60))
+    m.box("grey", (-3.0, -0.8, 2.72), (1.8, 0.8, 2.76))
+    return m
+
+
 # --- glTF writer ----------------------------------------------------------------
 
 
@@ -370,7 +449,10 @@ def write_glb(mesh, name, path):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     os.makedirs(out, exist_ok=True)
-    for name, build in (("hatchback", hatchback), ("city_bus", city_bus)):
+    only = sys.argv[2:] or ["hatchback", "city_bus", "minibus"]
+    builders = {"hatchback": hatchback, "city_bus": city_bus, "minibus": minibus}
+    for name in only:
+        build = builders[name]
         mesh = build()
         path = os.path.join(out, name + ".glb")
         write_glb(mesh, name, path)

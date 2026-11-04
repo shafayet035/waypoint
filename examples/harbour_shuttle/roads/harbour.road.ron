@@ -1,0 +1,43 @@
+// A small harbour town. Quay Road runs along the water from the ferry
+// terminal to the fish market; Market Street climbs to the old square; the
+// cliff road runs out to the lighthouse and the hill road loops back down to
+// the ferry. Right-hand traffic. Lights where Market Street meets the quay;
+// at the square the hill road gives way.
+(
+  name: "harbour",
+  drive_side: Right,
+  nodes: [
+    (id: "ferry", position: (-220.0, -60.0)),
+    (id: "quay_mid", position: (0.0, -60.0), control: Signals((green_s: 18.0))),
+    (id: "fish_market", position: (200.0, -60.0)),
+    (id: "square", position: (0.0, 80.0), control: Priority(major: ["market_street", "cliff_road"])),
+    (id: "hill", position: (-180.0, 120.0)),
+    (id: "lighthouse", position: (230.0, 110.0)),
+  ],
+  roads: [
+    (id: "quay_west", name: Some("Quay Road"), from: "ferry", to: "quay_mid",
+     lanes_forward: 2, lanes_backward: 2, sidewalk_m: 3.0, speed_limit_kmh: 40.0),
+    (id: "quay_east", name: Some("Quay Road"), from: "quay_mid", to: "fish_market",
+     sidewalk_m: 3.0, speed_limit_kmh: 40.0),
+    (id: "market_street", name: Some("Market Street"), from: "quay_mid", to: "square",
+     sidewalk_m: 2.5, speed_limit_kmh: 30.0),
+    (id: "hill_road", name: Some("Hill Road"), from: "square", to: "hill",
+     shape: Curve(through: [(-90.0, 125.0)]), sidewalk_m: 2.0, speed_limit_kmh: 40.0),
+    (id: "hill_descent", name: Some("Ferry Hill"), from: "hill", to: "ferry",
+     shape: Curve(through: [(-215.0, 112.0), (-248.0, 62.0), (-252.0, 10.0), (-238.0, -48.0)]), speed_limit_kmh: 40.0),
+    (id: "cliff_road", name: Some("Cliff Road"), from: "square", to: "lighthouse",
+     shape: Curve(through: [(120.0, 125.0), (200.0, 124.0)]), sidewalk_m: 1.5, speed_limit_kmh: 40.0),
+    (id: "lighthouse_link", name: Some("Lighthouse Lane"), from: "lighthouse", to: "fish_market",
+     shape: Curve(through: [(256.0, 70.0), (262.0, 20.0), (240.0, -40.0)]), speed_limit_kmh: 30.0),
+  ],
+  // The night service runs ferry → quay → fish market → lighthouse → square
+  // → hill → ferry; `forward` says which way along the road it stops.
+  stops: [
+    (id: "ferry_terminal", name: "Ferry Terminal", road: "quay_west", forward: true, at_m: 45.0),
+    (id: "harbour_master", name: "Harbour Master", road: "quay_west", forward: true, at_m: 165.0),
+    (id: "fish_market", name: "Fish Market", road: "quay_east", forward: true, at_m: 140.0),
+    (id: "cliff_top", name: "Cliff Top", road: "cliff_road", forward: false, at_m: 110.0),
+    (id: "old_square", name: "Old Square", road: "hill_road", forward: true, at_m: 50.0),
+    (id: "upper_town", name: "Upper Town", road: "hill_descent", forward: true, at_m: 70.0),
+  ],
+)

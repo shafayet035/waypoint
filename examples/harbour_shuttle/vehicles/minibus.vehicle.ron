@@ -1,0 +1,51 @@
+// A 16-seat diesel minibus (UN class M2, under 5 t), loaded. Typical figures
+// for the class: 3.0 L four-cylinder turbo diesel, 130 kW and 400 N·m, 6-speed
+// automatic, 225/65 R16 tyres, hydraulic disc brakes with ABS, traction and
+// stability control, speed limited to 100 km/h. Not any one maker's van.
+(
+  name: "minibus",
+  mass_kg: 4800.0,
+  yaw_inertia_kgm2: 24000.0,
+  cg_height_m: 0.95,
+  wheelbase_m: 3.9,
+  cg_to_front_axle_m: 2.0,
+  track_width_m: 1.75,
+  drive: Rear,
+  wheel: (radius_m: 0.36, inertia_kgm2: 7.0),
+  tyre: (
+    friction: 0.9,
+    stiffness_per_load: 12.0,
+    relaxation_length_m: 0.45,
+    rolling_resistance: 0.009,
+    sliding_friction_ratio: 0.8,
+  ),
+  engine: (
+    idle_rpm: 750.0,
+    cylinders: 4,
+    redline_rpm: 3800.0,
+    torque_curve: [(1000.0, 280.0), (1500.0, 400.0), (2500.0, 400.0), (3200.0, 340.0), (3700.0, 280.0)],
+    engine_brake_nm: 80.0,
+    governed_speed_kmh: Some(100.0),
+  ),
+  gearbox: (
+    ratios: [4.2, 2.5, 1.6, 1.2, 1.0, 0.8],
+    final_drive: 4.1,
+    efficiency: 0.9,
+    shift_up_rpm: 3100.0,
+    shift_down_rpm: 1300.0,
+  ),
+  brakes: (max_torque_nm: 16000.0, front_bias: 0.62, abs: true, traction_control: true, esc: true),
+  steering: (max_angle_deg: 38.0, rate_deg_per_s: 150.0),
+  aero: (drag_area_m2: 4.0),
+  suspension: (
+    roll_gradient_deg_per_g: 5.5,
+    pitch_gradient_deg_per_g: 2.2,
+    damping_ratio: 0.45,
+    roll_center_height_m: 0.5,
+    front_roll_share: 0.55,
+  ),
+  body: Some((length_m: 7.0, width_m: 2.1, height_m: 2.75, front_overhang_m: 1.1)),
+  model: Some("assets/vehicles/minibus.glb"),
+  // A four-cylinder diesel: a little lower and rougher than a petrol car.
+  sound: (pitch: 0.95, roughness: 1.4, rumble: 1.5, intake: 0.8),
+)

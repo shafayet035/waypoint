@@ -136,28 +136,31 @@ pub fn pedestrians(world: &mut World) {
             && walk.s == 0.0
         {
             let cross_s = edge.path.length() / me.speed.max(0.5);
+            let (a, b) = (
+                edge.path.points[0],
+                *edge.path.points.last().expect("2 points"),
+            );
+            let clear = || {
+                vehicles.iter().all(|&(p, v, r)| {
+                    // Distance from the vehicle's body to the crossing,
+                    // and how soon it could be there at its speed.
+                    let along = (p - a).dot(b - a) / (b - a).length_squared().max(1e-6);
+                    let d = p.distance(a + (b - a) * along.clamp(0.0, 1.0)) - r;
+                    let speed = v.length();
+                    d > 1.5 && (speed < 0.5 || d / speed > SAFE_GAP_S.max(cross_s))
+                })
+            };
             let safe = match net
                 .junction_at(node)
                 .and_then(|j| j.light(road, now).map(|l| (j, l)))
             {
+                // Red for the whole crossing, and nothing still coming
+                // through (a car that entered on amber, a turning car).
                 Some((j, Light::Red)) => {
-                    j.light(road, now + cross_s as f64 + 1.0) == Some(Light::Red)
+                    j.light(road, now + cross_s as f64 + 1.0) == Some(Light::Red) && clear()
                 }
                 Some(_) => false,
-                None => {
-                    let (a, b) = (
-                        edge.path.points[0],
-                        *edge.path.points.last().expect("2 points"),
-                    );
-                    vehicles.iter().all(|&(p, v, r)| {
-                        // Distance from the vehicle's body to the crossing,
-                        // and how soon it could be there at its speed.
-                        let along = (p - a).dot(b - a) / (b - a).length_squared().max(1e-6);
-                        let d = p.distance(a + (b - a) * along.clamp(0.0, 1.0)) - r;
-                        let speed = v.length();
-                        d > 1.5 && (speed < 0.5 || d / speed > SAFE_GAP_S.max(cross_s))
-                    })
-                }
+                None => clear(),
             };
             if !safe {
                 waiting += 1;
@@ -297,7 +300,12 @@ pub fn detect_pedestrian_hits(world: &mut World) {
     world
         .query::<(&Pose, &Collider)>()
         .for_each(|e, (pose, c)| {
-            if world.get::<Vehicle>(e).is_some() {
+            // Only a moving vehicle hits someone; walking into a parked one
+            // is not a road accident.
+            let moving = world
+                .get::<Velocity>(e)
+                .is_some_and(|v| v.linear.length() > 0.5);
+            if world.get::<Vehicle>(e).is_some() && moving {
                 boxes.push((e, c.corners(pose), pose.position, c.radius()));
             }
         });

@@ -58,7 +58,9 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `waypoint` | `DefaultPlugins`, project loader, `drive` (shared session setup), prelude |
 | `wp_cli` | The `wp` command and the error-code catalogue |
 
-`examples/sandbox` is a complete project and also the template for `wp new`.
+`examples/sandbox` is a complete project and also the template for `wp new` (`--template minimal` takes
+one car, a flat ground and two tests from it). `examples/harbour_shuttle` is a second game built from the
+minimal template with data only (a night minibus route, toon look, and an electric-shuttle mod).
 
 ## Architecture
 

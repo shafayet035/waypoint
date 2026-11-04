@@ -1,0 +1,50 @@
+// The electric shuttle mod's minibus: same body, a 150 kW motor with full
+// torque from standstill, a single-speed reduction gear, strong regenerative
+// braking, 300 kg of batteries, and a motor whine instead of a diesel.
+(
+  name: "minibus",
+  mass_kg: 5100.0,
+  yaw_inertia_kgm2: 24000.0,
+  cg_height_m: 0.95,
+  wheelbase_m: 3.9,
+  cg_to_front_axle_m: 2.0,
+  track_width_m: 1.75,
+  drive: Rear,
+  wheel: (radius_m: 0.36, inertia_kgm2: 7.0),
+  tyre: (
+    friction: 0.9,
+    stiffness_per_load: 12.0,
+    relaxation_length_m: 0.45,
+    rolling_resistance: 0.009,
+    sliding_friction_ratio: 0.8,
+  ),
+  engine: (
+    idle_rpm: 300.0,
+    cylinders: 4,
+    redline_rpm: 12000.0,
+    torque_curve: [(300.0, 420.0), (3400.0, 420.0), (8000.0, 180.0), (12000.0, 110.0)],
+    engine_brake_nm: 60.0,
+    governed_speed_kmh: Some(100.0),
+  ),
+  gearbox: (
+    ratios: [1.0],
+    final_drive: 10.0,
+    efficiency: 0.95,
+    shift_up_rpm: 11500.0,
+    shift_down_rpm: 400.0,
+  ),
+  brakes: (max_torque_nm: 16000.0, front_bias: 0.62, abs: true, traction_control: true, esc: true),
+  steering: (max_angle_deg: 38.0, rate_deg_per_s: 150.0),
+  aero: (drag_area_m2: 4.0),
+  suspension: (
+    roll_gradient_deg_per_g: 5.5,
+    pitch_gradient_deg_per_g: 2.2,
+    damping_ratio: 0.45,
+    roll_center_height_m: 0.5,
+    front_roll_share: 0.55,
+  ),
+  body: Some((length_m: 7.0, width_m: 2.1, height_m: 2.75, front_overhang_m: 1.1)),
+  model: Some("assets/vehicles/minibus.glb"),
+  // A motor whine: high and smooth, no rumble, no intake roar.
+  sound: (pitch: 2.5, roughness: 0.3, rumble: 0.0, intake: 0.15, volume: 0.7),
+)

@@ -568,6 +568,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         title: "game.toml disables a mod that is not in mods/",
         fix: "Remove it from [mods] disabled, or check the folder name (`wp mod list`).",
     },
+    ErrorDoc {
+        code: "WP-N012",
+        title: "Traffic cannot drive into and out of a road joined at both ends",
+        fix: "A junction could not connect it: give it a gentler angle where it meets the next road, or move `through` points away from its ends; check with a FollowRoute scenario.",
+    },
 ];
 
 pub fn find(code: &str) -> Option<&'static ErrorDoc> {

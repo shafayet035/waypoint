@@ -1,0 +1,8 @@
+# A Waypoint mod. Files here mirror the game's layout: a file at the same path
+# replaces the game's (vehicles/hatchback.vehicle.ron), a new path adds one.
+name = "electric_shuttle"
+version = "1.0.0"
+author = "Waypoint contributors"
+description = "Replaces the diesel minibus with an electric one: instant torque, one gear, regenerative braking, a motor whine."
+# Load order: lower first; later mods override earlier ones.
+priority = 0

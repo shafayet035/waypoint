@@ -1,0 +1,18 @@
+// The game's main test: the traffic AI drives the minibus round both laps of
+// the night run in rain and traffic. Every stop served, a good score, no
+// collisions, red lights or people hit.
+(
+  scene: "scenes/harbour.scene.ron",
+  seed: 3,
+  mission: Some("night_run"),
+  player: (vehicle: "minibus", spawn: "terminal", driver: Autopilot),
+  duration_s: 800.0,
+  assert: [
+    MissionComplete,
+    MissionScore(min: 85),
+    NoCollisions,
+    NoRedLightViolations,
+    NoPedestrianHits,
+    NoNaN,
+  ],
+)

@@ -1,0 +1,15 @@
+// The harbour on a wet evening: light rain, the clock running from 8 pm (one
+// game minute every two real seconds), traffic and people about.
+// "terminal" is the outer eastbound lane of Quay Road by the ferry.
+(
+  name: "harbour",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/harbour.road.ron"),
+  traffic: Some((count: 10, vehicles: ["hatchback", "hatchback", "minibus"])),
+  pedestrians: Some((count: 14)),
+  weather: Some((rain: 0.35)),
+  time_of_day: Some((hour: 20.0, hours_per_hour: 30.0)),
+  spawns: [
+    (name: "terminal", position: (-195.0, -65.25), heading_deg: 0.0),
+  ],
+)

@@ -429,6 +429,18 @@ fn mission(world: &mut World) {
             if g > 0.3 && !st.harsh_now && st.phase == Phase::Driving {
                 st.harsh += 1;
                 st.harsh_now = true;
+                let what = if tel.lateral_g.abs() > tel.longitudinal_g.abs() {
+                    "cornering"
+                } else if tel.longitudinal_g < 0.0 {
+                    "braking"
+                } else {
+                    "accelerating"
+                };
+                let at = tel.position;
+                st.log.push(format!(
+                    "{t:.1}s harsh {what} {g:.2} g at ({:.0}, {:.0}), {speed_kmh:.0} km/h",
+                    at[0], at[1]
+                ));
             } else if g < 0.2 {
                 st.harsh_now = false;
             }

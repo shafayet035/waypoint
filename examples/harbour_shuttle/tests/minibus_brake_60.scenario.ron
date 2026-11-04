@@ -1,0 +1,15 @@
+// Regulation check: UN ECE R13 Type-0 for a class M2 minibus, laden, from
+// 60 km/h: stopping distance at most 0.15·v + v²/130 = 36.7 m and mean fully
+// developed deceleration of at least 5.0 m/s². On a dry road (the flat ground).
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (vehicle: "minibus", spawn: "start", initial_kmh: 60.0, driver: Script([(at_s: 0.0, brake: 1.0)])),
+  duration_s: 6.0,
+  assert: [
+    BrakingDistance(max_m: 36.7),
+    Mfdd(min_mps2: 5.0),
+    StoppedBy(s: 4.0),
+    NoNaN,
+  ],
+)

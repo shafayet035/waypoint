@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a new project from a template.
+    /// Create a new project from a template: sandbox (everything) or minimal.
     New {
         /// Folder to create; its last part becomes the game name.
         name: PathBuf,

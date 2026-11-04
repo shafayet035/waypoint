@@ -492,7 +492,10 @@ fn stability_control(
         let slide = (beta.abs() - 0.05).max(0.0) * -beta.signum() * 1.5;
         let error = yaw_rate - wanted + slide;
         let threshold = 0.05 + 0.08 * wanted.abs();
-        if error.abs() > threshold {
+        // Like real systems, stay out of calm driving: act only while the
+        // car corners hard or is already sliding.
+        let working = veh.accel_local.y.abs() > 0.25 * ctx.g || beta.abs() > 3f32.to_radians();
+        if working && error.abs() > threshold {
             // Braking a left wheel turns the car left (positive yaw).
             let left = error < 0.0;
             let sliding = yaw_rate.abs() > wanted.abs() || yaw_rate * wanted < 0.0;

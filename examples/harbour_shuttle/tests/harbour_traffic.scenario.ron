@@ -1,0 +1,17 @@
+// The harbour on its own for three minutes: AI traffic and people in the
+// rain and the dark keep moving without collisions, red lights or anyone hit.
+// The player's minibus waits at the terminal.
+(
+  scene: "scenes/harbour.scene.ron",
+  seed: 11,
+  player: (vehicle: "minibus", spawn: "terminal", driver: Script([(at_s: 0.0, brake: 1.0)])),
+  duration_s: 180.0,
+  assert: [
+    TrafficFlows(min_trips: 4),
+    NoCollisions,
+    NoRedLightViolations,
+    NoPedestrianHits,
+    NoNaN,
+    Deterministic,
+  ],
+)

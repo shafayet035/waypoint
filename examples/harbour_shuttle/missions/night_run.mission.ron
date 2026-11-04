@@ -1,0 +1,26 @@
+// The night shuttle: two laps from the ferry terminal round the harbour
+// town in the rain. People board and alight while the doors are open; the
+// score is punctuality, comfort and safety. The script adds the late ferry.
+(
+  title: "Night Run: Harbour loop",
+  briefing: "Two laps: Ferry Terminal, Harbour Master, Fish Market, Cliff Top, Old Square, Upper Town. Wet roads; the last ferry docks during your second lap.",
+  scene: "scenes/harbour.scene.ron",
+  vehicle: "minibus",
+  spawn: "terminal",
+  stops: [
+    (stop: "ferry_terminal", depart_s: 40.0),
+    (stop: "harbour_master", depart_s: 80.0),
+    (stop: "fish_market", depart_s: 130.0),
+    (stop: "cliff_top", depart_s: 190.0),
+    (stop: "old_square", depart_s: 235.0),
+    (stop: "upper_town", depart_s: 280.0),
+    (stop: "ferry_terminal", depart_s: 330.0),
+    (stop: "harbour_master", depart_s: 370.0),
+    (stop: "fish_market", depart_s: 420.0),
+    (stop: "cliff_top", depart_s: 480.0),
+    (stop: "old_square", depart_s: 525.0),
+    (stop: "upper_town", depart_s: 570.0),
+  ],
+  time_limit_s: Some(900.0),
+  script: Some("missions/night_run.lua"),
+)

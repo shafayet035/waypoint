@@ -342,6 +342,38 @@ impl RoadNetworkDef {
                 }
             }
         }
+        // Roads joined at both ends that traffic still cannot drive through
+        // (usually a connection the junction geometry could not make).
+        if out.iter().all(|d| d.severity != wp_core::Severity::Error) {
+            let built = crate::network::RoadNetwork::build(net);
+            let main: std::collections::BTreeSet<usize> =
+                built.largest_connected().into_iter().collect();
+            let degree = |node: &str| {
+                net.roads
+                    .iter()
+                    .filter(|r| r.from == node || r.to == node)
+                    .count()
+            };
+            for (ri, r) in net.roads.iter().enumerate() {
+                if degree(&r.from) < 2 || degree(&r.to) < 2 {
+                    continue; // a dead end is allowed to be one
+                }
+                let joined = built.lanes.iter().enumerate().any(|(l, lane)| {
+                    matches!(lane.kind, crate::network::LaneKind::Road { road, .. } if road == ri)
+                        && main.contains(&l)
+                });
+                if !joined {
+                    out.push(
+                        file.warning_at(
+                            "WP-N012",
+                            "roads",
+                            format!("traffic cannot drive into and out of road `{}`", r.id),
+                        )
+                        .help("a junction could not connect it: try a gentler angle where it meets the next road, or fewer `through` points near its ends"),
+                    );
+                }
+            }
+        }
         out
     }
 }

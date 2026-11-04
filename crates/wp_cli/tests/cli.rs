@@ -679,3 +679,22 @@ fn mods_add_and_replace_files() {
     assert_eq!(code, 1, "the mod's scene is gone: {v}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn minimal_template_is_small_and_passes() {
+    let dir = temp_dir("minimal");
+    let (code, out) = wp(&dir, &["new", "g", "--template", "minimal"]);
+    assert_eq!(code, 0, "{out}");
+    let game = dir.join("g");
+    assert!(game.join("vehicles/hatchback.vehicle.ron").is_file());
+    assert!(
+        !game.join("roads").exists(),
+        "no town in the minimal template"
+    );
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!((code, v["warnings"].as_u64()), (0, Some(0)), "{v}");
+    let (code, v) = json(&game, &["test"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["total"], 2);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

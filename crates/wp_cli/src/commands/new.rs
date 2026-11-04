@@ -171,13 +171,33 @@ const TEMPLATE_SANDBOX: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// The `minimal` template: one car on a flat test ground with two tests,
+/// for starting a game from scratch.
+const TEMPLATE_MINIMAL: &[&str] = &[
+    "game.toml",
+    "AGENTS.md",
+    "vehicles/hatchback.vehicle.ron",
+    "assets/vehicles/hatchback.glb",
+    "assets/vehicles/hatchback.asset.ron",
+    "scenes/flat.scene.ron",
+    "tests/accelerate_and_brake.scenario.ron",
+    "tests/skidpad.scenario.ron",
+];
+
 pub fn new(ctx: &Ctx, dest: &Path, template: &str) -> CmdResult {
-    if template != "sandbox" {
-        return Err(cli_error(
-            format!("unknown template `{template}`"),
-            "available templates: sandbox",
-        ));
-    }
+    let files: Vec<&(&str, &[u8])> = match template {
+        "sandbox" => TEMPLATE_SANDBOX.iter().collect(),
+        "minimal" => TEMPLATE_SANDBOX
+            .iter()
+            .filter(|(rel, _)| TEMPLATE_MINIMAL.contains(rel))
+            .collect(),
+        _ => {
+            return Err(cli_error(
+                format!("unknown template `{template}`"),
+                "available templates: sandbox (everything: town, traffic, bus route, truck), minimal (a car on a flat ground)",
+            ));
+        }
+    };
     if dest.exists() {
         return Err(vec![
             Diagnostic::error("WP-C004", format!("{} already exists", dest.display()))
@@ -189,7 +209,7 @@ pub fn new(ctx: &Ctx, dest: &Path, template: &str) -> CmdResult {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "game".into());
     let mut written = Vec::new();
-    for (rel, content) in TEMPLATE_SANDBOX {
+    for (rel, content) in files {
         let path = dest.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| io_error(&path, e))?;
         let content: Vec<u8> = if *rel == "game.toml" {
