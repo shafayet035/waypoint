@@ -99,3 +99,64 @@ fn upscaled_frames_match_full_resolution() {
         wp_rhi::write_png(&Path::new(&dir).join("upscaled.png"), w, h, &low).unwrap();
     }
 }
+
+/// A 6 km straight road: windows keep only the tiles near the camera on the
+/// GPU, built on a worker thread; offscreen renders keep the whole road.
+#[test]
+fn road_tiles_stream_around_the_camera() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let def: wp_road::RoadNetworkDef = wp_data::parse_ron(
+        "long.road.ron",
+        r#"(name: "long", nodes: [(id: "a", position: (-3000.0, 0.0)), (id: "b", position: (3000.0, 0.0))],
+            roads: [(id: "r", from: "a", to: "b", lanes_forward: 2, lanes_backward: 2, sidewalk_m: 2.0)])"#,
+    )
+    .unwrap();
+    let mut app = world_with_car();
+    app.world
+        .insert_resource(wp_world::Roads(std::sync::Arc::new(
+            wp_road::RoadNetwork::build(&def),
+        )));
+    let frame = extract(&app.world, CameraMode::Chase);
+    let (w, h) = (320, 180);
+    let target = wp_rhi::OffscreenTarget::new(&gpu, w, h);
+
+    let mut r = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
+    r.render(&gpu, &frame, &target.view);
+    let all = r.stats();
+    assert!(all.road_tiles_total >= 15, "{all:?}");
+    assert_eq!(all.road_tiles_resident, all.road_tiles_total);
+    assert!(
+        all.road_tiles_drawn < all.road_tiles_total,
+        "tiles behind the camera are culled: {all:?}"
+    );
+
+    let mut s = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
+    s.set_streaming(Some(700.0));
+    let start = std::time::Instant::now();
+    loop {
+        s.render(&gpu, &frame, &target.view);
+        let st = s.stats();
+        if st.road_tiles_total > 0 && st.road_tiles_resident >= 4 {
+            break;
+        }
+        assert!(
+            start.elapsed().as_secs() < 30,
+            "tiles never arrived: {st:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // A few more frames: everything in range arrives, nothing far away does.
+    for _ in 0..5 {
+        s.render(&gpu, &frame, &target.view);
+    }
+    let st = s.stats();
+    assert!(st.road_tiles_resident <= 10, "{st:?}");
+    assert!(st.road_tiles_resident < st.road_tiles_total / 2, "{st:?}");
+    assert!(st.road_tiles_drawn >= 1, "{st:?}");
+}

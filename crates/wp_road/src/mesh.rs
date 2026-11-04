@@ -308,6 +308,82 @@ fn tapered_road(m: &mut RoadMeshes, road: &RoadGeometry, c: &Polyline) {
     }
 }
 
+/// A square piece of the road meshes, for streaming: the renderer keeps
+/// only tiles near the camera on the GPU. Positions are relative to
+/// `centre`, so big maps stay precise in 32-bit floats.
+#[derive(Clone, Debug, Default)]
+pub struct RoadTile {
+    /// Tile column and row: `floor(x / size)`, `floor(y / size)`.
+    pub key: (i32, i32),
+    /// Tile centre, m (world).
+    pub centre: [f32; 2],
+    /// Asphalt, markings and sidewalks, as in [`RoadMeshes`].
+    pub layers: [Mesh; 3],
+    /// Bounds of the tile's vertices, relative to `centre`.
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl RoadTile {
+    pub fn triangle_count(&self) -> usize {
+        self.layers.iter().map(Mesh::triangle_count).sum()
+    }
+}
+
+/// Default tile edge, m: big enough to keep draw calls low on phones.
+pub const TILE_M: f32 = 400.0;
+
+/// Cut road meshes into `tile_m` squares. A triangle goes to the tile that
+/// holds its centre, so nothing is drawn twice. Tiles are in key order.
+pub fn split_tiles(meshes: &RoadMeshes, tile_m: f32) -> Vec<RoadTile> {
+    use std::collections::{BTreeMap, HashMap};
+    // Each tile with, per layer, a map from source vertex to tile vertex.
+    type Remap = [HashMap<u32, u32>; 3];
+    let mut tiles: BTreeMap<(i32, i32), (RoadTile, Remap)> = BTreeMap::new();
+    let layers = [&meshes.asphalt, &meshes.markings, &meshes.sidewalks];
+    for (k, mesh) in layers.iter().enumerate() {
+        for t in mesh.indices.chunks(3) {
+            let p = |i: u32| Vec3::from(mesh.positions[i as usize]);
+            let c = (p(t[0]) + p(t[1]) + p(t[2])) / 3.0;
+            let key = ((c.x / tile_m).floor() as i32, (c.y / tile_m).floor() as i32);
+            let (tile, remap) = tiles.entry(key).or_insert_with(|| {
+                let centre = [(key.0 as f32 + 0.5) * tile_m, (key.1 as f32 + 0.5) * tile_m];
+                (
+                    RoadTile {
+                        key,
+                        centre,
+                        min: [f32::MAX; 3],
+                        max: [f32::MIN; 3],
+                        ..Default::default()
+                    },
+                    Default::default(),
+                )
+            });
+            for &i in t {
+                let out = &mut tile.layers[k];
+                let j = *remap[k].entry(i).or_insert_with(|| {
+                    let q = mesh.positions[i as usize];
+                    let local = [q[0] - tile.centre[0], q[1] - tile.centre[1], q[2]];
+                    for (a, v) in local.iter().enumerate() {
+                        tile.min[a] = tile.min[a].min(*v);
+                        tile.max[a] = tile.max[a].max(*v);
+                    }
+                    out.positions.push(local);
+                    out.normals.push(mesh.normals[i as usize]);
+                    out.positions.len() as u32 - 1
+                });
+                out.indices.push(j);
+            }
+        }
+    }
+    tiles.into_values().map(|(t, _)| t).collect()
+}
+
+/// [`build_meshes`] cut into tiles of `tile_m`.
+pub fn build_tiles(net: &RoadNetwork, tile_m: f32) -> Vec<RoadTile> {
+    split_tiles(&build_meshes(net), tile_m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +430,33 @@ mod tests {
             let p = |i: u32| Vec3::from(m.asphalt.positions[i as usize]);
             let n = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
             assert!(n.z >= -1e-4, "downward-facing asphalt triangle {t:?}");
+        }
+    }
+
+    #[test]
+    fn tiles_keep_every_triangle() {
+        let def: RoadNetworkDef = wp_data::parse_ron(
+            "town.road.ron",
+            include_str!("../../../examples/sandbox/roads/town.road.ron"),
+        )
+        .unwrap();
+        let net = RoadNetwork::build(&def);
+        let whole = build_meshes(&net);
+        let tiles = split_tiles(&whole, 100.0);
+        assert!(tiles.len() > 4);
+        let total: usize = tiles.iter().map(RoadTile::triangle_count).sum();
+        let want = whole.asphalt.triangle_count()
+            + whole.markings.triangle_count()
+            + whole.sidewalks.triangle_count();
+        assert_eq!(total, want);
+        for t in &tiles {
+            // Vertices stay near their tile (triangles may overhang a little).
+            assert!(t.min[0] > -100.0 && t.max[0] < 100.0, "{:?}", t.key);
+            assert!(
+                t.layers
+                    .iter()
+                    .all(|l| l.indices.iter().all(|&i| (i as usize) < l.positions.len()))
+            );
         }
     }
 }

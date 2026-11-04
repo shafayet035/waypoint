@@ -175,6 +175,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 exit_after_s: args.exit_after,
                 control,
                 max_height: Some(tier.max_height()),
+                view_distance_m: Some(tier.view_distance_m()),
             },
         )
         .map_err(|d| vec![d])?;
@@ -318,8 +319,8 @@ pub fn shot(ctx: &Ctx, args: &ShotArgs) -> CmdResult {
 
     let gpu = wp_rhi::Gpu::headless().map_err(|d| vec![d])?;
     let frame = wp_render::extract(&app.world, camera);
-    let rgba =
-        wp_render::render_rgba(&gpu, &frame, args.width, args.height).map_err(|d| vec![d])?;
+    let (rgba, stats) = wp_render::render_rgba_with_stats(&gpu, &frame, args.width, args.height)
+        .map_err(|d| vec![d])?;
     wp_rhi::write_png(&args.out, args.width, args.height, &rgba).map_err(|d| vec![d])?;
     let tel = waypoint::vehicle::telemetry(&app.world, player);
     if ctx.json {
@@ -332,6 +333,7 @@ pub fn shot(ctx: &Ctx, args: &ShotArgs) -> CmdResult {
             "ticks": ticks,
             "camera": args.camera,
             "gpu": gpu.info(),
+            "render": stats,
             "telemetry": tel,
             "state_hash": app.world.state_hash(),
         }));

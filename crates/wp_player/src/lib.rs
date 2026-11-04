@@ -45,6 +45,7 @@ pub fn play(
             exit_after_s,
             control,
             max_height: Some(project.game.value.quality.tier.max_height()),
+            view_distance_m: Some(project.game.value.quality.tier.view_distance_m()),
         },
     )
     .map_err(|d| vec![d])

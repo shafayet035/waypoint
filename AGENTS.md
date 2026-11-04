@@ -161,5 +161,10 @@ Own/Cc0/CcBy3/CcBy4/Purchased, credit). A vehicle's `model: Some("assets/vehicle
 brake…/head… get roles). `wp check`: WP-F001–F010 (licence, size, origin, tier triangle budgets).
 `wp asset info|list`, `wp credits`, `wp docs assets`. The sandbox's hatchback and city bus models come from
 `tools/models/vehicles.py` (our own, CC0). Textures are not drawn yet; `wp asset build` (LODs, KTX2) is M4.
+Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
+Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
+on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn
+camera-relative (floating origin: `Camera::view_proj_relative`). `wp shot` stays synchronous and complete;
+`wp shot --json` and window summaries report `render` stats (draw calls, triangles, tiles).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.

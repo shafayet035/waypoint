@@ -63,6 +63,14 @@ impl QualityTier {
             Self::Flagship => 900,
         }
     }
+    /// How far road tiles stream in around the camera, m (fog hides the edge).
+    pub fn view_distance_m(self) -> f32 {
+        match self {
+            Self::Low => 700.0,
+            Self::Mid => 1000.0,
+            Self::Flagship => 1500.0,
+        }
+    }
     /// Multiplier on a scene's traffic count.
     pub fn traffic_scale(self) -> f32 {
         match self {

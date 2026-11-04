@@ -44,8 +44,10 @@ fn ambient(n: vec3<f32>) -> vec3<f32> {
     return mix(bounce, g.sky_zenith.rgb * 0.9, n.z * 0.5 + 0.5);
 }
 
-fn apply_fog(col: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    let d = distance(world, g.camera_pos.xyz);
+// `rel`: position relative to the camera (all geometry is drawn camera-relative,
+// so big maps keep their precision).
+fn apply_fog(col: vec3<f32>, rel: vec3<f32>) -> vec3<f32> {
+    let d = length(rel);
     let f = 1.0 - exp(-d * g.params.x);
     return mix(col, g.sky_horizon.rgb, f);
 }
@@ -71,7 +73,7 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     // A point on the near plane (depth 1 with reversed-Z), seen from the camera.
     let p = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
-    let dir = normalize(p.xyz / p.w - g.camera_pos.xyz);
+    let dir = normalize(p.xyz / p.w);
     return vec4<f32>(tonemap(sky_color(dir)), 1.0);
 }
 
@@ -80,6 +82,7 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
 struct GroundOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) world: vec3<f32>,
+    @location(1) rel: vec3<f32>,
 };
 
 @vertex
@@ -88,10 +91,11 @@ fn vs_ground(@builtin(vertex_index) i: u32) -> GroundOut {
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
     );
-    let c = corners[i] * 2000.0 + g.camera_pos.xy;
+    let c = corners[i] * 2000.0;
     var out: GroundOut;
-    out.world = vec3<f32>(c, 0.0);
-    out.pos = g.view_proj * vec4<f32>(out.world, 1.0);
+    out.rel = vec3<f32>(c, -g.camera_pos.z);
+    out.world = vec3<f32>(c + g.camera_pos.xy, 0.0);
+    out.pos = g.view_proj * vec4<f32>(out.rel, 1.0);
     return out;
 }
 
@@ -150,7 +154,7 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     let ndl = max(dot(n, g.sun_dir.xyz), 0.0);
     let shadow = blob_shadows(p);
     var col = base * (g.sun_color.rgb * g.sun_dir.w * ndl * shadow + ambient(n) * mix(0.55, 1.0, shadow));
-    col = apply_fog(col, in.world);
+    col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }
 
@@ -177,7 +181,8 @@ struct InstanceIn {
 
 struct MeshOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) world: vec3<f32>,
+    // Relative to the camera.
+    @location(0) rel: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
     @location(3) material: vec4<f32>,
@@ -190,7 +195,7 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     let world = model * vec4<f32>(v.position, 1.0);
     var out: MeshOut;
     out.pos = g.view_proj * world;
-    out.world = world.xyz;
+    out.rel = world.xyz;
     out.normal = normalize(normal_m * v.normal);
     let hub = vec3<f32>(0.55, 0.56, 0.58);
     out.color = mix(inst.color.rgb, hub, v.tint);
@@ -206,7 +211,7 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let l = g.sun_dir.xyz;
-    let v = normalize(g.camera_pos.xyz - in.world);
+    let v = normalize(-in.rel);
     let rough = clamp(in.material.x, 0.02, 1.0);
     let metal = clamp(in.material.y, 0.0, 1.0);
 
@@ -224,6 +229,6 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let env = sky_color(reflect(-v, n)) * fresnel * gloss;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
     col += in.color * in.material.z;
-    col = apply_fog(col, in.world);
+    col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }

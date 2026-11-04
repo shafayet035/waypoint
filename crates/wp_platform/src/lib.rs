@@ -34,6 +34,9 @@ pub struct WindowOptions {
     pub exit_after_s: Option<f32>,
     /// Render at most this tall and scale up (quality tier); `None`: full size.
     pub max_height: Option<u32>,
+    /// Stream road tiles within this distance of the camera, m (quality
+    /// tier); `None` keeps the whole map on the GPU.
+    pub view_distance_m: Option<f32>,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -46,6 +49,8 @@ pub struct WindowSummary {
     pub real_seconds: f64,
     pub sim_seconds: f64,
     pub gpu: Option<GpuInfo>,
+    /// What the last frame drew (draw calls, triangles, road tiles).
+    pub render: Option<wp_render::RenderStats>,
 }
 
 /// Run a session in a window until the user closes it. The session's player
@@ -120,6 +125,7 @@ fn run_with_event_loop(
         real_seconds: handler.started.elapsed().as_secs_f64(),
         sim_seconds: handler.session.app.time().seconds(),
         gpu: handler.gfx.as_ref().map(|g| g.gpu.info()),
+        render: handler.gfx.as_ref().map(|g| g.renderer.stats()),
     })
 }
 
@@ -243,6 +249,7 @@ impl Handler {
         surface.configure(&gpu.device, &config);
         let mut renderer = Renderer::new(&gpu, config.format, config.width, config.height);
         renderer.set_max_height(&gpu, self.opts.max_height);
+        renderer.set_streaming(self.opts.view_distance_m);
         Ok(Gfx {
             window,
             surface,

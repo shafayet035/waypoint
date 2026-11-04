@@ -25,6 +25,20 @@ impl Camera {
         );
         proj * view
     }
+
+    /// [`Camera::view_proj`] with the eye at the origin: the renderer draws
+    /// everything relative to the camera (a floating origin), so positions
+    /// kilometres from the world origin keep millimetre precision on the GPU.
+    pub fn view_proj_relative(&self, aspect: f32) -> Mat4 {
+        let view =
+            glam::camera::rh::view::look_at_mat4(Vec3::ZERO, self.target - self.eye, self.up);
+        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(
+            self.fov_y_deg.to_radians(),
+            aspect,
+            0.1,
+        );
+        proj * view
+    }
 }
 
 /// Lighting and atmosphere. Defaults are a clear early afternoon.

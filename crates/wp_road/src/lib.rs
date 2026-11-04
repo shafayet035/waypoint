@@ -22,7 +22,7 @@ pub use def::{
     Control, DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape, SignalTiming, StopDef,
 };
 pub use geometry::Polyline;
-pub use mesh::{Mesh, RoadMeshes, build_meshes};
+pub use mesh::{Mesh, RoadMeshes, RoadTile, TILE_M, build_meshes, build_tiles, split_tiles};
 pub use network::{
     Junction, Lane, LaneId, LaneKind, Light, RoadGeometry, RoadNetwork, Stop, Taper, Turn,
     taper_length_m,

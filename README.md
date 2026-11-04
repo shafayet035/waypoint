@@ -85,7 +85,7 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   lights and give-way rules; crash physics; pedestrians on sidewalks and zebra crossings; bus missions
   with stops, timetables and passengers (`wp run --mission route_1`), scriptable in Lua (Luau).
   3D models: glTF (`.glb`) vehicles with licence files checked by `wp check` (`wp docs assets`).
-  Next: streaming.
+  Road tiles stream around the camera on a worker thread, drawn camera-relative for big maps.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
