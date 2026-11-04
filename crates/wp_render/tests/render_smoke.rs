@@ -176,7 +176,7 @@ fn sun_shadows_darken_the_ground() {
     let frame = extract(&app.world, CameraMode::Showcase);
     let (w, h) = (480, 270);
     let target = wp_rhi::OffscreenTarget::new(&gpu, w, h);
-    let mut draw = |shadows: Option<wp_render::ShadowSettings>| {
+    let draw = |shadows: Option<wp_render::ShadowSettings>| {
         let mut r = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
         r.set_shadows(&gpu, shadows);
         r.render(&gpu, &frame, &target.view);
