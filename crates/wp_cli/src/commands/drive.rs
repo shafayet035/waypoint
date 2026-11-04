@@ -174,8 +174,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 camera,
                 exit_after_s: args.exit_after,
                 control,
-                max_height: Some(tier.max_height()),
-                view_distance_m: Some(tier.view_distance_m()),
+                quality: Some(tier),
             },
         )
         .map_err(|d| vec![d])?;

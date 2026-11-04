@@ -63,6 +63,14 @@ impl QualityTier {
             Self::Flagship => 900,
         }
     }
+    /// Sun shadow map: texels per side and the half-width it covers, m.
+    pub fn shadow_map(self) -> (u32, f32) {
+        match self {
+            Self::Low => (1024, 30.0),
+            Self::Mid => (2048, 45.0),
+            Self::Flagship => (4096, 60.0),
+        }
+    }
     /// How far road tiles stream in around the camera, m (fog hides the edge).
     pub fn view_distance_m(self) -> f32 {
         match self {

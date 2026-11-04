@@ -160,3 +160,35 @@ fn road_tiles_stream_around_the_camera() {
     assert!(st.road_tiles_resident < st.road_tiles_total / 2, "{st:?}");
     assert!(st.road_tiles_drawn >= 1, "{st:?}");
 }
+
+/// The sun's shadow map darkens the ground beside the car; turning it off
+/// falls back to blob shadows.
+#[test]
+fn sun_shadows_darken_the_ground() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let app = world_with_car();
+    let frame = extract(&app.world, CameraMode::Showcase);
+    let (w, h) = (480, 270);
+    let target = wp_rhi::OffscreenTarget::new(&gpu, w, h);
+    let mut draw = |shadows: Option<wp_render::ShadowSettings>| {
+        let mut r = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
+        r.set_shadows(&gpu, shadows);
+        r.render(&gpu, &frame, &target.view);
+        let px = target.read_rgba(&gpu).unwrap();
+        px.chunks(4)
+            .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+            .sum::<u64>()
+    };
+    let lit = draw(None);
+    let shadowed = draw(Some(wp_render::ShadowSettings::default()));
+    assert!(
+        shadowed < lit,
+        "shadow map should darken the frame: {shadowed} vs {lit}"
+    );
+}

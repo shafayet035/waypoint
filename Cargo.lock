@@ -3084,6 +3084,7 @@ dependencies = [
  "wp_render",
  "wp_rhi",
  "wp_vehicle",
+ "wp_world",
 ]
 
 [[package]]

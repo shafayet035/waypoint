@@ -166,5 +166,8 @@ Windows build them on a worker thread and keep only tiles within the tier's view
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn
 camera-relative (floating origin: `Camera::view_proj_relative`). `wp shot` stays synchronous and complete;
 `wp shot --json` and window summaries report `render` stats (draw calls, triangles, tiles).
+Sun shadows: one shadow-map cascade centred on the camera's target, texel-snapped, 3×3 filtered and faded
+at its edge (Low 1024 px over ±30 m, Mid 2048 over ±45 m, Flagship 4096 over ±60 m; `wp shot` uses 2048 over
+±45 m). Blob shadows remain as soft contact shading. `WindowOptions.quality` sets resolution, streaming and shadows.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.

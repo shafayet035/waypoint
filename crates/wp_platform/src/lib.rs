@@ -32,11 +32,10 @@ pub struct WindowOptions {
     pub camera: CameraMode,
     /// Close automatically after this many real seconds (for smoke tests).
     pub exit_after_s: Option<f32>,
-    /// Render at most this tall and scale up (quality tier); `None`: full size.
-    pub max_height: Option<u32>,
-    /// Stream road tiles within this distance of the camera, m (quality
-    /// tier); `None` keeps the whole map on the GPU.
-    pub view_distance_m: Option<f32>,
+    /// Quality tier: internal resolution, shadow map and road streaming
+    /// distance. `None` renders at full size with default shadows and the
+    /// whole map resident.
+    pub quality: Option<wp_world::QualityTier>,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -248,8 +247,12 @@ impl Handler {
         }
         surface.configure(&gpu.device, &config);
         let mut renderer = Renderer::new(&gpu, config.format, config.width, config.height);
-        renderer.set_max_height(&gpu, self.opts.max_height);
-        renderer.set_streaming(self.opts.view_distance_m);
+        if let Some(q) = self.opts.quality {
+            renderer.set_max_height(&gpu, Some(q.max_height()));
+            renderer.set_streaming(Some(q.view_distance_m()));
+            let (size, extent_m) = q.shadow_map();
+            renderer.set_shadows(&gpu, Some(wp_render::ShadowSettings { size, extent_m }));
+        }
         Ok(Gfx {
             window,
             surface,

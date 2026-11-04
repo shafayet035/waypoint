@@ -19,9 +19,40 @@ struct Globals {
     shadows: array<vec4<f32>, 16>,
     // cos(heading), sin(heading), strength, softness.
     shadow_rot: array<vec4<f32>, 16>,
+    // Sun shadow map: camera-relative position → light clip space.
+    light_view_proj: mat4x4<f32>,
+    // x: 1 / shadow map size, y: 1 when the shadow map is on, zw: unused.
+    shadow_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
+@group(0) @binding(1) var shadow_map: texture_depth_2d;
+@group(0) @binding(2) var shadow_sampler: sampler_comparison;
+
+// Sun visibility from the shadow map, 0 (shadowed) to 1 (lit), with a 3×3
+// filter for soft edges. Outside the map, everything is lit; shadows fade
+// out towards its edge so the boundary never shows.
+fn sun_shadow(rel: vec3<f32>, n: vec3<f32>) -> f32 {
+    if (g.shadow_params.y < 0.5) {
+        return 1.0;
+    }
+    let c = g.light_view_proj * vec4<f32>(rel + n * 0.04, 1.0);
+    let ndc = c.xyz / c.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || ndc.z > 1.0 || ndc.z < 0.0) {
+        return 1.0;
+    }
+    let t = g.shadow_params.x;
+    var sum = 0.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            sum = sum + textureSampleCompareLevel(
+                shadow_map, shadow_sampler, uv + vec2<f32>(f32(x), f32(y)) * t, ndc.z - 0.0008);
+        }
+    }
+    let edge = max(abs(ndc.x), abs(ndc.y));
+    return mix(sum / 9.0, 1.0, smoothstep(0.8, 1.0, edge));
+}
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
     // ACES filmic fit (Narkowicz 2015).
@@ -41,7 +72,9 @@ fn sky_color(dir: vec3<f32>) -> vec3<f32> {
 
 fn ambient(n: vec3<f32>) -> vec3<f32> {
     let bounce = g.ground_base.rgb * g.sun_color.rgb * g.sun_dir.w * 0.35;
-    return mix(bounce, g.sky_zenith.rgb * 0.9, n.z * 0.5 + 0.5);
+    // The whole sky dome lights a surface, not just the zenith: average it.
+    let sky = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, 0.55);
+    return mix(bounce, sky * 0.95, n.z * 0.5 + 0.5);
 }
 
 // `rel`: position relative to the camera (all geometry is drawn camera-relative,
@@ -152,8 +185,12 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     base = mix(base, g.ground_line.rgb, grid(p, 50.0, 0.14) * 0.5);
     let n = vec3<f32>(0.0, 0.0, 1.0);
     let ndl = max(dot(n, g.sun_dir.xyz), 0.0);
-    let shadow = blob_shadows(p);
-    var col = base * (g.sun_color.rgb * g.sun_dir.w * ndl * shadow + ambient(n) * mix(0.55, 1.0, shadow));
+    let blob = blob_shadows(p);
+    // With a shadow map, blobs only darken contact areas a little (the map
+    // casts the real shadow); without one they stand in for it.
+    let blob_sun = mix(blob, mix(1.0, blob, 0.3), g.shadow_params.y);
+    let sun_vis = min(sun_shadow(in.rel, n), blob_sun);
+    var col = base * (g.sun_color.rgb * g.sun_dir.w * ndl * sun_vis + ambient(n) * mix(0.55, 1.0, blob));
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }
@@ -215,7 +252,7 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let rough = clamp(in.material.x, 0.02, 1.0);
     let metal = clamp(in.material.y, 0.0, 1.0);
 
-    let ndl = max(dot(n, l), 0.0);
+    let ndl = max(dot(n, l), 0.0) * sun_shadow(in.rel, n);
     let h = normalize(l + v);
     let shininess = mix(512.0, 6.0, rough);
     let spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0;
@@ -231,4 +268,12 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     col += in.color * in.material.z;
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
+}
+
+// ---- Shadow map: depth from the sun -------------------------------------------
+
+@vertex
+fn vs_shadow(v: VertexIn, inst: InstanceIn) -> @builtin(position) vec4<f32> {
+    let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
+    return g.light_view_proj * model * vec4<f32>(v.position, 1.0);
 }

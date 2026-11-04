@@ -43,7 +43,29 @@ struct Globals {
     params: [f32; 4],
     shadows: [[f32; 4]; MAX_SHADOWS],
     shadow_rot: [[f32; 4]; MAX_SHADOWS],
+    light_view_proj: [[f32; 4]; 4],
+    shadow_params: [f32; 4],
 }
+
+/// The sun's shadow map: one cascade centred on what the camera looks at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowSettings {
+    /// Texels along each side of the map.
+    pub size: u32,
+    /// Half the side of the square it covers, m.
+    pub extent_m: f32,
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        ShadowSettings {
+            size: 2048,
+            extent_m: 45.0,
+        }
+    }
+}
+
+const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -142,6 +164,13 @@ pub struct Renderer {
     height: u32,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    main_layout: wgpu::BindGroupLayout,
+    /// Globals only: the shadow pass cannot bind the map it draws into.
+    shadow_bind_group: wgpu::BindGroup,
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_sampler: wgpu::Sampler,
+    shadow_view: wgpu::TextureView,
+    shadow: Option<ShadowSettings>,
     sky: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
@@ -197,16 +226,63 @@ impl Renderer {
                 count: None,
             }],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("globals"),
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals (shadow pass)"),
             layout: &layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: globals.as_entire_binding(),
             }],
         });
+        let main_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("globals + shadow map"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow = Some(ShadowSettings::default());
+        let shadow_view = Self::shadow_texture(gpu, shadow.map_or(1, |s| s.size));
+        let bind_group =
+            Self::main_bind_group(gpu, &main_layout, &globals, &shadow_view, &shadow_sampler);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("waypoint"),
+            bind_group_layouts: &[Some(&main_layout)],
+            immediate_size: 0,
+        });
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
@@ -257,19 +333,21 @@ impl Renderer {
             })
         };
 
-        let vertex_layout = wgpu::VertexBufferLayout {
+        let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
+        let vertex_layout = || wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32],
+            attributes: &vertex_attrs,
         };
-        let instance_layout = wgpu::VertexBufferLayout {
+        let instance_attrs = wgpu::vertex_attr_array![
+            3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
+            7 => Float32x4, 8 => Float32x4, 9 => Float32x4,
+            10 => Float32x4, 11 => Float32x4
+        ];
+        let instance_layout = || wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<InstanceRaw>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![
-                3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
-                7 => Float32x4, 8 => Float32x4, 9 => Float32x4,
-                10 => Float32x4, 11 => Float32x4
-            ],
+            attributes: &instance_attrs,
         };
         let sky = pipeline(
             "sky",
@@ -293,11 +371,38 @@ impl Renderer {
             "meshes",
             "vs_mesh",
             "fs_mesh",
-            &[Some(vertex_layout), Some(instance_layout)],
+            &[Some(vertex_layout()), Some(instance_layout())],
             true,
             wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
         );
+
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&shadow_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[Some(vertex_layout()), Some(instance_layout())],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: SHADOW_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
 
         let road_instance_capacity = 64;
         let road_instances = Self::instance_buffer(gpu, road_instance_capacity);
@@ -310,6 +415,12 @@ impl Renderer {
             height,
             globals,
             bind_group,
+            main_layout,
+            shadow_bind_group,
+            shadow_pipeline,
+            shadow_sampler,
+            shadow_view,
+            shadow,
             sky,
             ground,
             meshes_pipeline,
@@ -337,6 +448,71 @@ impl Renderer {
     pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
         self.max_height = max_height;
         self.apply_size(gpu);
+    }
+
+    /// Sun shadows from a shadow map of this size and reach (quality tier);
+    /// `None` falls back to soft blob shadows under vehicles.
+    pub fn set_shadows(&mut self, gpu: &Gpu, shadow: Option<ShadowSettings>) {
+        let old = self.shadow.map_or(1, |s| s.size);
+        self.shadow = shadow;
+        let size = shadow.map_or(1, |s| s.size);
+        if size != old {
+            self.shadow_view = Self::shadow_texture(gpu, size);
+            self.bind_group = Self::main_bind_group(
+                gpu,
+                &self.main_layout,
+                &self.globals,
+                &self.shadow_view,
+                &self.shadow_sampler,
+            );
+        }
+    }
+
+    fn shadow_texture(gpu: &Gpu, size: u32) -> wgpu::TextureView {
+        gpu.device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("shadow map"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: SHADOW_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn main_bind_group(
+        gpu: &Gpu,
+        layout: &wgpu::BindGroupLayout,
+        globals: &wgpu::Buffer,
+        shadow: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals + shadow map"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(shadow),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
     }
 
     /// Stream road tiles: keep those within `range_m` of the camera on the
@@ -445,7 +621,14 @@ impl Renderer {
             params: [env.fog_density, 0.0, env.exposure, 0.0],
             shadows: [[0.0; 4]; MAX_SHADOWS],
             shadow_rot: [[0.0; 4]; MAX_SHADOWS],
+            light_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            shadow_params: [0.0; 4],
         };
+        if let Some(sh) = self.shadow {
+            globals.light_view_proj =
+                light_view_proj(env.sun_dir, frame.camera.target, eye, sh).to_cols_array_2d();
+            globals.shadow_params = [1.0 / sh.size as f32, 1.0, 0.0, 0.0];
+        }
         let shadow_count = frame.shadows.len().min(MAX_SHADOWS);
         globals.params[1] = shadow_count as f32;
         for (i, s) in frame.shadows.iter().take(MAX_SHADOWS).enumerate() {
@@ -550,6 +733,45 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        if self.shadow.is_some() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.shadow_bind_group, &[]);
+            pass.set_pipeline(&self.shadow_pipeline);
+            let stride = std::mem::size_of::<InstanceRaw>() as u64;
+            let mut first = 0u64;
+            for (id, list) in &groups {
+                let count = list.len() as u64;
+                if let Some(mesh) = self.mesh(*id)
+                    && mesh.index_count > 0
+                    && count > 0
+                {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.instances
+                            .slice(first * stride..(first + count) * stride),
+                    );
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..count as u32);
+                    stats.draw_calls += 1;
+                }
+                first += count;
+            }
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -775,6 +997,39 @@ impl Renderer {
             }
         }
     }
+}
+
+/// The sun's view and orthographic projection around `focus` (world), for
+/// camera-relative positions. The square is snapped to whole texels in light
+/// space so shadow edges do not shimmer as the camera moves.
+fn light_view_proj(
+    sun_dir: glam::Vec3,
+    focus: glam::Vec3,
+    eye: glam::Vec3,
+    sh: ShadowSettings,
+) -> glam::Mat4 {
+    let sun = sun_dir.normalize();
+    let up = if sun.z.abs() > 0.99 {
+        glam::Vec3::Y
+    } else {
+        glam::Vec3::Z
+    };
+    let view = glam::camera::rh::view::look_at_mat4(sun * 300.0, glam::Vec3::ZERO, up);
+    let mut f = view.transform_point3(focus);
+    let texel = 2.0 * sh.extent_m / sh.size as f32;
+    f.x = (f.x / texel).round() * texel;
+    f.y = (f.y / texel).round() * texel;
+    let e = sh.extent_m;
+    // Light looks down its −Z: depths run from in front of the focus to behind it.
+    let proj = glam::camera::rh::proj::directx::orthographic(
+        f.x - e,
+        f.x + e,
+        f.y - e,
+        f.y + e,
+        -f.z - 200.0,
+        -f.z + 200.0,
+    );
+    proj * view * glam::Mat4::from_translation(eye)
 }
 
 /// Whether a road tile at `offset` from the camera can be on screen: false
