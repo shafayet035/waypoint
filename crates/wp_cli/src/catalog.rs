@@ -16,7 +16,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: "WP-B002",
         title: "A building or street uses an unknown style",
-        fix: "Use a built-in style (plaster, brick, concrete, office, shophouse) or define it under `styles`.",
+        fix: "Use a built-in style (plaster, brick, concrete, office, industrial, shophouse) or define it under `styles`.",
     },
     ErrorDoc {
         code: "WP-B003",

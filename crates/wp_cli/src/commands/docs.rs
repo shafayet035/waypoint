@@ -29,7 +29,7 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp run --record f.replay.ron record a drive (window or --headless): inputs, R resets, a world hash per second
   wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
   wp import osm <file.osm> --name N [--drive-side right|left] [--lang en] [--force]
-                               OpenStreetMap → roads/N.road.ron + scenes/N.scene.ron (spawn \"start\");
+                               OpenStreetMap → roads/N.road.ron + scenes/N.scene.ron (spawn \"start\") + scenery/N.scenery.ron (buildings);
                                export an area at openstreetmap.org (Export → .osm). Keep the ODbL credit.
   wp import opendrive <file.xodr> --name N [--force]
                                ASAM OpenDRIVE → the same two files; drive side from the file's rule.
@@ -207,7 +207,7 @@ Scenery: buildings beside the roads. A scene names a file: scenery: Some(\"scene
 
 (
   name: \"town\",
-  styles: {   // optional; built in: plaster, brick, concrete, office, shophouse (same name replaces)
+  styles: {   // optional; built in: plaster, brick, concrete, office, industrial, shophouse (same name replaces)
     \"house\": (walls: [(226, 214, 192), (204, 190, 166)], roof: (128, 84, 70),
                storey_m: 2.9, bay_m: 3.4, window: 0.38, lit: 0.5, shops: false),
   },
@@ -227,6 +227,8 @@ whole number of bays), window (glass share of a bay, 0 = blank), lit (share of w
 shops (shop windows on the ground floor). Windows are drawn by the renderer, not modelled.
 Buildings cast shadows and stream in 400 m tiles like the roads. `wp check`: WP-B001–B007 (B007 warns
 when a hand-placed building stands on a road or sidewalk). Schema: `wp schema scenery`.
+`wp import osm` writes the map's building outlines (height from height or building:levels, else typical
+for the kind; style from the building kind) and leaves out any standing on the imported roads.
 ";
 
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {

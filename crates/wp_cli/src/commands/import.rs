@@ -28,13 +28,14 @@ pub fn import_osm(
         file,
         "export an area from openstreetmap.org (Export → .osm) or the Overpass API",
     )?;
-    let (net, stats) = osm::import(&xml, name, side, lang).map_err(|e| {
-        import_error(
-            file,
-            e,
-            "the file must be OSM XML (.osm) with highway=* ways and their nodes",
-        )
-    })?;
+    let (net, buildings, stats) =
+        osm::import_with_buildings(&xml, name, side, lang).map_err(|e| {
+            import_error(
+                file,
+                e,
+                "the file must be OSM XML (.osm) with highway=* ways and their nodes",
+            )
+        })?;
     let header = format!(
         "// Imported from OpenStreetMap ({}) by `wp import osm`.\n\
          // Map data © OpenStreetMap contributors, available under the Open Database\n\
@@ -70,6 +71,7 @@ pub fn import_osm(
     write_import(
         ctx,
         Imported {
+            buildings,
             net,
             name,
             force,
@@ -141,6 +143,7 @@ pub fn import_opendrive(ctx: &Ctx, file: &Path, name: &str, force: bool) -> CmdR
             report,
             lines,
             credit: None,
+            buildings: Vec::new(),
         },
     )
 }
@@ -158,6 +161,85 @@ struct Imported<'a> {
     lines: Vec<String>,
     /// A credit line to print last, if the data needs one.
     credit: Option<&'static str>,
+    /// Building outlines from the map, if it has any.
+    buildings: Vec<osm::OsmBuilding>,
+}
+
+/// A building style for an OSM `building=*` kind; plain "yes" buildings get
+/// one of the common styles, picked by id so neighbours differ.
+fn osm_style(kind: &str, id: &str) -> &'static str {
+    match kind {
+        "house" | "detached" | "semidetached_house" | "terrace" | "bungalow" | "cabin" | "farm"
+        | "hut" | "mosque" | "church" | "temple" | "cathedral" | "chapel" => "plaster",
+        "apartments" | "residential" | "dormitory" | "hotel" | "school" | "university"
+        | "college" | "hospital" | "kindergarten" | "public" | "civic" | "construction" => {
+            "concrete"
+        }
+        "commercial" | "retail" | "supermarket" | "kiosk" | "shop" => "shophouse",
+        "office" | "government" | "bank" => "office",
+        "industrial" | "warehouse" | "factory" | "manufacture" | "hangar" | "garage"
+        | "garages" | "shed" | "service" | "storage_tank" => "industrial",
+        _ => {
+            let h = id
+                .bytes()
+                .fold(0u32, |h, b| h.wrapping_mul(131).wrapping_add(b as u32));
+            ["plaster", "concrete", "plaster", "brick"][(h % 4) as usize]
+        }
+    }
+}
+
+/// The imported buildings as a scenery file, without those standing on the
+/// imported roads (OSM roads have no width, so ours can reach into the
+/// buildings beside narrow streets). Returns (file text, kept, dropped).
+fn scenery_file(
+    header: &str,
+    name: &str,
+    buildings: &[osm::OsmBuilding],
+    net: &RoadNetwork,
+) -> (String, usize, usize) {
+    use waypoint::world::scenery::{BuildingDef, SceneryDef, buildings_on_roads};
+    let def = SceneryDef {
+        name: name.to_string(),
+        buildings: buildings
+            .iter()
+            .map(|b| BuildingDef {
+                footprint: b.footprint.clone(),
+                height_m: b.height_m,
+                style: Some(osm_style(&b.kind, &b.id).to_string()),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let on_road: std::collections::BTreeSet<usize> = buildings_on_roads(&def, net)
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect();
+    let mut text = format!(
+        "{header}// Buildings from the map's building=* outlines; heights from height or\n\
+         // building:levels tags, else typical for the kind. Buildings standing on a road are left out.\n(\n  name: \"{name}\",\n  buildings: [\n"
+    );
+    let mut kept = 0;
+    for (i, (b, osm)) in def.buildings.iter().zip(buildings).enumerate() {
+        if on_road.contains(&i) {
+            continue;
+        }
+        kept += 1;
+        let pts: Vec<String> = b
+            .footprint
+            .iter()
+            .map(|(x, y)| format!("({x:.2}, {y:.2})"))
+            .collect();
+        text.push_str(&format!(
+            "    (footprint: [{}], height_m: {:.1}, style: Some(\"{}\")), // way {} ({})\n",
+            pts.join(", "),
+            b.height_m,
+            b.style.as_deref().unwrap_or("plaster"),
+            osm.id,
+            osm.kind
+        ));
+    }
+    text.push_str("  ],\n)\n");
+    (text, kept, on_road.len())
 }
 
 fn read_source(ctx: &Ctx, file: &Path, help: &str) -> Result<String, Vec<Diagnostic>> {
@@ -198,6 +280,7 @@ fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
         mut report,
         lines,
         credit,
+        buildings,
     } = imp;
     // A spawn point halfway along a long lane from which the most of the
     // map can be reached (edges of the data are often dead ends).
@@ -214,7 +297,12 @@ fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
 
     let roads_rel = format!("roads/{name}.road.ron");
     let scene_rel = format!("scenes/{name}.scene.ron");
-    for rel in [&roads_rel, &scene_rel] {
+    let scenery_rel = format!("scenery/{name}.scenery.ron");
+    let scenery = (!buildings.is_empty()).then(|| scenery_file(&header, name, &buildings, &built));
+    for rel in [&roads_rel, &scene_rel]
+        .into_iter()
+        .chain(scenery.as_ref().map(|_| &scenery_rel))
+    {
         if ctx.project.join(rel).exists() && !force {
             return Err(cli_error(
                 format!("{rel} already exists"),
@@ -226,11 +314,20 @@ fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
         "{header}{}\n",
         waypoint::data::to_ron(&net).map_err(|d| vec![d])?
     );
+    let scenery_line = if scenery.is_some() {
+        format!("  scenery: Some(\"{scenery_rel}\"),\n")
+    } else {
+        String::new()
+    };
     let scene_ron = format!(
-        "{header}(\n  name: \"{name}\",\n  ground: (friction_scale: 1.0, gravity: 9.81),\n  roads: Some(\"{roads_rel}\"),\n  spawns: [\n    // Middle of lane {}.\n    (name: \"start\", position: ({:.2}, {:.2}), heading_deg: {:.1}),\n  ],\n)\n",
+        "{header}(\n  name: \"{name}\",\n  ground: (friction_scale: 1.0, gravity: 9.81),\n  roads: Some(\"{roads_rel}\"),\n{scenery_line}  spawns: [\n    // Middle of lane {}.\n    (name: \"start\", position: ({:.2}, {:.2}), heading_deg: {:.1}),\n  ],\n)\n",
         lane.name, pos.x, pos.y, heading
     );
-    for (rel, text) in [(&roads_rel, &roads_ron), (&scene_rel, &scene_ron)] {
+    let mut files = vec![(&roads_rel, roads_ron), (&scene_rel, scene_ron)];
+    if let Some((text, ..)) = &scenery {
+        files.push((&scenery_rel, text.clone()));
+    }
+    for (rel, text) in files {
         let path = ctx.project.join(rel);
         let written = path
             .parent()
@@ -260,6 +357,9 @@ fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
             "lanes": built.lanes.len(),
             "reachable_roads": reachable_roads.len(),
             "spawn": { "lane": lane.name, "position": [pos.x, pos.y], "heading_deg": heading },
+            "scenery_file": scenery.as_ref().map(|_| &scenery_rel),
+            "buildings": scenery.as_ref().map_or(0, |s| s.1),
+            "buildings_on_roads_dropped": scenery.as_ref().map_or(0, |s| s.2),
         });
         if let (Some(r), Some(c)) = (report.as_object_mut(), common.as_object()) {
             r.extend(c.clone());
@@ -278,6 +378,11 @@ fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
             "wrote {roads_rel} and {scene_rel} (spawn \"start\" on lane {})",
             lane.name
         );
+        if let Some((_, kept, dropped)) = &scenery {
+            println!(
+                "wrote {scenery_rel}: {kept} buildings ({dropped} standing on the imported roads left out)"
+            );
+        }
         if let Some(c) = credit {
             println!("{c}");
         }

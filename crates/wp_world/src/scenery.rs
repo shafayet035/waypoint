@@ -24,7 +24,7 @@ use wp_road::RoadNetwork;
 pub struct SceneryDef {
     pub name: String,
     /// Building styles by name. Built in: plaster, brick, concrete, office,
-    /// shophouse; a style here with the same name replaces the built-in one.
+    /// industrial, shophouse; a style here with the same name replaces the built-in one.
     #[serde(default)]
     pub styles: BTreeMap<String, BuildingStyle>,
     /// Buildings placed one by one (imported maps list theirs here).
@@ -216,6 +216,18 @@ pub fn builtin_styles() -> BTreeMap<String, BuildingStyle> {
                 1.6,
                 0.86,
                 0.25,
+                false,
+            ),
+        ),
+        (
+            "industrial".into(),
+            style(
+                &[(176, 178, 176), (150, 158, 164), (196, 190, 176)],
+                (120, 124, 128),
+                4.5,
+                6.0,
+                0.18,
+                0.1,
                 false,
             ),
         ),

@@ -336,7 +336,27 @@ fn grid_osm() -> String {
             16 + c
         );
     }
-    xml += "<way id=\"300\"><nd ref=\"10\"/><nd ref=\"18\"/><tag k=\"highway\" v=\"footway\"/></way>\n</osm>\n";
+    xml += "<way id=\"300\"><nd ref=\"10\"/><nd ref=\"18\"/><tag k=\"highway\" v=\"footway\"/></way>\n";
+    // Two buildings: one inside a block, one standing across Row 1.
+    for (b, lat, lon) in [(0, 23.8005, 90.4005), (1, 23.8010, 90.4005)] {
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        for (k, (dy, dx)) in corners.iter().enumerate() {
+            xml += &format!(
+                "<node id=\"{}\" lat=\"{}\" lon=\"{}\"/>\n",
+                500 + b * 4 + k,
+                lat + dy * 0.0001,
+                lon + dx * 0.0001
+            );
+        }
+        let nds: String = (0..5)
+            .map(|k| format!("<nd ref=\"{}\"/>", 500 + b * 4 + k % 4))
+            .collect();
+        xml += &format!(
+            "<way id=\"{}\">{nds}<tag k=\"building\" v=\"apartments\"/><tag k=\"building:levels\" v=\"5\"/></way>\n",
+            400 + b
+        );
+    }
+    xml += "</osm>\n";
     xml
 }
 
@@ -378,6 +398,13 @@ fn import_osm_then_drive_a_route() {
         "ODbL attribution"
     );
     assert!(roads.contains("drive_side: Left"));
+    // Buildings: the one across Row 1 is left out.
+    assert_eq!(v["buildings"], 1, "{v}");
+    assert_eq!(v["buildings_on_roads_dropped"], 1, "{v}");
+    let scenery = std::fs::read_to_string(game.join("scenery/grid.scenery.ron")).unwrap();
+    assert!(scenery.contains("height_m: 15.5") && scenery.contains("way 400"));
+    let scene = std::fs::read_to_string(game.join("scenes/grid.scene.ron")).unwrap();
+    assert!(scene.contains("scenery: Some(\"scenery/grid.scenery.ron\")"));
 
     // Importing again needs --force.
     let (code, v) = json(&game, &["import", "osm", osm, "--name", "grid"]);

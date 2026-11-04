@@ -134,7 +134,7 @@ enum AssetCmd {
 
 #[derive(Subcommand)]
 enum ImportCmd {
-    /// OpenStreetMap XML (.osm) → roads/<name>.road.ron + scenes/<name>.scene.ron.
+    /// OpenStreetMap XML (.osm) → roads/<name>.road.ron + scenes/<name>.scene.ron (+ scenery/<name>.scenery.ron with its buildings).
     Osm {
         /// The .osm file (openstreetmap.org Export, or an Overpass API query).
         file: PathBuf,

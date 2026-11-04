@@ -238,4 +238,7 @@ wall colours, roof, storey_m, bay_m, window share, lit share, shop fronts. Meshe
 per-vertex sRGB colour + facade pattern); the renderer draws windows procedurally (box-filtered, so distant facades do
 not shimmer), lights a share at night, casts shadows from buildings near the shadow map, and streams building tiles
 like road tiles (`TileCache`). WP-B001–B007; `wp docs scenery`, `wp schema scenery`. Sandbox town and harbour have scenery.
+`wp import osm` also writes `scenery/<name>.scenery.ron` from `building=*` outlines (`osm::import_with_buildings`: height
+from `height`, else `building:levels` × 3 m + 0.5, else typical for the kind; style from the kind), leaving out buildings that
+stand on the imported roads (a 0.8 × 0.66 km Gulshan export: 290 kept, 92 left out).
 Not yet: testing on physical phones; running on an iOS simulator.

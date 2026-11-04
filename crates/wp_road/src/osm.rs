@@ -25,10 +25,55 @@ pub struct ImportStats {
     pub origin: (f64, f64),
 }
 
+#[derive(Clone)]
 struct Way {
     id: String,
     nodes: Vec<String>,
     tags: BTreeMap<String, String>,
+}
+
+/// A building outline from the map (`building=*` closed ways), in the same
+/// local metres as the roads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OsmBuilding {
+    /// The OSM way id.
+    pub id: String,
+    /// Outline without the closing point.
+    pub footprint: Vec<(f32, f32)>,
+    /// From `height`, else `building:levels` × 3 m + 0.5 m, else a typical
+    /// height for its kind (varied a little by id, so streets are not flat).
+    pub height_m: f32,
+    /// The `building` tag: house, apartments, commercial, yes, ...
+    pub kind: String,
+}
+
+/// "12", "12 m", "12.5m" → metres (feet and other units are not read).
+fn parse_metres(s: &str) -> Option<f32> {
+    let t = s.trim();
+    if t.contains('\'') || t.contains("ft") {
+        return None;
+    }
+    let num: String = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    num.parse().ok().filter(|v: &f32| *v > 0.0)
+}
+
+/// Typical height of a building of this kind, m; `vary` (0–1) picks within the range.
+fn typical_height(kind: &str, vary: f32) -> f32 {
+    let (lo, hi) = match kind {
+        "house" | "detached" | "semidetached_house" | "terrace" | "bungalow" | "cabin" | "farm"
+        | "hut" => (4.0, 8.0),
+        "garage" | "garages" | "shed" | "kiosk" | "service" | "toilets" => (2.5, 3.5),
+        "apartments" | "residential" | "dormitory" | "hotel" => (12.0, 30.0),
+        "commercial" | "retail" | "office" | "bank" | "government" => (9.0, 30.0),
+        "industrial" | "warehouse" | "factory" | "manufacture" | "hangar" => (6.0, 12.0),
+        "school" | "university" | "college" | "hospital" | "public" | "civic" => (8.0, 18.0),
+        "mosque" | "church" | "temple" | "cathedral" | "chapel" => (8.0, 16.0),
+        _ => (6.0, 16.0),
+    };
+    lo + (hi - lo) * vary.clamp(0.0, 1.0)
 }
 
 /// Lane count per direction, lane width and default speed for a highway class.
@@ -79,6 +124,17 @@ pub fn import(
     drive_side: DriveSide,
     lang: Option<&str>,
 ) -> Result<(RoadNetworkDef, ImportStats), String> {
+    import_with_buildings(xml, name, drive_side, lang).map(|(net, _, stats)| (net, stats))
+}
+
+/// [`import`], plus the buildings inside the exported area (whole outlines
+/// only; outlines cut by the edge are left out, as are multipolygon relations).
+pub fn import_with_buildings(
+    xml: &str,
+    name: &str,
+    drive_side: DriveSide,
+    lang: Option<&str>,
+) -> Result<(RoadNetworkDef, Vec<OsmBuilding>, ImportStats), String> {
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut coords: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     let mut ways: Vec<Way> = Vec::new();
@@ -145,6 +201,20 @@ pub fn import(
             bounds.is_none_or(|(a, b, c, d)| lat >= a && lat <= c && lon >= b && lon <= d)
         })
     };
+    let building_ways: Vec<Way> = ways
+        .iter()
+        .filter(|w| {
+            w.tags.get("building").is_some_and(|b| {
+                !matches!(
+                    b.as_str(),
+                    "no" | "roof" | "carport" | "ruins" | "collapsed"
+                )
+            }) && w.nodes.len() >= 4
+                && w.nodes.first() == w.nodes.last()
+                && w.nodes.iter().all(&usable)
+        })
+        .cloned()
+        .collect();
     let mut drivable: Vec<Way> = Vec::new();
     for w in ways {
         let keep = w
@@ -310,6 +380,39 @@ pub fn import(
         *degree.entry(r.from.as_str()).or_default() += 1;
         *degree.entry(r.to.as_str()).or_default() += 1;
     }
+    let buildings: Vec<OsmBuilding> = building_ways
+        .iter()
+        .map(|w| {
+            let kind = w.tags["building"].clone();
+            let vary = (w
+                .id
+                .bytes()
+                .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))
+                % 1000) as f32
+                / 999.0;
+            let height_m = w
+                .tags
+                .get("height")
+                .and_then(|h| parse_metres(h))
+                .or_else(|| {
+                    w.tags
+                        .get("building:levels")
+                        .and_then(|l| parse_metres(l))
+                        .map(|l| l * 3.0 + 0.5)
+                })
+                .unwrap_or_else(|| typical_height(&kind, vary))
+                .clamp(2.5, 600.0);
+            OsmBuilding {
+                id: w.id.clone(),
+                footprint: w.nodes[..w.nodes.len() - 1]
+                    .iter()
+                    .map(|n| project(n))
+                    .collect(),
+                height_m,
+                kind,
+            }
+        })
+        .collect();
     let stats = ImportStats {
         osm_nodes: coords.len(),
         osm_ways,
@@ -331,6 +434,7 @@ pub fn import(
             nodes,
             roads,
         },
+        buildings,
         stats,
     ))
 }
@@ -399,6 +503,31 @@ mod tests {
             "node outside the bounds is dropped"
         );
         assert!(net.roads.iter().all(|r| r.to != "n3" && r.from != "n3"));
+    }
+
+    #[test]
+    fn imports_buildings_with_heights() {
+        let xml = OSM.replace(
+            "</osm>",
+            r#"<node id="20" lat="23.8102" lon="90.4102"/><node id="21" lat="23.8102" lon="90.4104"/>
+  <node id="22" lat="23.8104" lon="90.4104"/><node id="23" lat="23.8104" lon="90.4102"/>
+  <way id="30"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="23"/><nd ref="20"/>
+    <tag k="building" v="apartments"/><tag k="building:levels" v="6"/></way>
+  <way id="31"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="20"/>
+    <tag k="building" v="yes"/><tag k="height" v="14 m"/></way>
+  <way id="32"><nd ref="20"/><nd ref="21"/><nd ref="22"/><tag k="building" v="yes"/></way>
+  <way id="33"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="20"/><tag k="building" v="no"/></way>
+</osm>"#,
+        );
+        let (_, b, _) = import_with_buildings(&xml, "t", DriveSide::Left, None).unwrap();
+        assert_eq!(b.len(), 2, "open and building=no ways are skipped");
+        assert_eq!(b[0].footprint.len(), 4, "closing point dropped");
+        assert_eq!(b[0].height_m, 18.5);
+        assert_eq!(b[0].kind, "apartments");
+        assert_eq!(b[1].height_m, 14.0);
+        // About 20 m square.
+        let (x0, x1) = (b[0].footprint[0].0, b[0].footprint[1].0);
+        assert!(((x1 - x0) - 20.4).abs() < 0.5, "{}", x1 - x0);
     }
 
     #[test]
