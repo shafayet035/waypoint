@@ -359,11 +359,7 @@ fn textured_models_show_their_texture() {
             }
         })
         .collect();
-    let checker = std::sync::Arc::new(wp_asset::Texture {
-        width: 16,
-        height: 16,
-        rgba,
-    });
+    let checker = std::sync::Arc::new(wp_asset::Texture::from_rgba(16, 16, rgba));
     // A 4 m upright quad facing −X (towards the camera, which sees +Y on
     // its left): bottom-left, top-left, top-right, bottom-right on screen.
     let corners = [
@@ -488,11 +484,7 @@ fn quad_frame(material: wp_asset::Material) -> wp_render::FrameView {
 }
 
 fn solid(rgba: [u8; 4]) -> std::sync::Arc<wp_asset::Texture> {
-    std::sync::Arc::new(wp_asset::Texture {
-        width: 4,
-        height: 4,
-        rgba: rgba.repeat(16),
-    })
+    std::sync::Arc::new(wp_asset::Texture::from_rgba(4, 4, rgba.repeat(16)))
 }
 
 /// Normal, emissive and occlusion maps change the picture as they should.
@@ -548,4 +540,51 @@ fn material_maps_shade_the_surface() {
         occluded[0] < plain[0] - 5.0,
         "occlusion: {occluded:?} vs {plain:?}"
     );
+}
+
+/// A GPU-compressed (Basis) texture draws like the original: red top-left,
+/// blue top-right, through whichever compressed format this GPU has.
+#[test]
+fn basis_textures_draw_through_the_gpu_format() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let n = 64u32;
+    let rgba: Vec<u8> = (0..n * n)
+        .flat_map(|i| {
+            let (x, y) = (i % n, i / n);
+            if (x < n / 2) == (y < n / 2) {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        })
+        .collect();
+    let file = wp_asset::basis::encode(&rgba, n, n, wp_asset::basis::ImageKind::Colour).unwrap();
+    let tex = std::sync::Arc::new(wp_asset::Texture {
+        width: n,
+        height: n,
+        rgba: Vec::new(),
+        basis: Some(std::sync::Arc::new(file)),
+    });
+    let mut frame = quad_frame(wp_asset::Material {
+        base_color_texture: Some(tex),
+        ..Default::default()
+    });
+    frame.items[0].color = glam::Vec3::ONE;
+    frame.items[0].emissive = 1.0;
+    let (w, h) = (200, 200);
+    let px = render_rgba(&gpu, &frame, w, h).unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        (px[i], px[i + 1], px[i + 2])
+    };
+    let (tl, tr) = (at(70, 70), at(130, 70));
+    eprintln!("compression features: {:?}", gpu.device.features());
+    assert!(tl.0 > 150 && tl.2 < 90, "top left should be red: {tl:?}");
+    assert!(tr.2 > 150 && tr.0 < 90, "top right should be blue: {tr:?}");
 }

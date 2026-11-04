@@ -227,11 +227,7 @@ impl Textures {
             anisotropy_clamp: 8,
             ..Default::default()
         });
-        let pixel = |rgba: [u8; 4]| wp_asset::Texture {
-            width: 1,
-            height: 1,
-            rgba: rgba.to_vec(),
-        };
+        let pixel = |rgba: [u8; 4]| wp_asset::Texture::from_rgba(1, 1, rgba.to_vec());
         let white_srgb = std::sync::Arc::new(Self::upload(gpu, &pixel([255; 4]), true, 1));
         let white_linear = std::sync::Arc::new(Self::upload(gpu, &pixel([255; 4]), false, 1));
         let flat_normal =
@@ -260,6 +256,19 @@ impl Textures {
     /// Upload an image with a box-filtered mip chain, dropping levels
     /// larger than `max_size`.
     fn upload(gpu: &Gpu, t: &wp_asset::Texture, srgb: bool, max_size: u32) -> wgpu::TextureView {
+        if let Some(basis) = &t.basis {
+            if let Some(v) = Self::upload_basis(gpu, basis, srgb, max_size) {
+                return v;
+            }
+            // No compressed format on this GPU: decode to RGBA.
+            let rgba = t.pixels().map(|p| p.into_owned()).unwrap_or_default();
+            let plain = if rgba.len() == (t.width * t.height * 4) as usize {
+                wp_asset::Texture::from_rgba(t.width, t.height, rgba)
+            } else {
+                wp_asset::Texture::from_rgba(1, 1, vec![255; 4])
+            };
+            return Self::upload(gpu, &plain, srgb, max_size);
+        }
         let mut levels = vec![(t.width.max(1), t.height.max(1), t.rgba.clone())];
         while let Some((w, h, px)) = levels.last().cloned()
             && (w > 1 || h > 1)
@@ -327,6 +336,100 @@ impl Textures {
             );
         }
         texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Upload a `.basis` image transcoded to a format this GPU samples
+    /// directly (ASTC, else ETC2, else BC7). `None` if it has none of them.
+    fn upload_basis(
+        gpu: &Gpu,
+        bytes: &[u8],
+        srgb: bool,
+        max_size: u32,
+    ) -> Option<wgpu::TextureView> {
+        use wp_asset::basis::GpuFormat;
+        let features = gpu.device.features();
+        let channel = if srgb {
+            wgpu::AstcChannel::UnormSrgb
+        } else {
+            wgpu::AstcChannel::Unorm
+        };
+        let (format, gpu_format) = if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC) {
+            (
+                GpuFormat::Astc4x4,
+                wgpu::TextureFormat::Astc {
+                    block: wgpu::AstcBlock::B4x4,
+                    channel,
+                },
+            )
+        } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
+            (
+                GpuFormat::Etc2Rgba,
+                if srgb {
+                    wgpu::TextureFormat::Etc2Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Etc2Rgba8Unorm
+                },
+            )
+        } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+            (
+                GpuFormat::Bc7,
+                if srgb {
+                    wgpu::TextureFormat::Bc7RgbaUnormSrgb
+                } else {
+                    wgpu::TextureFormat::Bc7RgbaUnorm
+                },
+            )
+        } else {
+            return None;
+        };
+        let levels = wp_asset::basis::transcode(bytes, format).ok()?;
+        let first = levels
+            .iter()
+            .position(|l| l.width.max(l.height) <= max_size.max(1))
+            .unwrap_or(levels.len().saturating_sub(1));
+        let levels = levels.get(first..)?;
+        let (w0, h0) = (levels.first()?.width, levels.first()?.height);
+        // Compressed textures need whole blocks at the top level.
+        if !w0.is_multiple_of(4) || !h0.is_multiple_of(4) {
+            return None;
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("material map (compressed)"),
+            size: wgpu::Extent3d {
+                width: w0,
+                height: h0,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: gpu_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (level, l) in levels.iter().enumerate() {
+            let (bw, bh) = (l.width.div_ceil(4), l.height.div_ceil(4));
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &l.data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bw * format.block_bytes()),
+                    rows_per_image: Some(bh),
+                },
+                wgpu::Extent3d {
+                    width: bw * 4,
+                    height: bh * 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        Some(texture.create_view(&wgpu::TextureViewDescriptor::default()))
     }
 
     fn make_group(

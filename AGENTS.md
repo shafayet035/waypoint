@@ -172,8 +172,10 @@ mipmaps, one bind group per material (group 1; neutral maps for untextured meshe
 capped to the tier's size (Low 1024, Mid 2048, Flagship 4096 px).
 Shipping: `wp asset build --tier low --out <dir>` writes the game for one tier: runtime files only (no tests,
 replays or docs; `--with-tests` keeps scenarios), switched-off mods left out, game.toml set to the tier, and images
-inside each .glb reduced to the tier's size and re-encoded (`wp_asset::pack_glb`: colour maps → JPEG, data maps
-stay PNG). `tools/android/build.sh <project> [tier]` and `tools/ios/build.sh sim|device <project> [tier]` bundle it.
+inside each .glb reduced to the tier's size and GPU-compressed (`wp_asset::pack_glb`): Basis Universal `.basis`
+images (`image/x-basis`; ETC1S for colour, UASTC for normal/data maps, with mipmaps) that the renderer transcodes on
+upload to ASTC 4×4, else ETC2, else BC7 (`wp_asset::basis`; wp_rhi requests whichever the GPU has), keeping textures
+compressed in memory; plain RGBA if it has none. `--no-compress` packs JPEG (colour) / PNG (data) instead. `tools/android/build.sh <project> [tier]` and `tools/ios/build.sh sim|device <project> [tier]` bundle it.
 Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
 Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn
@@ -229,4 +231,4 @@ Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the ha
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
 to 0 within 1 s with (FMVSS 126). Events `EscEngaged`/`EscReleased`; telemetry `tc_active`, `esc_active`.
-Not yet: testing on physical phones; running on an iOS simulator; GPU-compressed textures (ASTC/ETC2, KTX2).
+Not yet: testing on physical phones; running on an iOS simulator.

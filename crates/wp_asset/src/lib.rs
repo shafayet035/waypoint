@@ -10,6 +10,7 @@
 //! [`Role`]: `paint…` takes the vehicle's colour, `brake…`/`tail…` light up
 //! when braking, `head…` are headlamps, `glass…` is glass.
 
+pub mod basis;
 mod lod;
 mod meta;
 mod model;

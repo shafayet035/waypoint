@@ -63,9 +63,14 @@ impl Gpu {
         })?;
         // Ask only for limits every target supports, phones included.
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        // Compressed texture formats, whichever the GPU has: ASTC (iPhones, most
+        // Android phones, Apple silicon), ETC2 (Android), BC (desktop GPUs).
+        let compression = wgpu::Features::TEXTURE_COMPRESSION_ASTC
+            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+            | wgpu::Features::TEXTURE_COMPRESSION_BC;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("waypoint"),
-            required_features: wgpu::Features::empty(),
+            required_features: adapter.features() & compression,
             required_limits: limits,
             ..Default::default()
         }))

@@ -65,7 +65,34 @@ pub struct Material {
 pub struct Texture {
     pub width: u32,
     pub height: u32,
+    /// Pixels; empty when the image is GPU-compressed (`basis`).
     pub rgba: Vec<u8>,
+    /// A `.basis` file (shipping builds): transcoded to the GPU's format on upload.
+    pub basis: Option<std::sync::Arc<Vec<u8>>>,
+}
+
+impl Texture {
+    /// An uncompressed image.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Texture {
+        Texture {
+            width,
+            height,
+            rgba,
+            basis: None,
+        }
+    }
+
+    /// The pixels, decoding a compressed image if need be.
+    pub fn pixels(&self) -> Option<std::borrow::Cow<'_, [u8]>> {
+        match &self.basis {
+            None => Some(std::borrow::Cow::Borrowed(&self.rgba)),
+            Some(b) => crate::basis::transcode(b, crate::basis::GpuFormat::Rgba8)
+                .ok()?
+                .into_iter()
+                .next()
+                .map(|l| std::borrow::Cow::Owned(l.data)),
+        }
+    }
 }
 
 impl Default for Material {
@@ -356,12 +383,22 @@ impl Builder {
             }
             gltf::image::Source::Uri { .. } => return None,
         };
-        let decoded = image::load_from_memory(&bytes).ok()?.to_rgba8();
-        let t = std::sync::Arc::new(Texture {
-            width: decoded.width(),
-            height: decoded.height(),
-            rgba: decoded.into_raw(),
-        });
+        let t = if crate::basis::is_basis(&bytes) {
+            let (width, height, _) = crate::basis::info(&bytes)?;
+            std::sync::Arc::new(Texture {
+                width,
+                height,
+                rgba: Vec::new(),
+                basis: Some(std::sync::Arc::new(bytes)),
+            })
+        } else {
+            let decoded = image::load_from_memory(&bytes).ok()?.to_rgba8();
+            std::sync::Arc::new(Texture::from_rgba(
+                decoded.width(),
+                decoded.height(),
+                decoded.into_raw(),
+            ))
+        };
         self.images.insert(img.index(), t.clone());
         Some(t)
     }

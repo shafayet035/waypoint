@@ -36,7 +36,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp asset info <file.glb>     what the engine sees in a model: triangles, size, materials and roles
   wp asset list                every model, its licence and the vehicles using it
   wp asset build [--tier low --out dir]  check models; with --out, a shipping copy for one tier (runtime files
-                               only, textures reduced and re-encoded); the phone build scripts use it
+                               only, textures reduced and GPU-compressed with Basis Universal, transcoded to
+                               ASTC/ETC2/BC7 on the device; --no-compress for JPEG/PNG); phone builds use it
   wp credits                   the credits screen: asset credits and map attributions
   wp mod new <name>            start a mod in mods/<name>/ (wp docs mods)
   wp mod list                  mods in load order, active or not, and the files each adds or replaces

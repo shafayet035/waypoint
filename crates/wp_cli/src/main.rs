@@ -126,6 +126,9 @@ enum AssetCmd {
         /// Also ship scenario files (for --scenario in dev builds); never golden replays.
         #[arg(long)]
         with_tests: bool,
+        /// Keep images as JPEG/PNG instead of GPU-compressed Basis textures.
+        #[arg(long)]
+        no_compress: bool,
     },
 }
 
@@ -194,7 +197,14 @@ fn main() {
             tier,
             out,
             with_tests,
-        }) => commands::asset_build(&ctx, tier.as_deref(), out.as_deref(), with_tests),
+            no_compress,
+        }) => commands::asset_build(
+            &ctx,
+            tier.as_deref(),
+            out.as_deref(),
+            with_tests,
+            !no_compress,
+        ),
         Cmd::Credits => commands::credits(&ctx),
         Cmd::Mod(ModCmd::List) => commands::mod_list(&ctx),
         Cmd::Mod(ModCmd::New { name }) => commands::mod_new(&ctx, &name),

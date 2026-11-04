@@ -1,8 +1,12 @@
 //! Shipping models: images inside a `.glb` reduced to a quality tier's
 //! texture size and re-encoded, so a phone never downloads detail it would
-//! throw away. Colour maps (base colour, emissive) without transparency
-//! become JPEG; normal, metallic-roughness and occlusion maps stay lossless
-//! PNG (JPEG artefacts show up as bumps and shine).
+//! throw away.
+//!
+//! Compressed (the default for `wp asset build`): every image becomes a
+//! `.basis` file (mime type `image/x-basis`), ETC1S for colour maps and
+//! UASTC for normal and data maps, which the phone transcodes to ASTC, ETC2
+//! or BC7 and keeps compressed in memory. Otherwise colour maps without
+//! transparency become JPEG and data maps stay lossless PNG.
 
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -74,9 +78,9 @@ fn join_glb(json: &Value, bin: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Images that hold data rather than colour (normal, metallic-roughness,
-/// occlusion), by image index: they must stay lossless.
-fn data_images(json: &Value) -> BTreeSet<usize> {
+/// What each image holds, by image index: normal maps, and other data
+/// maps (metallic-roughness, occlusion). Anything else is colour.
+fn image_kinds(json: &Value) -> (BTreeSet<usize>, BTreeSet<usize>) {
     let texture_source = |t: &Value| -> Option<usize> {
         let ti = t.get("index")?.as_u64()? as usize;
         json.get("textures")?
@@ -85,22 +89,40 @@ fn data_images(json: &Value) -> BTreeSet<usize> {
             .as_u64()
             .map(|s| s as usize)
     };
-    let mut out = BTreeSet::new();
+    let (mut normal, mut data) = (BTreeSet::new(), BTreeSet::new());
     for m in json
         .get("materials")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
+        normal.extend(m.get("normalTexture").and_then(texture_source));
         let maps = [
-            m.get("normalTexture"),
             m.get("occlusionTexture"),
             m.get("pbrMetallicRoughness")
                 .and_then(|p| p.get("metallicRoughnessTexture")),
         ];
-        out.extend(maps.into_iter().flatten().filter_map(texture_source));
+        data.extend(maps.into_iter().flatten().filter_map(texture_source));
     }
-    out
+    (normal, data)
+}
+
+/// Reduce an image and encode it as `.basis`, at whole 4×4 blocks.
+fn compress(bytes: &[u8], max_px: u32, kind: crate::basis::ImageKind) -> Option<(Vec<u8>, bool)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let (w, h) = (img.width(), img.height());
+    let scale = (max_px as f32 / w.max(h) as f32).min(1.0);
+    let fit = |v: u32| (((v as f32 * scale) as u32) / 4 * 4).max(4);
+    let (nw, nh) = (fit(w), fit(h));
+    let resized = nw < w || nh < h;
+    let img = if (nw, nh) != (w, h) {
+        img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let rgba = img.to_rgba8();
+    let out = crate::basis::encode(rgba.as_raw(), nw, nh, kind).ok()?;
+    Some((out, resized))
 }
 
 /// Reduce and re-encode one image. `None` keeps the original bytes.
@@ -138,13 +160,18 @@ fn shrink(bytes: &[u8], max_px: u32, lossless: bool) -> Option<(Vec<u8>, &'stati
 
 /// Pack a `.glb` for a tier whose largest texture side is `max_px`.
 /// Models without embedded images come back unchanged.
-pub fn pack_glb(bytes: &[u8], max_px: u32) -> Result<(Vec<u8>, PackStats), String> {
+/// With `gpu_compress`, images become `.basis` (see the module docs).
+pub fn pack_glb(
+    bytes: &[u8],
+    max_px: u32,
+    gpu_compress: bool,
+) -> Result<(Vec<u8>, PackStats), String> {
     let mut stats = PackStats {
         bytes_in: bytes.len(),
         ..Default::default()
     };
     let (mut json, bin) = split_glb(bytes)?;
-    let lossless = data_images(&json);
+    let (normals, data) = image_kinds(&json);
     let views = json
         .get("bufferViews")
         .and_then(Value::as_array)
@@ -172,7 +199,25 @@ pub fn pack_glb(bytes: &[u8], max_px: u32) -> Result<(Vec<u8>, PackStats), Strin
             continue;
         };
         stats.images += 1;
-        if let Some((out, mime, resized)) = shrink(src, max_px, lossless.contains(&i)) {
+        if crate::basis::is_basis(src) {
+            continue; // already packed
+        }
+        if gpu_compress {
+            let kind = if normals.contains(&i) {
+                crate::basis::ImageKind::Normal
+            } else if data.contains(&i) {
+                crate::basis::ImageKind::Data
+            } else {
+                crate::basis::ImageKind::Colour
+            };
+            if let Some((out, resized)) = compress(src, max_px, kind) {
+                stats.resized += resized as usize;
+                replaced[v] = Some(out);
+                json["images"][i]["mimeType"] = json!("image/x-basis");
+            }
+        } else if let Some((out, mime, resized)) =
+            shrink(src, max_px, normals.contains(&i) || data.contains(&i))
+        {
             stats.resized += resized as usize;
             replaced[v] = Some(out);
             json["images"][i]["mimeType"] = json!(mime);
@@ -265,7 +310,7 @@ mod tests {
     #[test]
     fn packing_shrinks_images_and_keeps_the_model() {
         let original = big_textured();
-        let (packed, stats) = pack_glb(&original, 512).unwrap();
+        let (packed, stats) = pack_glb(&original, 512, false).unwrap();
         assert_eq!((stats.images, stats.resized), (2, 2));
         assert!(
             packed.len() * 4 < original.len(),
@@ -292,6 +337,35 @@ mod tests {
                 .join("../../examples/sandbox/assets/vehicles/hatchback.glb"),
         )
         .unwrap();
-        assert_eq!(pack_glb(&plain, 512).unwrap().0, plain);
+        assert_eq!(pack_glb(&plain, 512, false).unwrap().0, plain);
+    }
+
+    #[test]
+    fn gpu_compressed_packing_ships_basis_images() {
+        let original = big_textured();
+        let (packed, stats) = pack_glb(&original, 256, true).unwrap();
+        assert_eq!(stats.resized, 2);
+        assert!(
+            packed.len() * 8 < original.len(),
+            "{} → {} bytes",
+            original.len(),
+            packed.len()
+        );
+        let (json, _) = split_glb(&packed).unwrap();
+        assert_eq!(json["images"][0]["mimeType"], "image/x-basis");
+        let m = crate::parse_model(&packed, "p.glb", None).unwrap();
+        let base = m.parts[0].material.base_color_texture.as_ref().unwrap();
+        assert!(
+            base.basis.is_some() && base.rgba.is_empty(),
+            "kept compressed"
+        );
+        assert_eq!((base.width, base.height), (256, 256));
+        assert_eq!(
+            base.pixels().unwrap().len(),
+            256 * 256 * 4,
+            "decodable on the CPU too"
+        );
+        // Packing again leaves it alone.
+        assert_eq!(pack_glb(&packed, 256, true).unwrap().0.len(), packed.len());
     }
 }

@@ -180,6 +180,7 @@ pub fn asset_build(
     tier: Option<&str>,
     out: Option<&Path>,
     with_tests: bool,
+    gpu_compress: bool,
 ) -> CmdResult {
     let (project, diags) = Project::load(&ctx.project);
     let Some(project) = project else {
@@ -248,7 +249,7 @@ pub fn asset_build(
         return Ok(1);
     }
     match out {
-        Some(dir) => ship(ctx, &project, tier, dir, with_tests, rows),
+        Some(dir) => ship(ctx, &project, tier, dir, with_tests, gpu_compress, rows),
         None => Ok(0),
     }
 }
@@ -276,6 +277,7 @@ fn ship(
     tier: Option<&str>,
     dir: &Path,
     with_tests: bool,
+    gpu_compress: bool,
     assets: Vec<serde_json::Value>,
 ) -> CmdResult {
     let tier = match tier {
@@ -317,12 +319,13 @@ fn ship(
                 .map_err(|e| cli_error(e.to_string(), "report this bug"))?
                 .into_bytes()
         } else if f.ends_with(".glb") {
-            let (packed, stats) = waypoint::asset::pack_glb(&src, max_px).map_err(|e| {
-                cli_error(
-                    format!("{f}: {e}"),
-                    "re-export the model as glTF 2.0 (.glb)",
-                )
-            })?;
+            let (packed, stats) =
+                waypoint::asset::pack_glb(&src, max_px, gpu_compress).map_err(|e| {
+                    cli_error(
+                        format!("{f}: {e}"),
+                        "re-export the model as glTF 2.0 (.glb)",
+                    )
+                })?;
             resized += stats.resized;
             packed
         } else {
@@ -351,6 +354,7 @@ fn ship(
             "bytes_out": bytes_out,
             "textures_resized": resized,
             "max_texture_px": max_px,
+            "gpu_compressed": gpu_compress,
             "assets": assets,
         }));
     } else {
