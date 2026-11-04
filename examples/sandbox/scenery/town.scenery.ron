@@ -19,6 +19,18 @@
      setback_m: 6.0, frontage_m: (9.0, 14.0), depth_m: (8.0, 12.0), height_m: (5.0, 9.0),
      gap_m: (5.0, 14.0), seed: 5),
   ],
+  // Street trees in the sidewalks, and a row of conifers along Park Lane's verge.
+  tree_rows: [
+    (roads: ["avenue_west", "avenue_east", "north_road", "south_road"], spacing_m: 14.0, seed: 6),
+    (roads: ["top_road"], kinds: [Cone], spacing_m: 9.0, height_m: (8.0, 13.0), seed: 7),
+    (roads: ["east_curve", "southwest_link"], spacing_m: 16.0, height_m: (7.0, 12.0), seed: 8),
+  ],
+  // A small park west of Mill Road.
+  trees: [
+    (position: (-95.0, 70.0), height_m: 11.0), (position: (-84.0, 82.0), height_m: 9.0),
+    (position: (-106.0, 90.0), height_m: 12.0), (position: (-80.0, 64.0), kind: Cone, height_m: 14.0),
+    (position: (-93.0, 101.0), height_m: 8.0),
+  ],
   buildings: [
     // Office blocks on the inside of the north-east loop.
     (footprint: [(40.0, 40.0), (75.0, 40.0), (75.0, 62.0), (40.0, 62.0)], height_m: 46.0, style: Some("office")),

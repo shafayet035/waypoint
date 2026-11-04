@@ -614,6 +614,16 @@ impl Project {
                 }
             }
             let net = wp_road::RoadNetwork::build(roads);
+            for i in wp_world::scenery::trees_on_roads(&file.value, &net) {
+                out.push(
+                    file.warning_at(
+                        "WP-B009",
+                        "trees",
+                        format!("tree {i} stands on a road of {}", roads.name),
+                    )
+                    .help("move it off the carriageway; vehicles hit tree trunks"),
+                );
+            }
             for (i, depth) in wp_world::scenery::buildings_on_roads(&file.value, &net) {
                 out.push(
                     file.warning_at(

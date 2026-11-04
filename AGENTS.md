@@ -44,7 +44,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_physics` | Planar rigid bodies, `Pose`, `Velocity`, `RigidBody`, `Ground` |
 | `wp_vehicle` | `.vehicle.ron`/`.trailer.ron`, validation, `VehiclePlugin` + `TrailerPlugin`, tyres, drivetrain, brakes, suspension |
 | `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
-| `wp_world` | Scenery (buildings: `scenery.rs`), `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
+| `wp_world` | Scenery (buildings and trees: `scenery.rs`), `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
 | `wp_traffic` | AI traffic: routes, lane following, IDM car-following, junction claims; shared path controllers |
 | `wp_script` | Luau mission scripts: sandbox, hooks, `mission` API, deterministic random |
 | `wp_mission` | Missions: bus stops on routes, timetable, passengers, score; `MissionPlugin` |
@@ -142,7 +142,7 @@ Missions (`wp_mission`, gameplay layer): road files have bus `stops`; `missions/
 stops with a timetable, passengers board/alight while the doors are open, and a score (punctuality,
 comfort ≤ 0.3 g, safety). `wp run --mission route_1` to play; the `Autopilot` driver lets the traffic AI
 drive a scenario's mission (`wp_traffic::autopilot` waypoints, held until released). M3 gate `bus_route`:
-two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 85, no collisions.
+two laps of route 1 (14 stops, ~15 min) in traffic with lights: complete, score 80, no collisions.
 Mission scripts (`wp_script`): Luau via mlua (vendored C++; the Android build sets
 CXX_aarch64_linux_android), sandboxed, no `os`/clock, `math.random` seeded. Hooks on_start/on_tick/
 on_arrive/on_depart/on_complete/on_fail; `mission.*` API queues commands. `wp check` compiles scripts
@@ -246,4 +246,8 @@ Buildings are solid: `apply_scene` turns their outlines into `wp_physics::Walls`
 `Impacts.walls`, and `detect_collisions` sends `Collision { other: "building" }` with the whole dent on the vehicle.
 Gate `crash_into_building`: 75 km/h into a warehouse wall, stops at the wall, never through. Chase, side and
 showcase cameras pull in front of the first wall between them and the car (`Scenery::first_hit`).
+Trees: scenery `trees` (hand-placed) and `tree_rows` (along kerbs or verges; skip junctions, lamps, bus stops, buildings;
+seeded). Kinds Round (lumpy icosphere crown), Cone, Palm (drooping fronds); built-in meshes `mesh::crown/cone/fronds`
+with far versions the renderer picks by size over distance × lod_bias; drawn within 450 m of the player; trunks are
+solid (`Walls` labelled "tree": `Collision { other: "tree" }`). `wp import osm` also imports `natural=tree` points.
 Not yet: testing on physical phones; running on an iOS simulator.

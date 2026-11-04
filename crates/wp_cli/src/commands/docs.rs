@@ -203,7 +203,7 @@ Luau extras over Lua 5.1: `+=`, `continue`, string interpolation, optional types
 ";
 
 const DOCS_SCENERY: &str = "\
-Scenery: buildings beside the roads. A scene names a file: scenery: Some(\"scenery/town.scenery.ron\").
+Scenery: buildings and trees beside the roads. A scene names a file: scenery: Some(\"scenery/town.scenery.ron\").
 
 (
   name: \"town\",
@@ -215,6 +215,10 @@ Scenery: buildings beside the roads. A scene names a file: scenery: Some(\"scene
     (roads: [\"avenue_west\"], sides: Both, setback_m: 1.0, frontage_m: (10.0, 22.0), depth_m: (10.0, 16.0),
      height_m: (9.0, 24.0), gap_m: (0.5, 4.0), styles: [\"shophouse\", \"plaster\"], seed: 3),
   ],
+  tree_rows: [  // street trees near the kerb (or on the verge); skip junctions, lamps, bus stops, buildings
+    (roads: [\"avenue_west\"], sides: Both, spacing_m: 14.0, kinds: [Round, Cone, Palm], height_m: (6.0, 11.0), seed: 6),
+  ],
+  trees: [(position: (60.0, 90.0), height_m: 11.0, kind: Round)],
   buildings: [  // placed one by one: outline (x east, y north) in m, either direction round
     (footprint: [(40.0, 40.0), (75.0, 40.0), (75.0, 62.0), (40.0, 62.0)], height_m: 46.0, style: Some(\"office\")),
   ],
@@ -228,7 +232,9 @@ shops (shop windows on the ground floor). Windows are drawn by the renderer, not
 Buildings are solid (vehicles stop against their walls, get a Collision with other: \"building\" and take
 the whole dent), cast shadows, keep outside cameras in front of them, and stream in 400 m tiles like the roads. `wp check`: WP-B001–B007 (B007 warns
 when a hand-placed building stands on a road or sidewalk). Schema: `wp schema scenery`.
-`wp import osm` writes the map's building outlines (height from height or building:levels, else typical
+Tree trunks are solid too (Collision other: \"tree\"); far crowns draw with fewer triangles (by size over
+distance × the tier's lod_bias), and trees within 450 m of the player are drawn.
+`wp import osm` writes the map's natural=tree points (palms by genus, conifers by leaf_type) and building outlines (height from height or building:levels, else typical
 for the kind; style from the building kind) and leaves out any standing on the imported roads.
 ";
 

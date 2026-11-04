@@ -2,7 +2,8 @@
 //! solver (`wp_physics::contact`) makes bodies bump and push each other; this
 //! reports, once per tick, which pairs have just started touching, as a
 //! `Collision` event to each of them. A body that runs into a building
-//! (`wp_physics::Walls`) gets a `Collision` with `other: "building"`.
+//! or tree (`wp_physics::Walls`) gets a `Collision` with `other: "building"`
+//! or `"tree"`.
 
 use crate::{VehicleDef, VehicleEvent};
 use glam::Vec2;
@@ -91,9 +92,6 @@ pub struct Contacts(pub BTreeSet<(Entity, Entity)>);
 #[derive(Clone, Debug, Default)]
 pub struct WallContacts(pub BTreeSet<Entity>);
 
-/// What a body hit, as named in `Collision` events.
-pub const BUILDING: &str = "building";
-
 /// Separating-axis test for two convex quadrilaterals.
 pub fn overlap(a: &[Vec2; 4], b: &[Vec2; 4]) -> bool {
     let axes = |q: &[Vec2; 4]| [q[1] - q[0], q[2] - q[1]];
@@ -154,7 +152,7 @@ pub fn detect_collisions(world: &mut World) {
     let new: Vec<(Entity, Entity)> = now.difference(&before).copied().collect();
     world.insert_resource(Contacts(now));
     // Bodies against buildings.
-    let mut walls_now: BTreeMap<Entity, [Vec2; 4]> = BTreeMap::new();
+    let mut walls_now: BTreeMap<Entity, ([Vec2; 4], &'static str)> = BTreeMap::new();
     if let Some(walls) = world.get_resource::<wp_physics::Walls>() {
         for (e, grown, pos, r) in &bodies {
             if let Some(w) = walls
@@ -162,7 +160,7 @@ pub fn detect_collisions(world: &mut World) {
                 .into_iter()
                 .find(|w| overlap(grown, &walls.boxes[*w as usize]))
             {
-                walls_now.insert(*e, walls.boxes[w as usize]);
+                walls_now.insert(*e, (walls.boxes[w as usize], walls.label(w)));
             }
         }
     }
@@ -170,7 +168,7 @@ pub fn detect_collisions(world: &mut World) {
         .get_resource::<WallContacts>()
         .map(|c| c.0.clone())
         .unwrap_or_default();
-    let new_walls: Vec<(Entity, [Vec2; 4])> = walls_now
+    let new_walls: Vec<(Entity, ([Vec2; 4], &'static str))> = walls_now
         .iter()
         .filter(|(e, _)| !walls_before.contains(e))
         .map(|(e, q)| (*e, *q))
@@ -214,7 +212,7 @@ pub fn detect_collisions(world: &mut World) {
         hits.push((b, a.to_string(), kmh, point, ma / (ma + mb)));
     }
     // A building does not give: the body takes all of the crush.
-    for (e, wall) in new_walls {
+    for (e, (wall, label)) in new_walls {
         let Some(corners) = corners(e) else {
             continue;
         };
@@ -226,7 +224,7 @@ pub fn detect_collisions(world: &mut World) {
             (None, Some(c)) => velocity_at(world, e, c.point).dot(c.normal).abs() * 3.6,
             (None, None) => 0.0,
         };
-        hits.push((e, BUILDING.to_string(), kmh, point, 1.0));
+        hits.push((e, label.to_string(), kmh, point, 1.0));
     }
     for &(e, _, kmh, point, share) in &hits {
         let depth = dent_depth_m(kmh, share);

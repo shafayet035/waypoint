@@ -185,3 +185,204 @@ mod tests {
         check_winding(&wheel());
     }
 }
+
+/// Tree crown: a lumpy sphere of radius about 1 (an icosahedron split
+/// `splits` times, each vertex pushed in or out a little), smooth normals.
+pub fn crown(splits: u32) -> MeshData {
+    let t = (1.0 + 5f32.sqrt()) / 2.0;
+    let mut pos: Vec<glam::Vec3> = [
+        (-1.0, t, 0.0),
+        (1.0, t, 0.0),
+        (-1.0, -t, 0.0),
+        (1.0, -t, 0.0),
+        (0.0, -1.0, t),
+        (0.0, 1.0, t),
+        (0.0, -1.0, -t),
+        (0.0, 1.0, -t),
+        (t, 0.0, -1.0),
+        (t, 0.0, 1.0),
+        (-t, 0.0, -1.0),
+        (-t, 0.0, 1.0),
+    ]
+    .iter()
+    .map(|&(x, y, z)| glam::Vec3::new(x, y, z).normalize())
+    .collect();
+    let mut tris: Vec<[u32; 3]> = vec![
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
+    for _ in 0..splits {
+        let mut mid = std::collections::BTreeMap::new();
+        let mut next = Vec::with_capacity(tris.len() * 4);
+        let mut half = |a: u32, b: u32, pos: &mut Vec<glam::Vec3>| -> u32 {
+            *mid.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                pos.push(((pos[a as usize] + pos[b as usize]) * 0.5).normalize());
+                pos.len() as u32 - 1
+            })
+        };
+        for [a, b, c] in tris {
+            let (ab, bc, ca) = (
+                half(a, b, &mut pos),
+                half(b, c, &mut pos),
+                half(c, a, &mut pos),
+            );
+            next.extend_from_slice(&[[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]);
+        }
+        tris = next;
+    }
+    // Lumps: a fixed pattern, so every crown is the same shape (instances vary by scale).
+    let vertices = pos
+        .iter()
+        .map(|p| {
+            let lump =
+                1.0 + 0.09 * (p.x * 7.0).sin() * (p.y * 5.0 + 1.0).cos() + 0.05 * (p.z * 9.0).sin();
+            Vertex {
+                position: (*p * lump).to_array(),
+                normal: p.to_array(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    MeshData {
+        vertices,
+        indices: tris.into_iter().flatten().collect(),
+    }
+}
+
+/// Conifer crown: a cone of radius 1 from z = 0 up to a point at z = 1,
+/// with `segments` sides and a flat base.
+pub fn cone(segments: u32) -> MeshData {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let slope = 1.0f32.atan2(1.0); // side normal leans up by the cone's angle
+    for i in 0..segments {
+        let a0 = i as f32 / segments as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / segments as f32 * std::f32::consts::TAU;
+        let am = (a0 + a1) / 2.0;
+        let n = glam::Vec3::new(am.cos() * slope.cos(), am.sin() * slope.cos(), slope.sin());
+        let base = vertices.len() as u32;
+        for p in [
+            [a0.cos(), a0.sin(), 0.0],
+            [a1.cos(), a1.sin(), 0.0],
+            [0.0, 0.0, 1.0],
+        ] {
+            vertices.push(Vertex {
+                position: p,
+                normal: n.to_array(),
+                ..Default::default()
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2]);
+        // Base.
+        let b = vertices.len() as u32;
+        for p in [
+            [a1.cos(), a1.sin(), 0.0],
+            [a0.cos(), a0.sin(), 0.0],
+            [0.0, 0.0, 0.0],
+        ] {
+            vertices.push(Vertex {
+                position: p,
+                normal: [0.0, 0.0, -1.0],
+                ..Default::default()
+            });
+        }
+        indices.extend_from_slice(&[b, b + 1, b + 2]);
+    }
+    MeshData { vertices, indices }
+}
+
+/// Palm crown: `count` fronds radiating from the top of the trunk, each a
+/// thin leaf (top and bottom faces) arching out to radius 1 and drooping to
+/// z = −0.45 at its tip.
+pub fn fronds(count: u32) -> MeshData {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    // Along a frond: (distance out, height, half width).
+    let spine = [
+        (0.0, 0.05, 0.02),
+        (0.35, 0.12, 0.13),
+        (0.7, -0.05, 0.11),
+        (1.0, -0.45, 0.01),
+    ];
+    for k in 0..count {
+        let a = k as f32 / count as f32 * std::f32::consts::TAU;
+        let (dir, side) = (
+            glam::Vec3::new(a.cos(), a.sin(), 0.0),
+            glam::Vec3::new(-a.sin(), a.cos(), 0.0),
+        );
+        for (face, sign) in [(0, 1.0f32), (1, -1.0)] {
+            let base = vertices.len() as u32;
+            for (i, &(r, z, w)) in spine.iter().enumerate() {
+                let c = dir * r + glam::Vec3::Z * z;
+                // Normal: across the leaf's slope, up for the top face.
+                let next = spine[(i + 1).min(spine.len() - 1)];
+                let prev = spine[i.saturating_sub(1)];
+                let along =
+                    (dir * (next.0 - prev.0) + glam::Vec3::Z * (next.1 - prev.1)).normalize_or(dir);
+                let n = (side.cross(along) * -sign).normalize();
+                for p in [c - side * w, c + side * w] {
+                    vertices.push(Vertex {
+                        position: p.to_array(),
+                        normal: n.to_array(),
+                        ..Default::default()
+                    });
+                }
+            }
+            for i in 0..spine.len() as u32 - 1 {
+                let (l0, r0, l1, r1) = (
+                    base + 2 * i,
+                    base + 2 * i + 1,
+                    base + 2 * i + 2,
+                    base + 2 * i + 3,
+                );
+                if face == 0 {
+                    indices.extend_from_slice(&[l0, r1, r0, l0, l1, r1]);
+                } else {
+                    indices.extend_from_slice(&[l0, r0, r1, l0, r1, l1]);
+                }
+            }
+        }
+    }
+    MeshData { vertices, indices }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn outward(m: &MeshData) -> bool {
+        m.indices.chunks(3).all(|t| {
+            let p = |i: u32| glam::Vec3::from(m.vertices[i as usize].position);
+            let n = glam::Vec3::from(m.vertices[t[0] as usize].normal);
+            (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).dot(n) > 0.0
+        })
+    }
+
+    #[test]
+    fn tree_meshes_face_outwards() {
+        assert_eq!(crown(0).indices.len() / 3, 20);
+        assert_eq!(crown(2).indices.len() / 3, 320);
+        assert!(outward(&crown(2)));
+        assert_eq!(cone(4).indices.len() / 3, 8);
+        assert!(outward(&cone(10)));
+        assert!(outward(&fronds(8)));
+    }
+}

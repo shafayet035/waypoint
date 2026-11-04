@@ -17,4 +17,9 @@
     (roads: ["market_street", "hill_road", "cliff_road"], styles: ["harbour_house"],
      frontage_m: (6.0, 10.0), depth_m: (8.0, 12.0), height_m: (6.0, 12.0), gap_m: (0.0, 1.5), seed: 12),
   ],
+  // Palms along the quay promenade (the water side), round trees up the hill.
+  tree_rows: [
+    (roads: ["quay_west", "quay_east"], sides: Right, kinds: [Palm], spacing_m: 18.0, height_m: (8.0, 11.0), seed: 13),
+    (roads: ["hill_road", "cliff_road"], spacing_m: 15.0, height_m: (5.0, 8.0), seed: 14),
+  ],
 )

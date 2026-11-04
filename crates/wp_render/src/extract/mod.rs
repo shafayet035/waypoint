@@ -34,6 +34,12 @@ use wp_world::Player;
 pub enum MeshId {
     Cube,
     Wheel,
+    /// Tree crowns (the renderer swaps in the far versions itself).
+    Crown,
+    Cone,
+    Fronds,
+    CrownFar,
+    ConeFar,
     /// Part `part` of model `model` in [`FrameView::models`], at level of
     /// detail `lod` (0 = full; the renderer picks it from screen size).
     Model {
@@ -242,6 +248,9 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
             lamps_lit,
         );
     }
+    if let Some(scenery) = world.get_resource::<wp_world::scenery::CurrentScenery>() {
+        tree_items(&mut items, &scenery.0, focus_point(world));
+    }
     if let Some(docks) = world.get_resource::<wp_world::Docks>() {
         for d in &docks.0 {
             dock_items(&mut items, &mut shadows, d);
@@ -369,6 +378,72 @@ const LAMP_DRAW_M: f32 = 250.0;
 
 /// Street lamps: a pole, an arm over the road and a head that glows (and
 /// lights the street) when `lit`.
+/// Trees within this distance of the focus are drawn, m.
+const TREE_DRAW_M: f32 = 450.0;
+
+/// Trees: a trunk (a box) and a crown (lumpy sphere, cone, or a flat palm top).
+fn tree_items(items: &mut Vec<DrawItem>, scenery: &wp_world::scenery::Scenery, focus: Vec2) {
+    use wp_world::scenery::{TRUNK_M, TreeKind};
+    let bark = Vec3::new(0.11, 0.075, 0.05);
+    let leaves = [
+        Vec3::new(0.06, 0.15, 0.035),
+        Vec3::new(0.09, 0.18, 0.04),
+        Vec3::new(0.05, 0.12, 0.04),
+        Vec3::new(0.11, 0.17, 0.045),
+    ];
+    for t in &scenery.trees {
+        if t.position.distance(focus) > TREE_DRAW_M {
+            continue;
+        }
+        let h = t.height_m;
+        let vary = 0.88 + (t.seed % 25) as f32 / 100.0;
+        let green = leaves[(t.seed as usize >> 2) % leaves.len()];
+        let at = t.position.extend(0.0);
+        let (trunk_h, trunk_w, crown, crown_at, crown_size) = match t.kind {
+            TreeKind::Round => (
+                h * 0.45,
+                TRUNK_M,
+                MeshId::Crown,
+                h * 0.64,
+                Vec3::new(h * 0.3 * vary, h * 0.3 * vary, h * 0.34),
+            ),
+            TreeKind::Cone => (
+                h * 0.2,
+                TRUNK_M * 0.9,
+                MeshId::Cone,
+                h * 0.12,
+                Vec3::new(h * 0.21 * vary, h * 0.21 * vary, h * 0.88),
+            ),
+            TreeKind::Palm => (
+                h * 0.95,
+                TRUNK_M * 0.7,
+                MeshId::Fronds,
+                h * 0.94,
+                Vec3::new(h * 0.42 * vary, h * 0.42 * vary, h * 0.42),
+            ),
+        };
+        items.push(DrawItem {
+            mesh: MeshId::Cube,
+            transform: Mat4::from_translation(at + Vec3::Z * trunk_h * 0.5)
+                * Mat4::from_scale(Vec3::new(trunk_w, trunk_w, trunk_h)),
+            color: bark,
+            roughness: 0.9,
+            metallic: 0.0,
+            emissive: 0.0,
+        });
+        items.push(DrawItem {
+            mesh: crown,
+            transform: Mat4::from_translation(at + Vec3::Z * crown_at)
+                * Mat4::from_rotation_z(t.seed as f32 * 0.7)
+                * Mat4::from_scale(crown_size),
+            color: green,
+            roughness: 0.85,
+            metallic: 0.0,
+            emissive: 0.0,
+        });
+    }
+}
+
 fn lamp_items(
     items: &mut Vec<DrawItem>,
     lights: &mut Vec<PointLight>,

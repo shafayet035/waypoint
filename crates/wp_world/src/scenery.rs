@@ -33,6 +33,70 @@ pub struct SceneryDef {
     /// Rows of generated buildings along roads.
     #[serde(default)]
     pub streets: Vec<StreetDef>,
+    /// Trees placed one by one (imported maps list theirs here).
+    #[serde(default)]
+    pub trees: Vec<TreeDef>,
+    /// Rows of street trees along kerbs (or verges where there is no sidewalk).
+    #[serde(default)]
+    pub tree_rows: Vec<TreeRowDef>,
+}
+
+/// The shape of a tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum TreeKind {
+    /// Broadleaf: a round crown on a short trunk.
+    #[default]
+    Round,
+    /// Conifer: a tall cone.
+    Cone,
+    /// Palm: a tall bare trunk with a flat crown.
+    Palm,
+}
+
+/// A tree placed by hand.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreeDef {
+    /// (x east, y north), m.
+    pub position: (f32, f32),
+    #[serde(default = "default_tree_height")]
+    pub height_m: f32,
+    #[serde(default)]
+    pub kind: TreeKind,
+}
+
+fn default_tree_height() -> f32 {
+    8.0
+}
+
+/// Street trees along roads, spaced evenly, skipping junctions, crossings,
+/// street lamps, bus stops and buildings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreeRowDef {
+    /// Road ids; empty: every road with a sidewalk.
+    #[serde(default)]
+    pub roads: Vec<String>,
+    #[serde(default)]
+    pub sides: Sides,
+    /// Distance between trees, m.
+    #[serde(default = "default_tree_spacing")]
+    pub spacing_m: f32,
+    /// Shapes to pick from; empty: Round.
+    #[serde(default)]
+    pub kinds: Vec<TreeKind>,
+    /// Height, m (min, max).
+    #[serde(default = "default_tree_heights")]
+    pub height_m: (f32, f32),
+    #[serde(default = "default_seed")]
+    pub seed: u64,
+}
+
+fn default_tree_spacing() -> f32 {
+    12.0
+}
+fn default_tree_heights() -> (f32, f32) {
+    (6.0, 11.0)
 }
 
 /// How a building looks.
@@ -270,10 +334,38 @@ impl Building {
     }
 }
 
-/// The buildings of a scene.
+/// A tree ready to draw (its trunk is solid).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tree {
+    pub position: Vec2,
+    pub height_m: f32,
+    pub kind: TreeKind,
+    /// Varies crown colour and size a little.
+    pub seed: u8,
+}
+
+/// Trunk width, m (also its collision box).
+pub const TRUNK_M: f32 = 0.36;
+
+impl Tree {
+    /// The trunk's outline, counter-clockwise.
+    pub fn trunk(&self) -> [Vec2; 4] {
+        let h = TRUNK_M / 2.0;
+        let p = self.position;
+        [
+            p + Vec2::new(-h, -h),
+            p + Vec2::new(h, -h),
+            p + Vec2::new(h, h),
+            p + Vec2::new(-h, h),
+        ]
+    }
+}
+
+/// The buildings and trees of a scene.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scenery {
     pub buildings: Vec<Building>,
+    pub trees: Vec<Tree>,
 }
 
 impl Scenery {
@@ -482,6 +574,23 @@ fn road_intrusion(
     worst
 }
 
+/// Hand-placed trees that stand on a carriageway or in a junction: indices.
+pub fn trees_on_roads(def: &SceneryDef, net: &RoadNetwork) -> Vec<usize> {
+    let (_, junctions) = clearances(net);
+    def.trees
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            let p = Vec2::new(t.position.0, t.position.1);
+            net.roads
+                .iter()
+                .any(|r| r.centre.project(p).2 < r.left_m.max(r.right_m) + 0.5)
+                || junctions.iter().any(|(at, r)| p.distance(*at) < *r)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Hand-placed buildings that stand on a road: (index, how far in, m).
 pub fn buildings_on_roads(def: &SceneryDef, net: &RoadNetwork) -> Vec<(usize, f32)> {
     let (roads, junctions) = clearances(net);
@@ -523,13 +632,30 @@ impl Scenery {
                 seed: (seed >> 8) as u8,
             });
         }
+        let mut trees: Vec<Tree> = def
+            .trees
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Tree {
+                position: Vec2::new(t.position.0, t.position.1),
+                height_m: t.height_m,
+                kind: t.kind,
+                seed: (i as u32).wrapping_mul(2_654_435_761).to_be_bytes()[0],
+            })
+            .collect();
         if let Some(net) = net {
             let (roads, junctions) = clearances(net);
             for street in &def.streets {
                 fill_street(street, net, &styles, &roads, &junctions, &mut out);
             }
+            for row in &def.tree_rows {
+                plant_row(row, net, &junctions, &out, &mut trees);
+            }
         }
-        Scenery { buildings: out }
+        Scenery {
+            buildings: out,
+            trees,
+        }
     }
 }
 
@@ -623,6 +749,106 @@ fn fill_street(
     }
 }
 
+/// Street trees stand this far in from the kerb, m.
+const KERB_TREE_M: f32 = 1.2;
+/// And this far beyond a junction's corners, m.
+const JUNCTION_TREE_M: f32 = 14.0;
+
+fn plant_row(
+    row: &TreeRowDef,
+    net: &RoadNetwork,
+    junctions: &[(Vec2, f32)],
+    buildings: &[Building],
+    out: &mut Vec<Tree>,
+) {
+    let mut rng = SimRng::fork(row.seed, "trees");
+    let kinds = if row.kinds.is_empty() {
+        vec![TreeKind::Round]
+    } else {
+        row.kinds.clone()
+    };
+    let spacing = row.spacing_m.max(3.0);
+    let (lo, hi) = (
+        row.height_m.0.min(row.height_m.1),
+        row.height_m.0.max(row.height_m.1),
+    );
+    for road in &net.roads {
+        let chosen = if row.roads.is_empty() {
+            road.def.sidewalk_m > 0.0
+        } else {
+            row.roads.contains(&road.def.id)
+        };
+        if !chosen {
+            continue;
+        }
+        let sides: &[f32] = match row.sides {
+            Sides::Both => &[1.0, -1.0],
+            Sides::Left => &[1.0],
+            Sides::Right => &[-1.0],
+        };
+        for &side in sides {
+            let edge = if side > 0.0 {
+                road.left_m
+            } else {
+                road.right_m
+            };
+            // In the sidewalk, clear of overhanging bodies at the kerb, or on the verge.
+            let out_m = if road.def.sidewalk_m >= 1.8 {
+                KERB_TREE_M
+            } else {
+                road.def.sidewalk_m + 1.8
+            };
+            let line = road.centre.offset(side * (edge + out_m));
+            let len = line.length();
+            let mut s = spacing * 0.5 + rng.range_f32(0.0, spacing * 0.3);
+            while s < len {
+                let p = line.sample(s).0;
+                let height_m = rng.range_f32(lo, hi.max(lo));
+                let kind = kinds[(rng.next_u64() % kinds.len() as u64) as usize];
+                let seed = (rng.next_u64() >> 24) as u8;
+                s += spacing;
+                // Long vehicles cut corners: keep well back from junctions.
+                let clear = junctions
+                    .iter()
+                    .all(|(at, r)| p.distance(*at) > r + JUNCTION_TREE_M)
+                    && net.lamps.iter().all(|l| l.position.distance(p) > 3.0)
+                    && net.stops.iter().all(|st| st.kerb.distance(p) > 10.0)
+                    && buildings.iter().all(|b| {
+                        b.centroid().distance(p) > 60.0
+                            || (!point_in(&b.footprint, p)
+                                && outline_distance(&b.footprint, p) > 1.5)
+                    })
+                    && net
+                        .roads
+                        .iter()
+                        .all(|r| r.centre.project(p).2 > r.left_m.max(r.right_m) + 0.4)
+                    && out.iter().all(|t| t.position.distance(p) > 2.0);
+                if clear {
+                    out.push(Tree {
+                        position: p,
+                        height_m,
+                        kind,
+                        seed,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Distance from `p` to the nearest edge of an outline, m.
+fn outline_distance(outline: &[Vec2], p: Vec2) -> f32 {
+    let n = outline.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+            p.distance(a + ab * t)
+        })
+        .fold(f32::MAX, f32::min)
+}
+
 impl SceneryDef {
     pub fn validate(file: &Loaded<SceneryDef>) -> Vec<Diagnostic> {
         let def = &file.value;
@@ -682,6 +908,34 @@ impl SceneryDef {
                         format!("building {i} uses unknown style `{s}`"),
                     )
                     .help(format!("known styles: {}", known())),
+                );
+            }
+        }
+        for (i, t) in def.trees.iter().enumerate() {
+            if !(t.height_m > 1.0 && t.height_m <= 80.0) {
+                out.push(
+                    file.error_at(
+                        "WP-B008",
+                        "trees",
+                        format!("tree {i} has height_m {}", t.height_m),
+                    )
+                    .help("tree heights run from 1 to 80 m"),
+                );
+            }
+        }
+        for r in &def.tree_rows {
+            if !(r.spacing_m >= 3.0)
+                || r.height_m.0 <= 1.0
+                || r.height_m.1 < r.height_m.0
+                || r.height_m.1 > 80.0
+            {
+                out.push(
+                    file.error_at(
+                        "WP-B008",
+                        "tree_rows",
+                        "a tree row needs spacing_m ≥ 3 and height_m (min, max) within 1–80 m",
+                    )
+                    .help("for example spacing_m: 12.0, height_m: (6.0, 11.0)"),
                 );
             }
         }
@@ -978,6 +1232,53 @@ mod tests {
             let face = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
             assert!(face.dot(Vec3::from(m.normals[t[0] as usize])) > 0.0);
         }
+    }
+
+    #[test]
+    fn tree_rows_keep_clear_of_roads_lamps_and_buildings() {
+        let net = town();
+        let def = SceneryDef {
+            name: "t".into(),
+            streets: vec![StreetDef {
+                roads: Vec::new(),
+                sides: Sides::Both,
+                setback_m: 1.0,
+                frontage_m: default_frontage(),
+                depth_m: default_depth(),
+                height_m: default_height(),
+                gap_m: default_gap(),
+                styles: Vec::new(),
+                seed: 7,
+            }],
+            tree_rows: vec![TreeRowDef {
+                roads: Vec::new(),
+                sides: Sides::Both,
+                spacing_m: 10.0,
+                kinds: vec![TreeKind::Round, TreeKind::Palm],
+                height_m: (6.0, 10.0),
+                seed: 2,
+            }],
+            ..Default::default()
+        };
+        let s = Scenery::build(&def, Some(&net));
+        assert!(s.trees.len() > 30, "{} trees", s.trees.len());
+        for t in &s.trees {
+            for r in &net.roads {
+                assert!(r.centre.project(t.position).2 > r.left_m.max(r.right_m));
+            }
+            assert!(
+                net.lamps
+                    .iter()
+                    .all(|l| l.position.distance(t.position) > 3.0)
+            );
+            assert!(
+                s.buildings
+                    .iter()
+                    .all(|b| !point_in(&b.footprint, t.position))
+            );
+        }
+        assert!(s.trees.iter().any(|t| t.kind == TreeKind::Palm));
+        assert_eq!(Scenery::build(&def, Some(&net)), s, "same seed, same trees");
     }
 
     #[test]

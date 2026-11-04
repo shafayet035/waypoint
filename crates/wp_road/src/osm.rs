@@ -47,6 +47,24 @@ pub struct OsmBuilding {
     pub kind: String,
 }
 
+/// A tree from the map (`natural=tree` nodes).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OsmTree {
+    pub position: (f32, f32),
+    /// From `height`, else 8 m.
+    pub height_m: f32,
+    /// `leaf_type=needleleaved` (a conifer) or a palm (`genus`/`taxon` names one).
+    pub needles: bool,
+    pub palm: bool,
+}
+
+/// What `import_with_buildings` found besides roads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OsmScenery {
+    pub buildings: Vec<OsmBuilding>,
+    pub trees: Vec<OsmTree>,
+}
+
 /// "12", "12 m", "12.5m" → metres (feet and other units are not read).
 fn parse_metres(s: &str) -> Option<f32> {
     let t = s.trim();
@@ -127,24 +145,49 @@ pub fn import(
     import_with_buildings(xml, name, drive_side, lang).map(|(net, _, stats)| (net, stats))
 }
 
+fn is_palm(tags: &BTreeMap<String, String>) -> bool {
+    ["genus", "taxon", "species", "genus:en", "species:en"]
+        .iter()
+        .filter_map(|k| tags.get(*k))
+        .any(|v| {
+            let v = v.to_lowercase();
+            [
+                "palm",
+                "cocos",
+                "areca",
+                "phoenix",
+                "roystonea",
+                "washingtonia",
+                "borassus",
+            ]
+            .iter()
+            .any(|p| v.contains(p))
+        })
+}
+
 /// [`import`], plus the buildings inside the exported area (whole outlines
-/// only; outlines cut by the edge are left out, as are multipolygon relations).
+/// only; outlines cut by the edge are left out, as are multipolygon
+/// relations) and its `natural=tree` trees.
 pub fn import_with_buildings(
     xml: &str,
     name: &str,
     drive_side: DriveSide,
     lang: Option<&str>,
-) -> Result<(RoadNetworkDef, Vec<OsmBuilding>, ImportStats), String> {
+) -> Result<(RoadNetworkDef, OsmScenery, ImportStats), String> {
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut coords: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     let mut ways: Vec<Way> = Vec::new();
     let mut current: Option<Way> = None;
     // (min lat, min lon, max lat, max lon) of the exported area, if given.
     let mut bounds: Option<(f64, f64, f64, f64)> = None;
+    // A node with tags being read (only `<node>…</node>` elements have them).
+    let mut tagged: Option<(String, BTreeMap<String, String>)> = None;
+    let mut tree_nodes: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     loop {
         let event = reader
             .read_event()
             .map_err(|e| format!("invalid OSM XML at byte {}: {e}", reader.buffer_position()))?;
+        let opens = matches!(event, Event::Start(_));
         match event {
             Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
                 "node" => {
@@ -152,6 +195,9 @@ pub fn import_with_buildings(
                         (attr(&e, "id"), attr(&e, "lat"), attr(&e, "lon"))
                         && let (Ok(lat), Ok(lon)) = (lat.parse::<f64>(), lon.parse::<f64>())
                     {
+                        if opens {
+                            tagged = Some((id.clone(), BTreeMap::new()));
+                        }
                         coords.insert(id, (lat, lon));
                     }
                 }
@@ -176,14 +222,23 @@ pub fn import_with_buildings(
                     }
                 }
                 "tag" => {
-                    if let (Some(w), Some(k), Some(v)) =
-                        (current.as_mut(), attr(&e, "k"), attr(&e, "v"))
-                    {
-                        w.tags.insert(k, v);
+                    if let (Some(k), Some(v)) = (attr(&e, "k"), attr(&e, "v")) {
+                        if let Some(w) = current.as_mut() {
+                            w.tags.insert(k, v);
+                        } else if let Some((_, tags)) = tagged.as_mut() {
+                            tags.insert(k, v);
+                        }
                     }
                 }
                 _ => {}
             },
+            Event::End(e) if e.name().as_ref() == "node" => {
+                if let Some((id, tags)) = tagged.take()
+                    && tags.get("natural").is_some_and(|n| n == "tree")
+                {
+                    tree_nodes.push((id, tags));
+                }
+            }
             Event::End(e) if e.name().as_ref() == "way" => {
                 if let Some(w) = current.take() {
                     ways.push(w);
@@ -413,6 +468,21 @@ pub fn import_with_buildings(
             }
         })
         .collect();
+    let inside = |id: &String| usable(id);
+    let trees: Vec<OsmTree> = tree_nodes
+        .iter()
+        .filter(|(id, _)| inside(id))
+        .map(|(id, tags)| OsmTree {
+            position: project(id),
+            height_m: tags
+                .get("height")
+                .and_then(|h| parse_metres(h))
+                .unwrap_or(8.0)
+                .clamp(2.0, 60.0),
+            needles: tags.get("leaf_type").is_some_and(|l| l == "needleleaved"),
+            palm: is_palm(tags),
+        })
+        .collect();
     let stats = ImportStats {
         osm_nodes: coords.len(),
         osm_ways,
@@ -434,7 +504,7 @@ pub fn import_with_buildings(
             nodes,
             roads,
         },
-        buildings,
+        OsmScenery { buildings, trees },
         stats,
     ))
 }
@@ -517,9 +587,16 @@ mod tests {
     <tag k="building" v="yes"/><tag k="height" v="14 m"/></way>
   <way id="32"><nd ref="20"/><nd ref="21"/><nd ref="22"/><tag k="building" v="yes"/></way>
   <way id="33"><nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="20"/><tag k="building" v="no"/></way>
+  <node id="40" lat="23.8101" lon="90.4101"><tag k="natural" v="tree"/><tag k="genus" v="Cocos"/></node>
+  <node id="41" lat="23.8101" lon="90.4103"><tag k="natural" v="tree"/><tag k="height" v="12"/></node>
+  <node id="42" lat="23.8101" lon="90.4105"><tag k="amenity" v="bench"/></node>
 </osm>"#,
         );
-        let (_, b, _) = import_with_buildings(&xml, "t", DriveSide::Left, None).unwrap();
+        let (_, sc, _) = import_with_buildings(&xml, "t", DriveSide::Left, None).unwrap();
+        assert_eq!(sc.trees.len(), 2);
+        assert!(sc.trees[0].palm && !sc.trees[1].palm);
+        assert_eq!(sc.trees[1].height_m, 12.0);
+        let b = sc.buildings;
         assert_eq!(b.len(), 2, "open and building=no ways are skipped");
         assert_eq!(b[0].footprint.len(), 4, "closing point dropped");
         assert_eq!(b[0].height_m, 18.5);

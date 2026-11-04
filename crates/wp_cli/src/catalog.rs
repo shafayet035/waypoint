@@ -39,6 +39,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Point `scenery` at a scenery/<name>.scenery.ron file, relative to the project root.",
     },
     ErrorDoc {
+        code: "WP-B009",
+        title: "A tree stands on a road (warning)",
+        fix: "Move it off the carriageway and out of junctions: trunks are solid.",
+    },
+    ErrorDoc {
+        code: "WP-B008",
+        title: "A tree or tree row has an invalid size",
+        fix: "Tree heights run from 1 to 80 m; tree rows need spacing_m ≥ 3 and height_m (min, max).",
+    },
+    ErrorDoc {
         code: "WP-B007",
         title: "A building stands on a road or sidewalk (warning)",
         fix: "Move its footprint back from the road; vehicles and pedestrians use that space.",

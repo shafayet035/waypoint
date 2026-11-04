@@ -146,14 +146,23 @@ const WALL_CELL_M: f32 = 16.0;
 pub struct Walls {
     /// Corners of each wall's box, going round it; the first two are the face.
     pub boxes: Vec<[Vec2; 4]>,
+    labels: Vec<&'static str>,
     grid: std::collections::BTreeMap<(i32, i32), Vec<u32>>,
 }
 
 impl Walls {
-    /// Walls round counter-clockwise outlines (seen from above): each edge
-    /// faces outwards and is backed by [`WALL_THICKNESS_M`] of wall.
+    /// Walls round counter-clockwise outlines (seen from above), labelled
+    /// "building": each edge faces outwards and is backed by
+    /// [`WALL_THICKNESS_M`] of wall.
     pub fn new<'a>(outlines: impl IntoIterator<Item = &'a [Vec2]>) -> Self {
         let mut walls = Walls::default();
+        walls.add(outlines, "building");
+        walls
+    }
+
+    /// Add walls round more outlines, under `label` (what a body hitting
+    /// them is told it hit).
+    pub fn add<'a>(&mut self, outlines: impl IntoIterator<Item = &'a [Vec2]>, label: &'static str) {
         for outline in outlines {
             let n = outline.len();
             for i in 0..n {
@@ -164,14 +173,19 @@ impl Walls {
                 }
                 let d = (b - a) / len;
                 let inward = Vec2::new(-d.y, d.x) * WALL_THICKNESS_M;
-                walls.push([a, b, b + inward, a + inward]);
+                self.push([a, b, b + inward, a + inward], label);
             }
         }
-        walls
     }
 
-    fn push(&mut self, q: [Vec2; 4]) {
+    /// What wall `k` belongs to ("building", "tree", ...).
+    pub fn label(&self, k: u32) -> &'static str {
+        self.labels.get(k as usize).copied().unwrap_or("building")
+    }
+
+    fn push(&mut self, q: [Vec2; 4], label: &'static str) {
         let k = self.boxes.len() as u32;
+        self.labels.push(label);
         let (lo, hi) = bounds(&q);
         for cx in cell(lo.x)..=cell(hi.x) {
             for cy in cell(lo.y)..=cell(hi.y) {

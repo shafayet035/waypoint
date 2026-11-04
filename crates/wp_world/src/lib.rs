@@ -392,9 +392,11 @@ pub fn apply_scene(
         Some(def) => {
             let built = scenery::Scenery::build(def, net.as_deref());
             // Buildings are solid.
-            world.insert_resource(wp_physics::Walls::new(
-                built.buildings.iter().map(|b| b.footprint.as_slice()),
-            ));
+            let mut walls =
+                wp_physics::Walls::new(built.buildings.iter().map(|b| b.footprint.as_slice()));
+            let trunks: Vec<[glam::Vec2; 4]> = built.trees.iter().map(|t| t.trunk()).collect();
+            walls.add(trunks.iter().map(|t| t.as_slice()), "tree");
+            world.insert_resource(walls);
             world.insert_resource(scenery::CurrentScenery(std::sync::Arc::new(built)));
         }
         None => {

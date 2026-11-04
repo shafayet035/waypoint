@@ -780,6 +780,8 @@ pub struct Renderer {
     meshes_pipeline: wgpu::RenderPipeline,
     cube: GpuMesh,
     wheel: GpuMesh,
+    /// Crown, far crown, cone, far cone, palm fronds.
+    trees: [GpuMesh; 5],
     instances: wgpu::Buffer,
     instance_capacity: usize,
     /// Road meshes for the current network (asphalt, markings, sidewalks),
@@ -1039,6 +1041,13 @@ impl Renderer {
             meshes_pipeline,
             cube: GpuMesh::new(gpu, &mesh::cube(), "cube"),
             wheel: GpuMesh::new(gpu, &mesh::wheel(), "wheel"),
+            trees: [
+                GpuMesh::new(gpu, &mesh::crown(2), "crown"),
+                GpuMesh::new(gpu, &mesh::crown(0), "crown (far)"),
+                GpuMesh::new(gpu, &mesh::cone(10), "cone"),
+                GpuMesh::new(gpu, &mesh::cone(4), "cone (far)"),
+                GpuMesh::new(gpu, &mesh::fronds(9), "palm fronds"),
+            ],
             instances,
             instance_capacity,
             roads: None,
@@ -1624,6 +1633,11 @@ impl Renderer {
         match id {
             MeshId::Cube => Some(&self.cube),
             MeshId::Wheel => Some(&self.wheel),
+            MeshId::Crown => Some(&self.trees[0]),
+            MeshId::CrownFar => Some(&self.trees[1]),
+            MeshId::Cone => Some(&self.trees[2]),
+            MeshId::ConeFar => Some(&self.trees[3]),
+            MeshId::Fronds => Some(&self.trees[4]),
             MeshId::Model { model, part, lod } => self
                 .models
                 .as_ref()?
@@ -1641,6 +1655,18 @@ impl Renderer {
     /// Draw distant models simpler: the level follows how big the model looks
     /// (its size over its distance), scaled by the tier's bias.
     fn level_of_detail(&self, d: &DrawItem, eye: glam::Vec3) -> MeshId {
+        if let MeshId::Crown | MeshId::Cone = d.mesh {
+            let size = d.transform.x_axis.truncate().length() * 2.0;
+            let distance = (d.transform.w_axis.truncate() - eye).length().max(0.1);
+            if size / distance * self.lod_bias < 0.05 {
+                return if d.mesh == MeshId::Crown {
+                    MeshId::CrownFar
+                } else {
+                    MeshId::ConeFar
+                };
+            }
+            return d.mesh;
+        }
         let MeshId::Model { model, part, .. } = d.mesh else {
             return d.mesh;
         };
