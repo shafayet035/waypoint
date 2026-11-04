@@ -214,10 +214,15 @@ pub enum VehicleEvent {
         entity: String,
         other: String,
     },
+    /// This vehicle entered a junction while its light was red.
+    RanRedLight {
+        entity: String,
+        junction: String,
+    },
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 9] = [
+    pub const KINDS: [&'static str; 10] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
@@ -227,6 +232,7 @@ impl VehicleEvent {
         "RolledOver",
         "Jackknife",
         "Collision",
+        "RanRedLight",
     ];
 
     pub fn kind(&self) -> &'static str {
@@ -240,6 +246,7 @@ impl VehicleEvent {
             Self::RolledOver { .. } => "RolledOver",
             Self::Jackknife { .. } => "Jackknife",
             Self::Collision { .. } => "Collision",
+            Self::RanRedLight { .. } => "RanRedLight",
         }
     }
 
@@ -254,7 +261,8 @@ impl VehicleEvent {
             | Self::LowAirPressure { entity, .. }
             | Self::RolledOver { entity, .. }
             | Self::Jackknife { entity, .. }
-            | Self::Collision { entity, .. } => entity,
+            | Self::Collision { entity, .. }
+            | Self::RanRedLight { entity, .. } => entity,
         }
     }
 }

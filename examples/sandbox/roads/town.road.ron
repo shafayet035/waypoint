@@ -8,7 +8,7 @@
   drive_side: Right,
   nodes: [
     (id: "west", position: (-150.0, 0.0)),
-    (id: "centre", position: (0.0, 0.0)),
+    (id: "centre", position: (0.0, 0.0), control: Signals((green_s: 20.0))),
     (id: "east", position: (150.0, 0.0)),
     (id: "north", position: (0.0, 120.0)),
     (id: "northeast", position: (150.0, 120.0)),

@@ -31,6 +31,63 @@ pub struct NodeDef {
     pub id: String,
     /// (x east, y north), m.
     pub position: (f32, f32),
+    /// Who goes first at this node: take turns (default), traffic signals, or
+    /// major roads with priority.
+    #[serde(default)]
+    pub control: Control,
+}
+
+/// How traffic is controlled at a junction.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum Control {
+    /// Vehicles take turns: first to reach the junction goes, crossing
+    /// paths wait.
+    #[default]
+    Auto,
+    /// Traffic lights. Approaches from opposite directions share a phase;
+    /// phases run in turn.
+    Signals(SignalTiming),
+    /// Roads in `major` have priority; traffic from the others gives way.
+    Priority { major: Vec<String> },
+}
+
+/// Traffic-light timing for one junction.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalTiming {
+    /// Green time of each phase, s.
+    #[serde(default = "default_green_s")]
+    pub green_s: f32,
+    /// Amber after each green, s.
+    #[serde(default = "default_amber_s")]
+    pub amber_s: f32,
+    /// All approaches red between phases, s.
+    #[serde(default = "default_all_red_s")]
+    pub all_red_s: f32,
+    /// Shift of the cycle start, s (to coordinate neighbouring junctions).
+    #[serde(default)]
+    pub offset_s: f32,
+}
+
+impl Default for SignalTiming {
+    fn default() -> Self {
+        Self {
+            green_s: default_green_s(),
+            amber_s: default_amber_s(),
+            all_red_s: default_all_red_s(),
+            offset_s: 0.0,
+        }
+    }
+}
+
+fn default_green_s() -> f32 {
+    20.0
+}
+fn default_amber_s() -> f32 {
+    3.0
+}
+fn default_all_red_s() -> f32 {
+    2.0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -176,6 +233,45 @@ impl RoadNetworkDef {
                             chord / 2.0
                         )),
                     );
+                }
+            }
+        }
+        for n in &net.nodes {
+            match &n.control {
+                Control::Auto => {}
+                Control::Signals(t) => {
+                    let ok = (5.0..=180.0).contains(&t.green_s)
+                        && (2.0..=8.0).contains(&t.amber_s)
+                        && (0.0..=10.0).contains(&t.all_red_s)
+                        && t.offset_s.is_finite();
+                    if !ok {
+                        out.push(
+                            file.error_at(
+                                "WP-N009",
+                                "green_s",
+                                format!("node `{}`: signal timing out of range", n.id),
+                            )
+                            .expected("green_s 5–180, amber_s 2–8, all_red_s 0–10"),
+                        );
+                    }
+                }
+                Control::Priority { major } => {
+                    for m in major {
+                        let meets = net
+                            .roads
+                            .iter()
+                            .any(|r| &r.id == m && (r.from == n.id || r.to == n.id));
+                        if !meets {
+                            out.push(
+                                file.error_at(
+                                    "WP-N008",
+                                    "major",
+                                    format!("node `{}`: major road `{m}` does not meet it", n.id),
+                                )
+                                .help("list roads that start or end at this node"),
+                            );
+                        }
+                    }
                 }
             }
         }

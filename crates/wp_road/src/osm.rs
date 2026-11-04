@@ -302,6 +302,7 @@ pub fn import(
         .map(|id| NodeDef {
             id: format!("n{id}"),
             position: project(id),
+            control: Default::default(),
         })
         .collect();
     let mut degree: BTreeMap<&str, u32> = BTreeMap::new();

@@ -164,6 +164,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Use |radius_m| of at least half the distance between the nodes.",
     },
     ErrorDoc {
+        code: "WP-N008",
+        title: "A junction's major road does not meet that node",
+        fix: "List, under Priority(major: [...]), roads whose from or to is this node.",
+    },
+    ErrorDoc {
+        code: "WP-N009",
+        title: "A junction's signal timing is out of range",
+        fix: "Use green_s 5–180, amber_s 2–8 and all_red_s 0–10 seconds.",
+    },
+    ErrorDoc {
         code: "WP-W005",
         title: "A scene refers to a road network that does not exist",
         fix: "Point `roads` at a roads/<name>.road.ron file, relative to the project root.",
@@ -177,12 +187,12 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-W007",
         title: "A scene has traffic but no road network",
         fix: "Traffic drives on roads: add `roads: Some(\"roads/<name>.road.ron\")` to the scene, or remove `traffic`.",
-    },    ErrorDoc {
+    },
+    ErrorDoc {
         code: "WP-W008",
         title: "A scene parks a vehicle that does not exist",
         fix: "Use a vehicle name that has a vehicles/<name>.vehicle.ron file.",
     },
-
     ErrorDoc {
         code: "WP-P001",
         title: "A window could not be opened",

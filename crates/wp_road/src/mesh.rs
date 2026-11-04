@@ -304,10 +304,12 @@ mod tests {
                 NodeDef {
                     id: "a".into(),
                     position: (0.0, 0.0),
+                    control: Default::default(),
                 },
                 NodeDef {
                     id: "b".into(),
                     position: (60.0, 0.0),
+                    control: Default::default(),
                 },
             ],
             roads: vec![RoadDef {

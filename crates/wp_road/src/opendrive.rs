@@ -763,6 +763,7 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
         nodes.push(NodeDef {
             id,
             position: local(node_position(root, arms)),
+            control: Default::default(),
         });
     }
     let mut out_roads = Vec::new();
@@ -781,6 +782,7 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
                 nodes.push(NodeDef {
                     id: id.clone(),
                     position: local(*piece.pts.last().unwrap()),
+                    control: Default::default(),
                 });
                 id
             };
@@ -827,6 +829,7 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
                 nodes.push(NodeDef {
                     id: mid_id.clone(),
                     position: inner.get(mid).copied().unwrap_or_default(),
+                    control: Default::default(),
                 });
                 out_roads.push(make(
                     format!("{id}a"),

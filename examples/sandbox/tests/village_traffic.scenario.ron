@@ -1,0 +1,21 @@
+// M3 junction-control gate: 16 AI cars drive the village for five minutes.
+// At the crossroads, Church Lane and Mill Lane give way to the High Street;
+// the east T-junction has traffic lights. Nobody may run a red light or
+// touch another car, and traffic must keep flowing.
+(
+  scene: "scenes/village.scene.ron",
+  seed: 5,
+  player: (
+    vehicle: "hatchback",
+    spawn: "verge",
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 300.0,
+  assert: [
+    NoCollisions,
+    NoRedLightViolations,
+    TrafficFlows(min_trips: 20),
+    NoNaN,
+    Deterministic,
+  ],
+)

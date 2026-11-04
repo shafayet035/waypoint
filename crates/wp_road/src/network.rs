@@ -39,6 +39,8 @@ pub struct Lane {
     pub speed_limit_kmh: f32,
     /// Lanes a vehicle can continue into from this lane's end.
     pub next: Vec<LaneId>,
+    /// For a junction path: the road it comes from.
+    pub approach: Option<usize>,
     /// Neighbouring lanes in the same direction a vehicle can change into
     /// (empty on roads shorter than [`MIN_LANE_CHANGE_M`]).
     pub changes: Vec<LaneId>,
@@ -72,6 +74,9 @@ pub struct RoadGeometry {
     pub backward_offsets: Vec<f32>,
     /// Tapers at the start and end, where the lane count changes into the next road.
     pub tapers: [Option<Taper>; 2],
+    /// Indices of the nodes it runs from and to.
+    pub from_node: usize,
+    pub to_node: usize,
 }
 
 /// A lane taper at one end of a road, where it meets a road with more or
@@ -159,6 +164,72 @@ pub struct Junction {
     pub position: Vec2,
     /// Carriageway edge points of every road end, sorted around the junction.
     pub corners: Vec<Vec2>,
+    /// How traffic is controlled here.
+    pub control: crate::def::Control,
+    /// With signals: the roads in each phase (approaches from opposite
+    /// directions share one), in the order they get green.
+    pub phases: Vec<Vec<usize>>,
+    /// Each road meeting here: (road, where it meets the node (road end
+    /// point), its direction away from the node).
+    pub arms: Vec<(usize, Vec2, Vec2)>,
+}
+
+/// A traffic light's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Light {
+    Green,
+    Amber,
+    Red,
+}
+
+impl Junction {
+    /// The light shown at time `t` (s) to traffic arriving on `road`; `None`
+    /// without signals.
+    pub fn light(&self, road: usize, t: f64) -> Option<Light> {
+        let crate::def::Control::Signals(timing) = &self.control else {
+            return None;
+        };
+        let phase = self.phases.iter().position(|p| p.contains(&road))?;
+        let slot = (timing.green_s + timing.amber_s + timing.all_red_s) as f64;
+        let period = slot * self.phases.len() as f64;
+        let local = (t + timing.offset_s as f64).rem_euclid(period);
+        let now = (local / slot) as usize;
+        let within = local - now as f64 * slot;
+        Some(if now != phase {
+            Light::Red
+        } else if within < timing.green_s as f64 {
+            Light::Green
+        } else if within < (timing.green_s + timing.amber_s) as f64 {
+            Light::Amber
+        } else {
+            Light::Red
+        })
+    }
+
+    /// Whether traffic arriving on `road` must give way here (a priority
+    /// junction where `road` is not a major road).
+    pub fn gives_way(&self, road_id: &str) -> bool {
+        match &self.control {
+            crate::def::Control::Priority { major } => !major.iter().any(|m| m == road_id),
+            _ => false,
+        }
+    }
+}
+
+/// Group a junction's arms into signal phases: arms whose directions are
+/// within 30° of parallel or opposite share a phase.
+fn signal_phases(arms: &[(usize, Vec2, Vec2)]) -> Vec<Vec<usize>> {
+    let mut phases: Vec<(Vec<usize>, Vec2)> = Vec::new();
+    for &(road, _, dir) in arms {
+        match phases
+            .iter_mut()
+            .find(|(_, d)| d.dot(dir).abs() > 30f32.to_radians().cos())
+        {
+            Some((roads, _)) => roads.push(road),
+            None => phases.push((vec![road], dir)),
+        }
+    }
+    phases.into_iter().map(|(r, _)| r).collect()
 }
 
 #[derive(Clone, Debug)]
@@ -256,6 +327,8 @@ impl RoadNetwork {
                     .map(|i| shift + side * (i as f32 + 0.5) * w)
                     .collect(),
                 tapers: [None, None],
+                from_node: node_index[r.from.as_str()],
+                to_node: node_index[r.to.as_str()],
             });
         }
 
@@ -302,6 +375,7 @@ impl RoadNetwork {
                     width_m: r.lane_width_m,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
+                    approach: None,
                     changes: Vec::new(),
                 });
             }
@@ -317,6 +391,7 @@ impl RoadNetwork {
                     width_m: r.lane_width_m,
                     speed_limit_kmh: r.speed_limit_kmh,
                     next: Vec::new(),
+                    approach: None,
                     changes: Vec::new(),
                 });
             }
@@ -370,10 +445,27 @@ impl RoadNetwork {
                     corners.push(pt + left * r);
                 }
                 corners.sort_by(|a, b| (*a - p).to_angle().total_cmp(&(*b - p).to_angle()));
+                let arms: Vec<(usize, Vec2, Vec2)> = ends
+                    .iter()
+                    .map(|&(ri, starts_here, _)| {
+                        let g = &roads[ri];
+                        let at = if starts_here { 0.0 } else { g.centre.length() };
+                        let (pt, dir) = g.centre.sample(at);
+                        (ri, pt, if starts_here { dir } else { -dir })
+                    })
+                    .collect();
+                let control = def.nodes[node].control.clone();
+                let phases = match control {
+                    crate::def::Control::Signals(_) => signal_phases(&arms),
+                    _ => Vec::new(),
+                };
                 junctions.push(Junction {
                     node,
                     position: p,
                     corners,
+                    control,
+                    phases,
+                    arms,
                 });
             }
             // Lanes arriving at / leaving this node.
@@ -483,6 +575,7 @@ impl RoadNetwork {
                         width_m: lanes[inn].width_m,
                         speed_limit_kmh: speed,
                         next: vec![out],
+                        approach: Some(r_in),
                         changes: Vec::new(),
                     });
                     lanes[inn].next.push(id);
@@ -497,6 +590,21 @@ impl RoadNetwork {
             lanes,
             junctions,
         }
+    }
+
+    /// The junction at node index `node`, if two or more roads meet there.
+    pub fn junction_at(&self, node: usize) -> Option<&Junction> {
+        self.junctions.iter().find(|j| j.node == node)
+    }
+
+    /// The light at time `t` for a vehicle about to take junction path
+    /// `lane`; `None` if it is not a signalled junction path.
+    pub fn light_for(&self, lane: LaneId, t: f64) -> Option<Light> {
+        let l = &self.lanes[lane];
+        let (LaneKind::Connector { node, .. }, Some(road)) = (l.kind, l.approach) else {
+            return None;
+        };
+        self.junction_at(node)?.light(road, t)
     }
 
     pub fn lane(&self, name: &str) -> Option<LaneId> {
@@ -925,6 +1033,7 @@ mod tests {
         let node = |id: &str, x: f32, y: f32| NodeDef {
             id: id.into(),
             position: (x, y),
+            control: Default::default(),
         };
         RoadNetworkDef {
             name: "cross".into(),
@@ -995,6 +1104,7 @@ mod tests {
         let node = |id: &str, x: f32, y: f32| NodeDef {
             id: id.into(),
             position: (x, y),
+            control: Default::default(),
         };
         let mut wide = road("a", "p", "q");
         wide.lanes_forward = 2;
@@ -1052,6 +1162,7 @@ mod tests {
         let node = |id: &str, x: f32| NodeDef {
             id: id.into(),
             position: (x, 0.0),
+            control: Default::default(),
         };
         let one_way = |id: &str, from: &str, to: &str, n: u8| RoadDef {
             lanes_forward: n,
@@ -1128,5 +1239,34 @@ mod tests {
             (taper_length_m(3.6, 50.0) - 57.9).abs() < 0.5,
             "W·S²/60 below"
         );
+    }
+
+    #[test]
+    fn signals_alternate_between_opposite_pairs() {
+        let mut def = crossroads();
+        def.nodes[0].control = crate::def::Control::Signals(crate::def::SignalTiming::default());
+        let net = RoadNetwork::build(&def);
+        let j = net.junction_at(0).expect("the centre is a junction");
+        assert_eq!(j.phases.len(), 2, "{:?}", j.phases);
+        let road = |id: &str| net.roads.iter().position(|r| r.def.id == id).unwrap();
+        let (ns, ew) = (road("north"), road("east"));
+        // Phase 0 (whichever pair came first) is green for 20 s, amber 3, red after.
+        let first = j.phases[0][0];
+        let other = if j.phases[0].contains(&ns) { ew } else { ns };
+        assert_eq!(j.light(first, 5.0), Some(Light::Green));
+        assert_eq!(j.light(first, 21.0), Some(Light::Amber));
+        assert_eq!(j.light(first, 24.0), Some(Light::Red));
+        assert_eq!(j.light(other, 5.0), Some(Light::Red));
+        assert_eq!(j.light(other, 26.0), Some(Light::Green));
+        // Never green for both at once.
+        for k in 0..500 {
+            let t = k as f64 * 0.1;
+            assert!(
+                !(j.light(ns, t) == Some(Light::Green) && j.light(ew, t) == Some(Light::Green))
+            );
+        }
+        // Junction paths know their light.
+        let path = net.lanes[net.lane("west:f0").unwrap()].next[0];
+        assert!(net.light_for(path, 5.0).is_some());
     }
 }

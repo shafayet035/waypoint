@@ -17,9 +17,9 @@ pub mod network;
 pub mod opendrive;
 pub mod osm;
 
-pub use def::{DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape};
+pub use def::{Control, DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape, SignalTiming};
 pub use geometry::Polyline;
 pub use mesh::{Mesh, RoadMeshes, build_meshes};
 pub use network::{
-    Junction, Lane, LaneId, LaneKind, RoadGeometry, RoadNetwork, Taper, Turn, taper_length_m,
+    Junction, Lane, LaneId, LaneKind, Light, RoadGeometry, RoadNetwork, Taper, Turn, taper_length_m,
 };

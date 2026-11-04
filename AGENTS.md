@@ -123,7 +123,12 @@ anything ahead (the player too), merges that yield, and junction claims sized to
 path (wait at a stop line while a conflicting path is claimed or the exit is blocked). Bodies collide
 physically (`wp_physics::contact`: box colliders, sequential impulses with restitution 0.15 and body
 friction, every substep); `Collision` events and `NoCollisions` report contacts. Scenes can place
-`parked` vehicles (brakes on); `crash_into_bus` checks a car stops against a parked bus. `town_traffic` gate: 12
+`parked` vehicles (brakes on); `crash_into_bus` checks a car stops against a parked bus.
+Junction control on road nodes: `Signals` (phases from opposite approaches, drawn as traffic lights)
+and `Priority(major)` (minor roads give way to major-road traffic within 6 s). AI traffic obeys both;
+`RanRedLight` events and `NoRedLightViolations` catch anyone entering on red. Gates: `town_traffic`
+(lights at the centre) and `village_traffic` (priority crossroads, signalled T): no collisions or red
+lights. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

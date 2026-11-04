@@ -1,5 +1,5 @@
 // M3 traffic gate: 12 AI vehicles (cars and buses) drive the town for three
-// minutes, choosing their own destinations. They must keep moving (trips
+// minutes, choosing their own destinations; the centre crossroads has lights. They must keep moving (trips
 // completed, no gridlock) without touching each other.
 (
   scene: "scenes/town_traffic.scene.ron",
@@ -12,6 +12,7 @@
   duration_s: 180.0,
   assert: [
     NoCollisions,
+    NoRedLightViolations,
     TrafficFlows(min_trips: 10),
     NoNaN,
     Deterministic,

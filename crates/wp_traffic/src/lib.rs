@@ -112,6 +112,11 @@ impl Plugin for TrafficPlugin {
     }
     fn build(&self, app: &mut App) {
         app.world.register::<TrafficAgent>();
+        app.add_system(Stage::Post, "watch_signals", watch_signals)
+            .reads::<Pose>()
+            .reads::<Vehicle>()
+            .reads_resource("Roads")
+            .writes_resource("Events<VehicleEvent>");
         app.add_system(Stage::Agents, "traffic", traffic)
             .reads::<Pose>()
             .reads::<Velocity>()
@@ -225,6 +230,16 @@ fn traffic(world: &mut World) {
     }
 
     let bodies = bodies(world);
+    let now = world.resource::<wp_core::SimTime>().seconds();
+    let approaching = if roads
+        .junctions
+        .iter()
+        .any(|j| matches!(j.control, wp_road::Control::Priority { .. }))
+    {
+        approaches(&roads, &bodies)
+    } else {
+        Vec::new()
+    };
     let agents: Vec<Entity> = world
         .resource::<TrafficState>()
         .plans
@@ -248,7 +263,19 @@ fn traffic(world: &mut World) {
         };
         let pace = world.get::<TrafficAgent>(e).map_or(1.0, |a| a.pace);
         let mut state = world.resource_mut::<TrafficState>();
-        let (input, outcome) = drive(&mut state, &roads, &bodies, e, pose, vel, &def, pace, dt);
+        let (input, outcome) = drive(
+            &mut state,
+            &roads,
+            &bodies,
+            e,
+            pose,
+            vel,
+            &def,
+            pace,
+            dt,
+            now,
+            &approaching,
+        );
         drop(state);
         let speed = vel.linear.dot(pose.forward());
         speeds += speed.max(0.0) * 3.6;
@@ -292,6 +319,61 @@ fn traffic(world: &mut World) {
             mean_kmh: if n > 0 { speeds / n as f32 } else { 0.0 },
         },
     );
+}
+
+/// The road lane each vehicle was last on, and how far along it.
+#[derive(Default)]
+struct LaneTracker(BTreeMap<Entity, (LaneId, f32)>);
+
+/// Report vehicles (player or AI) that enter a junction against a red light:
+/// they leave the end of their lane while it shows red.
+fn watch_signals(world: &mut World) {
+    let Some(roads) = world.get_resource::<Roads>().map(|r| r.0.clone()) else {
+        return;
+    };
+    if !roads
+        .junctions
+        .iter()
+        .any(|j| matches!(j.control, wp_road::Control::Signals(_)))
+    {
+        return;
+    }
+    let now = world.resource::<wp_core::SimTime>().seconds();
+    let mut tracker = world.remove_resource::<LaneTracker>().unwrap_or_default();
+    let mut ran = Vec::new();
+    world.query::<(&Pose, &Vehicle)>().for_each(|e, (pose, _)| {
+        let here = roads.lane_at(pose.position).map(|(l, s, _)| (l, s));
+        if let Some(&(prev, prev_s)) = tracker.0.get(&e)
+            && here.map(|h| h.0) != Some(prev)
+            && let LaneKind::Road { road, forward, .. } = roads.lanes[prev].kind
+            && prev_s > roads.lanes[prev].path.length() - 3.0
+        {
+            let g = &roads.roads[road];
+            let node = if forward { g.to_node } else { g.from_node };
+            if roads.junction_at(node).and_then(|j| j.light(road, now)) == Some(wp_road::Light::Red)
+            {
+                let id = if forward { &g.def.to } else { &g.def.from };
+                ran.push((e, id.clone()));
+            }
+        }
+        match here {
+            Some(h) => {
+                tracker.0.insert(e, h);
+            }
+            None => {
+                tracker.0.remove(&e);
+            }
+        }
+    });
+    world.insert_resource(tracker);
+    if let Some(mut events) = world.get_resource_mut::<wp_ecs::Events<wp_vehicle::VehicleEvent>>() {
+        for (e, junction) in ran {
+            events.send(wp_vehicle::VehicleEvent::RanRedLight {
+                entity: e.to_string(),
+                junction,
+            });
+        }
+    }
 }
 
 /// Every vehicle and trailer, as obstacles.
@@ -348,6 +430,8 @@ fn drive(
     def: &VehicleDef,
     pace: f32,
     dt: f32,
+    now: f64,
+    approaching: &[Approach],
 ) -> (VehicleInput, Outcome) {
     let hold = VehicleInput {
         brake: 1.0,
@@ -466,12 +550,31 @@ fn drive(
         if ahead > speed.max(0.0).powi(2) / (2.0 * IDM.decel) + 15.0 {
             break; // not near yet
         }
+        // Signals: stop for red unless it would take an emergency stop, and
+        // for amber unless too close to stop comfortably (even if the path
+        // was claimed on green).
+        let must_stop = match net.light_for(route[j], now) {
+            Some(wp_road::Light::Red) => ahead - fp.front > speed.powi(2) / (2.0 * 6.0),
+            Some(wp_road::Light::Amber) => ahead - fp.front > speed.powi(2) / (2.0 * 3.0) + 1.0,
+            _ => false,
+        };
+        if must_stop {
+            if state.claims.get(&route[j]).is_some_and(|c| c.0 == me) {
+                state.claims.remove(&route[j]);
+            }
+            stop_line = Some(entry);
+            break;
+        }
         if state.claims.get(&route[j]).is_some_and(|c| c.0 == me) {
             continue; // already ours
         }
         if gap < ahead - fp.front + 2.0 {
             // Queued behind someone short of the junction: claim nothing yet
             // (holding a claim from the queue would block crossing traffic).
+            break;
+        }
+        if gives_way(net, route[j], me, approaching) {
+            stop_line = Some(entry);
             break;
         }
         let reach = envelope(net, def, route[j]);
@@ -598,6 +701,59 @@ fn drive(
         },
         outcome,
     )
+}
+
+/// A vehicle on a road lane heading towards a node.
+pub struct Approach {
+    entity: Entity,
+    node: usize,
+    road: usize,
+    /// Distance to the end of its lane, m, and speed, m/s.
+    distance: f32,
+    speed: f32,
+}
+
+/// Where every vehicle is heading, for give-way decisions.
+fn approaches(net: &RoadNetwork, bodies: &[Body]) -> Vec<Approach> {
+    bodies
+        .iter()
+        .filter_map(|b| {
+            let (lane, s, _) = net.lane_at(b.position)?;
+            let LaneKind::Road { road, forward, .. } = net.lanes[lane].kind else {
+                return None;
+            };
+            let g = &net.roads[road];
+            Some(Approach {
+                entity: b.entity,
+                node: if forward { g.to_node } else { g.from_node },
+                road,
+                distance: net.lanes[lane].path.length() - s,
+                speed: b.velocity.length(),
+            })
+        })
+        .collect()
+}
+
+/// Whether junction path `lane` comes from a minor road at a priority
+/// junction while a major-road vehicle is within 6 s (and 70 m) of it.
+fn gives_way(net: &RoadNetwork, lane: LaneId, me: Entity, approaching: &[Approach]) -> bool {
+    let l = &net.lanes[lane];
+    let (LaneKind::Connector { node, .. }, Some(from)) = (l.kind, l.approach) else {
+        return false;
+    };
+    let Some(j) = net.junction_at(node) else {
+        return false;
+    };
+    if !j.gives_way(&net.roads[from].def.id) {
+        return false;
+    }
+    approaching.iter().any(|a| {
+        a.entity != me
+            && a.node == node
+            && !j.gives_way(&net.roads[a.road].def.id)
+            && a.distance < 70.0
+            && a.distance / a.speed.max(1.0) < 6.0
+    })
 }
 
 /// Whether a road lane narrows to nothing at its far end (a lane drop).
@@ -928,6 +1084,7 @@ mod tests {
         let node = |id: &str, x: f32, y: f32| NodeDef {
             id: id.into(),
             position: (x, y),
+            control: Default::default(),
         };
         let road = |id: &str, from: &str, to: &str| RoadDef {
             id: id.into(),

@@ -62,12 +62,17 @@ Assertions
   MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)
   MaxSideslipDeg(9.0)   no spin or big slide   MaxDecelG(0.4)   no harsh braking
   TrafficFlows(min_trips: 10)   the scene's AI traffic keeps reaching destinations (no gridlock)
+  NoRedLightViolations   no vehicle enters a signalled junction on red
+  FinalPositionWithin(min: (70.0, -3.0), max: (78.0, 3.0))   where the player ends up
   NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic   NoCollisions
   RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
 Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
-Collision (bodies touching; detected, not yet pushed apart).
+Collision (bodies touching), RanRedLight.
+
+Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
+or control: Priority(major: [\"high_street\"]); default Auto (take turns).
 Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) from 60 km/h
 ≤ 0.15v + v²/130 = 36.7 m and MFDD ≥ 5.0 m/s²; cars (M1, R13-H) from 100 km/h ≤ 70 m and
 MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.

@@ -1,0 +1,12 @@
+// The village with AI traffic. "verge" is off the road, so a parked player
+// blocks nobody; "high_street" puts you on the main road heading east.
+(
+  name: "village",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/village.road.ron"),
+  traffic: Some((count: 16, vehicles: ["hatchback"])),
+  spawns: [
+    (name: "high_street", position: (-150.0, -1.75), heading_deg: 0.0),
+    (name: "verge", position: (-100.0, 60.0), heading_deg: 0.0),
+  ],
+)

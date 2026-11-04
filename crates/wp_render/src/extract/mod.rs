@@ -3,11 +3,13 @@
 
 mod camera;
 mod dock;
+mod signal;
 mod trailer;
 mod vehicle;
 
 pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
+use signal::signal_items;
 use trailer::trailer_items;
 pub use vehicle::{BodyShape, body_shape};
 use vehicle::{palette, vehicle_items};
@@ -97,6 +99,12 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
             };
             vehicle_items(&mut items, &mut shadows, def, pose, veh, paint, braking);
         });
+    if let Some(roads) = world.get_resource::<wp_world::Roads>() {
+        let t = world
+            .get_resource::<wp_core::SimTime>()
+            .map_or(0.0, |t| t.seconds());
+        signal_items(&mut items, &roads.0, t);
+    }
     if let Some(docks) = world.get_resource::<wp_world::Docks>() {
         for d in &docks.0 {
             dock_items(&mut items, &mut shadows, d);

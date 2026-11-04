@@ -62,6 +62,8 @@ pub struct Metrics {
     pub events: BTreeMap<String, u32>,
     /// Collisions between any two vehicles or trailers (player or traffic).
     pub collisions: u32,
+    /// Times any vehicle (player or traffic) entered a junction on red.
+    pub red_light_violations: u32,
     /// AI traffic at the end, if the scene has traffic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traffic: Option<wp_traffic::TrafficStats>,
@@ -240,6 +242,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     let mut nan_at = None;
     let mut event_counts: BTreeMap<String, u32> = BTreeMap::new();
     let mut collision_reports = 0u32;
+    let mut red_lights = 0u32;
     let (mut route_worst, mut route_finished, mut route_error): (
         Option<f32>,
         bool,
@@ -257,6 +260,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         if let Some(events) = app.world.get_resource::<Events<VehicleEvent>>() {
             // Each collision is reported to both vehicles.
             collision_reports += events.iter().filter(|e| e.kind() == "Collision").count() as u32;
+            red_lights += events.iter().filter(|e| e.kind() == "RanRedLight").count() as u32;
             for e in events.iter().filter(|e| event_entity(e) == player_id) {
                 *event_counts.entry(e.kind().to_string()).or_default() += 1;
                 if event_log.len() < 50 {
@@ -326,6 +330,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         turning_circle_m: turning_circle(&samples, input.vehicle),
         events: event_counts,
         collisions: collision_reports / 2,
+        red_light_violations: red_lights,
         traffic: app
             .world
             .get_resource::<wp_traffic::TrafficStats>()
@@ -614,6 +619,10 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
                 format!("ended at ({x:.2}, {y:.2})"),
             )
         }
+        Assertion::NoRedLightViolations => (
+            m.red_light_violations == 0,
+            format!("{} red lights run", m.red_light_violations),
+        ),
         Assertion::NoCollisions => (
             m.collisions == 0,
             format!("{} collisions between vehicles", m.collisions),
