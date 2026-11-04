@@ -113,6 +113,23 @@ pub struct Vehicle {
     /// Brake application 0–1 after the air system: what a coupled trailer's brakes receive.
     #[serde(default)]
     pub brake_fraction: f32,
+    /// Share of engine torque traction or stability control allows, 0–1.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub tc_factor: f32,
+    /// True while traction control is cutting torque.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tc_active: bool,
+    /// True while stability control is braking a wheel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub esc_active: bool,
+}
+
+fn is_one(x: &f32) -> bool {
+    *x == 1.0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Component for Vehicle {
@@ -137,6 +154,9 @@ impl Vehicle {
             pitch: 0.0,
             pitch_rate: 0.0,
             abs_active: false,
+            tc_factor: 1.0,
+            tc_active: false,
+            esc_active: false,
             air: def.brakes.air.as_ref().map(|a| AirState {
                 reservoir_bar: a.reservoir_max_bar,
                 chamber_bar: 0.0,
@@ -185,6 +205,13 @@ pub enum VehicleEvent {
         entity: String,
     },
     AbsReleased {
+        entity: String,
+    },
+    /// Stability control started braking a wheel to correct a slide or plough.
+    EscEngaged {
+        entity: String,
+    },
+    EscReleased {
         entity: String,
     },
     WheelLift {
@@ -247,6 +274,8 @@ impl VehicleEvent {
             Self::GearShift { .. } => "GearShift",
             Self::AbsEngaged { .. } => "AbsEngaged",
             Self::AbsReleased { .. } => "AbsReleased",
+            Self::EscEngaged { .. } => "EscEngaged",
+            Self::EscReleased { .. } => "EscReleased",
             Self::WheelLift { .. } => "WheelLift",
             Self::WheelLanded { .. } => "WheelLanded",
             Self::LowAirPressure { .. } => "LowAirPressure",
@@ -264,6 +293,8 @@ impl VehicleEvent {
             Self::GearShift { entity, .. }
             | Self::AbsEngaged { entity }
             | Self::AbsReleased { entity }
+            | Self::EscEngaged { entity }
+            | Self::EscReleased { entity }
             | Self::WheelLift { entity, .. }
             | Self::WheelLanded { entity, .. }
             | Self::LowAirPressure { entity, .. }
@@ -400,6 +431,10 @@ pub struct Telemetry {
     pub roll_deg: f32,
     pub pitch_deg: f32,
     pub abs_active: bool,
+    /// Traction control is cutting engine torque.
+    pub tc_active: bool,
+    /// Stability control is braking a wheel.
+    pub esc_active: bool,
     /// Reverse gear engaged.
     pub reverse: bool,
     /// Air reservoir pressure, bar (air brakes only).
@@ -443,6 +478,8 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         roll_deg: (veh.roll + veh.tip_angle * veh.tip_dir).to_degrees(),
         pitch_deg: veh.pitch.to_degrees(),
         abs_active: veh.abs_active,
+        tc_active: veh.tc_active,
+        esc_active: veh.esc_active,
         reverse: veh.reverse,
         air_reservoir_bar: veh.air.map(|a| a.reservoir_bar),
         wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),

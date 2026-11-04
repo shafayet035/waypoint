@@ -30,7 +30,7 @@
     shift_up_rpm: 6000.0,
     shift_down_rpm: 2200.0,
   ),
-  brakes: (max_torque_nm: 4500.0, front_bias: 0.68, abs: true),
+  brakes: (max_torque_nm: 4500.0, front_bias: 0.68, abs: true, traction_control: true, esc: true),
   steering: (max_angle_deg: 35.0, rate_deg_per_s: 180.0),
   aero: (drag_area_m2: 0.65),
   suspension: (

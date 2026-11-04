@@ -143,6 +143,15 @@ pub struct BrakeDef {
     /// Anti-lock braking: releases a wheel that starts to lock and reapplies it.
     #[serde(default)]
     pub abs: bool,
+    /// Traction control: cuts engine torque while a driven wheel spins
+    /// (more than 12 % faster than the road).
+    #[serde(default)]
+    pub traction_control: bool,
+    /// Electronic stability control: compares the yaw rate with what the
+    /// steering asks for and brakes one wheel to stop a slide (outer front)
+    /// or a plough (inner rear), cutting engine torque meanwhile.
+    #[serde(default)]
+    pub esc: bool,
     /// Compressed-air brakes (buses, trucks). Absent means hydraulic brakes with no lag.
     #[serde(default)]
     pub air: Option<AirBrakeDef>,

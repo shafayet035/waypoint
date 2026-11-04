@@ -174,4 +174,8 @@ Replays (`wp_vehicle::replay`): `.replay.ron` = setup + input changes + resets +
 `wp run --record`, `replay.start`/`replay.stop` (control protocol), `wp replay <file>` (exit 1 + WP-Y002 at the
 first differing checkpoint), `wp replay record --scenario` (goldens; 8 in the sandbox).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-traction control and ESC; event subscriptions (`events.subscribe`).
+event subscriptions (`events.subscribe`).
+Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
+above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
+the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
+to 0 within 1 s with (FMVSS 126). Events `EscEngaged`/`EscReleased`; telemetry `tc_active`, `esc_active`.

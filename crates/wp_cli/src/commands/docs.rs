@@ -79,7 +79,7 @@ Assertions
   RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
-Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
+Events: GearShift, AbsEngaged, AbsReleased, EscEngaged, EscReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
 Collision (bodies touching), RanRedLight, HitPedestrian.
 
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
@@ -107,6 +107,7 @@ length and sliding friction, body roll and pitch on springs, tipping about the o
 torque-curve engine with optional speed governor, automatic gearbox, open differential, brakes
 (hydraulic, or air with reservoir, compressor and chamber lag) with optional ABS, aerodynamic drag.
 Optional sections: suspension, body (with style: Car | Bus | TruckCab), brakes.air, brakes.abs,
+brakes.traction_control, brakes.esc (stability control),
 engine.governed_speed_kmh, gearbox.reverse_ratio, hitch (fifth wheel for semi-trailers).
 Semi-trailers live in trailers/<name>.trailer.ron (`wp schema trailer`). Couple one in a scenario
 with player.trailer: Some(\"semi_trailer\"), or `wp run --vehicle tractor --trailer semi_trailer`.

@@ -147,8 +147,13 @@ fn step_vehicle(
     let (ax, ay) = measure_acceleration(ctx, veh, pose, vel);
     let roll = update_body_motion(ctx, veh, ax, ay);
     let loads = wheel_loads(ctx, veh, &roll, ax, ay, events);
+    let esc_torque = stability_control(ctx, veh, v_local, vel.angular, events);
+    traction_control(ctx, veh, input, v_local);
     let drive = update_drivetrain(ctx, veh, input, v_local, events);
-    let brake_torque = update_brakes(ctx, veh, input, events);
+    let mut brake_torque = update_brakes(ctx, veh, input, events);
+    for (b, e) in brake_torque.iter_mut().zip(esc_torque) {
+        *b += e;
+    }
     let (force, moment) = tyre_forces(
         ctx,
         veh,
@@ -391,7 +396,7 @@ fn update_drivetrain(
     let engine_torque = if rpm_from_wheels >= engine.redline_rpm {
         0.0
     } else if throttle > 0.02 {
-        parts::curve_torque(&engine.torque_curve, veh.engine_rpm) * throttle
+        parts::curve_torque(&engine.torque_curve, veh.engine_rpm) * throttle * veh.tc_factor
     } else if rpm_from_wheels > engine.idle_rpm {
         -engine.engine_brake_nm * (rpm_from_wheels / engine.redline_rpm)
     } else {
@@ -422,6 +427,103 @@ fn update_drivetrain(
         driven,
         wheel_torque,
     }
+}
+
+/// Driven-wheel slip above which traction control cuts torque.
+const TC_SLIP: f32 = 0.12;
+/// How fast traction control gives torque back, per second.
+const TC_RECOVERY_PER_S: f32 = 1.5;
+
+/// Traction control: cut engine torque at once when a driven wheel spins,
+/// give it back gradually. Stability control may also hold torque down.
+fn traction_control(ctx: &Ctx, veh: &mut Vehicle, input: &VehicleInput, v_local: Vec2) {
+    let def = ctx.def;
+    let mut limit: f32 = 1.0;
+    if def.brakes.traction_control && input.throttle > 0.02 && !veh.reverse {
+        let driven = match def.drive {
+            Drive::Front => [true, true, false, false],
+            Drive::Rear => [false, false, true, true],
+            Drive::All => [true; 4],
+        };
+        let road = v_local.x.max(0.0);
+        let slip = veh
+            .wheels
+            .iter()
+            .zip(driven)
+            .filter(|(_, d)| *d)
+            .map(|(w, _)| (w.omega * def.wheel.radius_m - road) / road.max(2.0))
+            .fold(0.0f32, f32::max);
+        if slip > TC_SLIP {
+            limit = (1.0 - 4.0 * (slip - TC_SLIP)).clamp(0.15, 1.0);
+        }
+    }
+    if veh.esc_active {
+        limit = limit.min(0.3);
+    }
+    veh.tc_factor = if limit < veh.tc_factor {
+        limit
+    } else {
+        (veh.tc_factor + TC_RECOVERY_PER_S * ctx.dt).min(limit)
+    };
+    veh.tc_active = def.brakes.traction_control && veh.tc_factor < 0.999;
+}
+
+/// Stability control: the yaw rate the steering asks for (a neutral-steering
+/// bicycle model, capped at what the tyres can give) against the real one.
+/// Too much yaw (a slide) brakes the outer front wheel; too little (a
+/// plough) brakes the inner rear. Returns extra brake torque per wheel.
+fn stability_control(
+    ctx: &Ctx,
+    veh: &mut Vehicle,
+    v_local: Vec2,
+    yaw_rate: f32,
+    events: &mut Vec<VehicleEvent>,
+) -> [f32; 4] {
+    let def = ctx.def;
+    let mut out = [0.0; 4];
+    let vx = v_local.x;
+    let active = if def.brakes.esc && vx > 5.0 && !veh.reverse && !veh.rolled_over {
+        let wanted = vx * veh.steer_angle / def.wheelbase_m;
+        let cap = 0.85 * def.tyre.friction * ctx.surface * ctx.g / vx;
+        let wanted = wanted.clamp(-cap, cap);
+        // A growing sideslip angle counts as extra yaw: it is the slide
+        // starting before the yaw rate shows it.
+        let beta = v_local.y.atan2(vx);
+        let slide = (beta.abs() - 0.05).max(0.0) * -beta.signum() * 1.5;
+        let error = yaw_rate - wanted + slide;
+        let threshold = 0.05 + 0.08 * wanted.abs();
+        if error.abs() > threshold {
+            // Braking a left wheel turns the car left (positive yaw).
+            let left = error < 0.0;
+            let sliding = yaw_rate.abs() > wanted.abs() || yaw_rate * wanted < 0.0;
+            let wheel = match (left, sliding) {
+                (true, true) => 0,   // front left
+                (false, true) => 1,  // front right
+                (true, false) => 2,  // rear left
+                (false, false) => 3, // rear right
+            };
+            let gain = def.brakes.max_torque_nm * 2.5;
+            out[wheel] = (gain * (error.abs() - threshold)).min(def.brakes.max_torque_nm * 0.6);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if active != veh.esc_active {
+        veh.esc_active = active;
+        events.push(if active {
+            VehicleEvent::EscEngaged {
+                entity: ctx.entity.clone(),
+            }
+        } else {
+            VehicleEvent::EscReleased {
+                entity: ctx.entity.clone(),
+            }
+        });
+    }
+    out
 }
 
 /// Pedal → (air system) → brake torque per wheel, before ABS.
@@ -668,5 +770,119 @@ mod tests {
         );
         let air = app.world.get::<crate::Vehicle>(e).unwrap().air.unwrap();
         assert!(air.reservoir_bar < 5.5, "reservoir {}", air.reservoir_bar);
+    }
+
+    /// A sine-with-dwell style manoeuvre (FMVSS 126) at 80 km/h, raw inputs:
+    /// returns the worst sideslip (deg), the peak yaw rate and the yaw rate
+    /// 1 s after the steering ends (deg/s), and the events seen.
+    fn sine_with_dwell(esc: bool) -> (f32, f32, f32, Vec<String>) {
+        let mut def = sandbox_vehicle("hatchback");
+        def.brakes.esc = esc;
+        let (mut app, e) = app_with(&def);
+        crate::set_rolling_speed(&mut app.world, e, 80.0 / 3.6);
+        let mut kinds = Vec::new();
+        let (mut worst, mut peak, mut after) = (0.0f32, 0.0f32, 0.0f32);
+        let mut t = 0.0f32;
+        // 0.7 Hz sine, dwelling 0.5 s at the second peak, then straight.
+        let steer_at = |t: f32| {
+            let w = std::f32::consts::TAU * 0.7;
+            let amp = 0.45;
+            let quarter3 = 0.75 / 0.7;
+            if t < quarter3 {
+                amp * (w * t).sin()
+            } else if t < quarter3 + 0.5 {
+                -amp
+            } else if t < 1.0 / 0.7 + 0.5 {
+                amp * (w * (t - 0.5)).sin()
+            } else {
+                0.0
+            }
+        };
+        let end = 1.0 / 0.7 + 0.5;
+        while t < end + 2.0 {
+            kinds.extend(drive(
+                &mut app,
+                e,
+                VehicleInput {
+                    throttle: 0.0,
+                    brake: 0.0,
+                    steer: steer_at(t),
+                    reverse: false,
+                },
+                1.0 / 60.0,
+            ));
+            t += 1.0 / 60.0;
+            let tel = crate::telemetry(&app.world, e).unwrap();
+            worst = worst.max(tel.sideslip_deg.abs());
+            peak = peak.max(tel.yaw_rate_deg_s.abs());
+            if (t - (end + 1.0)).abs() < 0.5 / 60.0 {
+                after = tel.yaw_rate_deg_s.abs();
+            }
+        }
+        (worst, peak, after, kinds)
+    }
+
+    #[test]
+    fn stability_control_passes_sine_with_dwell() {
+        let (raw, raw_peak, raw_after, raw_events) = sine_with_dwell(false);
+        let (esc, peak, after, esc_events) = sine_with_dwell(true);
+        eprintln!(
+            "without ESC: sideslip {raw:.1}°, yaw {raw_after:.1} of {raw_peak:.1} °/s 1 s after; \
+             with: sideslip {esc:.1}°, yaw {after:.1} of {peak:.1} °/s"
+        );
+        assert!(!raw_events.iter().any(|k| k == "EscEngaged"));
+        assert!(
+            esc_events.iter().any(|k| k == "EscEngaged"),
+            "{esc_events:?}"
+        );
+        // FMVSS 126: yaw rate 1 s after the steering ends below 35 % of its peak.
+        assert!(after < 0.35 * peak, "ESC: {after:.1} of {peak:.1} °/s");
+        assert!(
+            esc < raw,
+            "ESC should reduce the slide: {esc:.1}° vs {raw:.1}°"
+        );
+    }
+
+    #[test]
+    fn traction_control_stops_wheelspin() {
+        let launch = |tc: bool| {
+            let mut def = sandbox_vehicle("hatchback");
+            def.brakes.traction_control = tc;
+            def.tyre.friction = 0.35; // ice-like
+            let (mut app, e) = app_with(&def);
+            let mut worst_slip = 0.0f32;
+            for _ in 0..120 {
+                drive(
+                    &mut app,
+                    e,
+                    VehicleInput {
+                        throttle: 1.0,
+                        ..Default::default()
+                    },
+                    1.0 / 60.0,
+                );
+                let v = app.world.get::<crate::Vehicle>(e).unwrap();
+                let road = app
+                    .world
+                    .get::<wp_physics::Velocity>(e)
+                    .unwrap()
+                    .linear
+                    .length();
+                let spin = v.wheels[0].omega * def.wheel.radius_m - road;
+                worst_slip = worst_slip.max(spin);
+            }
+            let speed = crate::telemetry(&app.world, e).unwrap().speed_kmh;
+            (worst_slip, speed)
+        };
+        let (raw_spin, raw_kmh) = launch(false);
+        let (tc_spin, tc_kmh) = launch(true);
+        eprintln!(
+            "wheelspin {raw_spin:.1} m/s → {tc_spin:.1} m/s; speed after 2 s {raw_kmh:.1} → {tc_kmh:.1} km/h"
+        );
+        assert!(tc_spin < raw_spin * 0.5, "{tc_spin} vs {raw_spin}");
+        assert!(
+            tc_kmh >= raw_kmh * 0.95,
+            "TC should not cost acceleration: {tc_kmh} vs {raw_kmh}"
+        );
     }
 }
