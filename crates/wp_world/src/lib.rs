@@ -25,6 +25,27 @@ pub struct SceneDef {
     /// Road network file (`roads/<name>.road.ron`), relative to the project root.
     #[serde(default)]
     pub roads: Option<String>,
+    /// AI traffic on the road network.
+    #[serde(default)]
+    pub traffic: Option<TrafficDef>,
+}
+
+/// AI traffic for a scene: vehicles that drive themselves around the road
+/// network, picking random destinations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrafficDef {
+    /// How many AI vehicles to keep on the roads.
+    pub count: u32,
+    /// Vehicles to choose from at random, by name (`vehicles/<name>.vehicle.ron`).
+    pub vehicles: Vec<String>,
+    /// No AI vehicle starts closer than this to the player, m.
+    #[serde(default = "default_clear_of_player_m")]
+    pub clear_of_player_m: f32,
+}
+
+fn default_clear_of_player_m() -> f32 {
+    40.0
 }
 
 /// The current scene's road network, built once when the scene is applied.

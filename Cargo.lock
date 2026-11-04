@@ -2335,6 +2335,7 @@ dependencies = [
  "wp_physics",
  "wp_road",
  "wp_test",
+ "wp_traffic",
  "wp_vehicle",
  "wp_world",
 ]
@@ -2985,6 +2986,7 @@ dependencies = [
  "serde",
  "wp_app",
  "wp_core",
+ "wp_data",
  "wp_ecs",
  "wp_physics",
  "wp_road",

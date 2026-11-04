@@ -16,6 +16,7 @@ cd my_game
 ../target/debug/wp run --headless --throttle 1 --seconds 8 --trace
 ../target/debug/wp shot --scenario skidpad --at 10s --camera showcase --out skidpad.png
 ../target/debug/wp run        # drive in a window: W/S throttle-brake, A/D steer, C camera, R reset
+../target/debug/wp run --scene scenes/town_traffic.scene.ron --spawn avenue_start   # with AI traffic
 ```
 
 ## Real streets from OpenStreetMap
@@ -80,7 +81,8 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 - **M1 (realistic drive):** suspension, rollover, ABS, air brakes, a city bus, and ECE R13 braking tests.
 - **M2 (roads and trucks):** semi-trailers and reverse docking, road networks with routing, lane
   changes and lane-drop tapers, OpenStreetMap and OpenDRIVE import.
-- **Next, M3 (living city):** traffic, pedestrians, missions, streaming and the asset pipeline.
+- **M3 (living city, in progress):** AI traffic that routes, follows lanes, keeps its distance and
+  takes turns at junctions. Next: traffic signals, pedestrians, missions, streaming and the asset pipeline.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

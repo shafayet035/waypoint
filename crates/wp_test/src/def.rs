@@ -129,6 +129,11 @@ pub enum Assertion {
     MaxDecelG(f32),
     /// Mean lateral acceleration over the second half of the run lies in [min, max], in g.
     SteadyLateralG { min: f32, max: f32 },
+    /// No two vehicles or trailers touch (the player's or traffic).
+    NoCollisions,
+    /// The scene's AI traffic reaches at least `min_trips` destinations in
+    /// total (it keeps moving: no gridlock).
+    TrafficFlows { min_trips: u32 },
     /// No NaN or infinite values appear in the vehicle state.
     NoNaN,
     /// A second run with the same seed produces identical state hashes.
@@ -178,6 +183,8 @@ impl Assertion {
                 format!("RouteFollowed(≤ {max_offset_m} m off lane centre)")
             }
             Self::NoNaN => "NoNaN".into(),
+            Self::NoCollisions => "NoCollisions".into(),
+            Self::TrafficFlows { min_trips } => format!("TrafficFlows(≥ {min_trips} trips)"),
             Self::Deterministic => "Deterministic".into(),
         }
     }

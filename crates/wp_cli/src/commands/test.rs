@@ -213,6 +213,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
         }],
         docks: vec![],
         roads: None,
+        traffic: None,
     };
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut results = Vec::new();
@@ -226,6 +227,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             vehicle,
             trailer: None,
             roads: None,
+            traffic: Vec::new(),
         };
         let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         all_ok &= r.passed;

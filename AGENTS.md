@@ -44,7 +44,8 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_physics` | Planar rigid bodies, `Pose`, `Velocity`, `RigidBody`, `Ground` |
 | `wp_vehicle` | `.vehicle.ron`/`.trailer.ron`, validation, `VehiclePlugin` + `TrailerPlugin`, tyres, drivetrain, brakes, suspension |
 | `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
-| `wp_world` | `.scene.ron`, spawn points, `Name`, `Player` |
+| `wp_world` | `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
+| `wp_traffic` | AI traffic: routes, lane following, IDM car-following, junction claims; shared path controllers |
 | `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
 | `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
@@ -115,5 +116,13 @@ build to full in about 0.9 s, steering lock shrinks with speed (about 10° at 60
 catches slides past 4° of sideslip. The window's input and the `Keyboard` scenario driver both use them;
 `keyboard_slalom` (no spin at 100 km/h) and `keyboard_brake_tap` guard the feel. The chase camera trails
 the car's heading (0.25 s) in windows only; `wp shot` stays rigid.
+M3 (in progress): AI traffic (`wp_traffic`). A scene's `traffic: Some((count, vehicles))` spawns AI
+vehicles that drive the full vehicle model: random destinations routed on the lane graph, Stanley
+steering (long vehicles aim the middle of their wheelbase and keep to the kerb), IDM car-following of
+anything ahead (the player too), merges that yield, and junction claims sized to each vehicle's swept
+path (wait at a stop line while a conflicting path is claimed or the exit is blocked). Collisions are
+detected (`Collision` events, `NoCollisions`), not yet resolved physically. `town_traffic` gate: 12
+vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
+with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;
 traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.

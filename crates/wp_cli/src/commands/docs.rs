@@ -61,11 +61,13 @@ Assertions
   BrakingDistance(max_m: 36.7)    Mfdd(min_mps2: 5.0)    StoppedBy(s: 14.0)    TurningCircle(max_m: 25.0)
   MaxSpeed(130.0)   MaxLateralG(0.35)   SteadyLateralG(min: 0.4, max: 1.05)
   MaxSideslipDeg(9.0)   no spin or big slide   MaxDecelG(0.4)   no harsh braking
-  NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic
+  TrafficFlows(min_trips: 10)   the scene's AI traffic keeps reaching destinations (no gridlock)
+  NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic   NoCollisions
   RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
-Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife.
+Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
+Collision (bodies touching; detected, not yet pushed apart).
 Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) from 60 km/h
 ≤ 0.15v + v²/130 = 36.7 m and MFDD ≥ 5.0 m/s²; cars (M1, R13-H) from 100 km/h ≤ 70 m and
 MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.

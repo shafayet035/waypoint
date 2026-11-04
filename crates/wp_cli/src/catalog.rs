@@ -169,6 +169,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Point `roads` at a roads/<name>.road.ron file, relative to the project root.",
     },
     ErrorDoc {
+        code: "WP-W006",
+        title: "A scene's traffic names a vehicle that does not exist, or none at all",
+        fix: "List vehicle names that have a vehicles/<name>.vehicle.ron file.",
+    },
+    ErrorDoc {
+        code: "WP-W007",
+        title: "A scene has traffic but no road network",
+        fix: "Traffic drives on roads: add `roads: Some(\"roads/<name>.road.ron\")` to the scene, or remove `traffic`.",
+    },
+    ErrorDoc {
         code: "WP-P001",
         title: "A window could not be opened",
         fix: "Run on a machine with a display, or use `wp run --headless` / `wp shot`.",

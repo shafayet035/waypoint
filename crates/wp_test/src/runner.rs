@@ -20,6 +20,8 @@ pub struct ScenarioInput<'a> {
     pub roads: Option<&'a wp_road::RoadNetworkDef>,
     /// Semi-trailer to couple to the player, if the scenario names one.
     pub trailer: Option<&'a wp_vehicle::TrailerDef>,
+    /// Vehicles the scene's traffic may use (empty without traffic).
+    pub traffic: Vec<&'a VehicleDef>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +60,11 @@ pub struct Metrics {
     pub turning_circle_m: Option<f32>,
     /// How often each vehicle event happened to the player.
     pub events: BTreeMap<String, u32>,
+    /// Collisions between any two vehicles or trailers (player or traffic).
+    pub collisions: u32,
+    /// AI traffic at the end, if the scene has traffic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traffic: Option<wp_traffic::TrafficStats>,
     pub final_position: [f32; 2],
     pub final_heading_deg: f32,
     /// Centre of the towed trailer's rear edge at the end, if towing.
@@ -167,6 +174,9 @@ pub fn prepare(
     app.world
         .insert_reflected_resource("SimRng", SimRng::new(s.seed));
     wp_world::apply_scene(&mut app.world, input.scene, input.roads);
+    if let Some(t) = &input.scene.traffic {
+        wp_traffic::setup(&mut app.world, t, &input.traffic);
+    }
     let (pos, heading) = wp_world::spawn_transform(spawn);
     let player = wp_vehicle::spawn_vehicle(&mut app.world, input.vehicle, pos, heading);
     if s.player.initial_kmh > 0.0 {
@@ -231,6 +241,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     let mut last_pos = start_pos;
     let mut nan_at = None;
     let mut event_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut collision_reports = 0u32;
     let (mut route_worst, mut route_finished, mut route_error): (
         Option<f32>,
         bool,
@@ -246,6 +257,8 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         app.tick();
         let t = tick as f32 / time.tick_hz as f32;
         if let Some(events) = app.world.get_resource::<Events<VehicleEvent>>() {
+            // Each collision is reported to both vehicles.
+            collision_reports += events.iter().filter(|e| e.kind() == "Collision").count() as u32;
             for e in events.iter().filter(|e| event_entity(e) == player_id) {
                 *event_counts.entry(e.kind().to_string()).or_default() += 1;
                 if event_log.len() < 50 {
@@ -314,6 +327,11 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         mfdd_mps2: braking.as_ref().and_then(|b| b.mfdd),
         turning_circle_m: turning_circle(&samples, input.vehicle),
         events: event_counts,
+        collisions: collision_reports / 2,
+        traffic: app
+            .world
+            .get_resource::<wp_traffic::TrafficStats>()
+            .map(|t| t.clone()),
         final_position: tel.position,
         final_heading_deg: tel.heading_deg,
         trailer_rear: rig.map(|g| g.trailer_rear.to_array()),
@@ -581,6 +599,20 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
             ),
         },
         Assertion::NoNaN => (run.nan_at.is_none(), "all values finite".into()),
+        Assertion::TrafficFlows { min_trips } => match &m.traffic {
+            Some(t) => (
+                t.trips >= *min_trips,
+                format!(
+                    "{} trips by {} vehicles ({} reappeared elsewhere), {:.0} km/h mean at the end",
+                    t.trips, t.vehicles, t.respawns, t.mean_kmh
+                ),
+            ),
+            None => (false, "the scene has no traffic".into()),
+        },
+        Assertion::NoCollisions => (
+            m.collisions == 0,
+            format!("{} collisions between vehicles", m.collisions),
+        ),
         Assertion::Deterministic => unreachable!("handled by run_scenario"),
     }
 }

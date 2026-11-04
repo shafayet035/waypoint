@@ -13,21 +13,16 @@ pub struct BodyShape {
 }
 
 pub fn body_shape(def: &VehicleDef) -> BodyShape {
-    if let Some(b) = &def.body {
-        let front = def.cg_to_front_axle_m + b.front_overhang_m;
-        return BodyShape {
-            front,
-            rear: front - b.length_m,
-            width: b.width_m,
-            height: b.height_m,
-        };
-    }
-    let r = def.wheel.radius_m;
+    let fp = wp_vehicle::vehicle_footprint(def);
+    let height = match &def.body {
+        Some(b) => b.height_m,
+        None => (def.cg_height_m * 2.6).max(def.wheel.radius_m * 3.2),
+    };
     BodyShape {
-        front: def.cg_to_front_axle_m + r * 1.6 + 0.2,
-        rear: -(def.rear_axle_from_cg() + r * 1.5 + 0.1),
-        width: def.track_width_m + 0.24,
-        height: (def.cg_height_m * 2.6).max(r * 3.2),
+        front: fp.front,
+        rear: fp.rear,
+        width: fp.width,
+        height,
     }
 }
 

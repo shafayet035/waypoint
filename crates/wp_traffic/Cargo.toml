@@ -17,5 +17,8 @@ glam.workspace = true
 serde.workspace = true
 schemars.workspace = true
 
+[dev-dependencies]
+wp_data.workspace = true
+
 [lints]
 workspace = true

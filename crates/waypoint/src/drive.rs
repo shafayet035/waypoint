@@ -109,6 +109,9 @@ impl DriveSpec {
         app.world
             .insert_reflected_resource("SimRng", SimRng::new(self.seed));
         wp_world::apply_scene(&mut app.world, scene, project.scene_roads(scene));
+        if let (Some(t), Some(vehicles)) = (&scene.traffic, project.scene_traffic(scene)) {
+            wp_traffic::setup(&mut app.world, t, &vehicles);
+        }
         let (pos, heading) = wp_world::spawn_transform(spawn);
         let player = wp_vehicle::spawn_vehicle(&mut app.world, &vehicle.value, pos, heading);
         app.world.insert(player, Name(vehicle.value.name.clone()));

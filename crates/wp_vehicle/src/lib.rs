@@ -8,6 +8,7 @@
 //! yaw moment to the rigid body. Notable moments are sent as [`VehicleEvent`]s.
 
 pub mod assist;
+pub mod collision;
 pub mod def;
 pub mod dynamics;
 pub mod parts;
@@ -21,6 +22,7 @@ use wp_ecs::{Component, Entity, Stage, World};
 use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 
 pub use assist::{Controls, DriverAids, steer_limit};
+pub use collision::{Contacts, Footprint, detect_collisions, vehicle_footprint};
 pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
@@ -206,10 +208,16 @@ pub enum VehicleEvent {
         entity: String,
         angle_deg: f32,
     },
+    /// This vehicle's body touched another vehicle or trailer (sent once per
+    /// contact, to both).
+    Collision {
+        entity: String,
+        other: String,
+    },
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 8] = [
+    pub const KINDS: [&'static str; 9] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
@@ -218,6 +226,7 @@ impl VehicleEvent {
         "LowAirPressure",
         "RolledOver",
         "Jackknife",
+        "Collision",
     ];
 
     pub fn kind(&self) -> &'static str {
@@ -230,6 +239,7 @@ impl VehicleEvent {
             Self::LowAirPressure { .. } => "LowAirPressure",
             Self::RolledOver { .. } => "RolledOver",
             Self::Jackknife { .. } => "Jackknife",
+            Self::Collision { .. } => "Collision",
         }
     }
 
@@ -243,7 +253,8 @@ impl VehicleEvent {
             | Self::WheelLanded { entity, .. }
             | Self::LowAirPressure { entity, .. }
             | Self::RolledOver { entity, .. }
-            | Self::Jackknife { entity, .. } => entity,
+            | Self::Jackknife { entity, .. }
+            | Self::Collision { entity, .. } => entity,
         }
     }
 }
@@ -276,6 +287,12 @@ impl Plugin for VehiclePlugin {
             .writes::<Vehicle>()
             .writes::<RigidBody>()
             .reads_resource("VehicleLibrary")
+            .writes_resource("Events<VehicleEvent>");
+        app.add_system(Stage::Post, "detect_collisions", detect_collisions)
+            .reads::<Pose>()
+            .reads::<Vehicle>()
+            .reads_resource("VehicleLibrary")
+            .writes_resource("Contacts")
             .writes_resource("Events<VehicleEvent>");
     }
 }

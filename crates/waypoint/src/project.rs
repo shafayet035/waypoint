@@ -219,6 +219,46 @@ impl Project {
                 );
             }
         }
+        for scene in self.scenes.values() {
+            let Some(traffic) = &scene.value.traffic else {
+                continue;
+            };
+            if scene.value.roads.is_none() {
+                out.push(
+                    scene
+                        .error_at(
+                            "WP-W007",
+                            "traffic",
+                            "traffic needs a road network to drive on",
+                        )
+                        .help("add `roads: Some(\"roads/<name>.road.ron\")` or remove `traffic`"),
+                );
+            }
+            for v in &traffic.vehicles {
+                if !self.vehicles.contains_key(v) {
+                    out.push(
+                        scene
+                            .error_at(
+                                "WP-W006",
+                                "vehicles",
+                                format!("traffic vehicle `{v}` does not exist"),
+                            )
+                            .help(format!("known vehicles: {}", list(self.vehicles.keys()))),
+                    );
+                }
+            }
+            if traffic.count > 0 && traffic.vehicles.is_empty() {
+                out.push(
+                    scene
+                        .error_at(
+                            "WP-W006",
+                            "vehicles",
+                            "traffic has no vehicles to choose from",
+                        )
+                        .help("list vehicle names, e.g. vehicles: [\"hatchback\"]"),
+                );
+            }
+        }
         for sc in self.scenarios.values() {
             let s = &sc.value;
             match self.scenes.get(&s.scene) {
@@ -344,10 +384,23 @@ impl Project {
             name,
             scenario: s,
             roads: self.scene_roads(scene),
+            traffic: self.scene_traffic(scene)?,
             scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,
         })
+    }
+
+    /// The vehicles a scene's traffic may use (empty without traffic).
+    /// `None` if one is missing (`wp check` reports it).
+    pub fn scene_traffic(&self, scene: &SceneDef) -> Option<Vec<&wp_vehicle::VehicleDef>> {
+        let Some(t) = &scene.traffic else {
+            return Some(Vec::new());
+        };
+        t.vehicles
+            .iter()
+            .map(|v| self.vehicles.get(v).map(|l| &l.value))
+            .collect()
     }
 
     /// The road network a scene refers to, if any (and if it loaded).
