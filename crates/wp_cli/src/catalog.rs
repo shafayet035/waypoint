@@ -69,6 +69,56 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "This is an engine bug; report it with the command you ran.",
     },
     ErrorDoc {
+        code: "WP-F001",
+        title: "A model file cannot be read or is not valid glTF 2.0",
+        fix: "Export from Blender with File → Export → glTF 2.0 (format .glb); check the path is relative to the project root.",
+    },
+    ErrorDoc {
+        code: "WP-F002",
+        title: "A glTF file's buffer is embedded as base64 or missing",
+        fix: "Export a single .glb, or keep the .bin next to the .gltf.",
+    },
+    ErrorDoc {
+        code: "WP-F003",
+        title: "An asset has no licence file",
+        fix: "Add <stem>.asset.ron next to it with source, author and licence (`wp schema asset`).",
+    },
+    ErrorDoc {
+        code: "WP-F004",
+        title: "An asset's licence needs a credit line",
+        fix: "CC BY licences require attribution: add credit: Some(\"<title> by <author>, CC BY 4.0\").",
+    },
+    ErrorDoc {
+        code: "WP-F005",
+        title: "A vehicle's model does not exist or failed to load",
+        fix: "Check the path in `model` (relative to the project root) and run `wp asset list`.",
+    },
+    ErrorDoc {
+        code: "WP-F006",
+        title: "A vehicle model's size does not match the vehicle",
+        fix: "Model in metres to the vehicle's dimensions (set `body` for exact sizes); engine X forward is glTF +Z. Mirrors may add up to 0.5 m of width.",
+    },
+    ErrorDoc {
+        code: "WP-F007",
+        title: "A vehicle model's origin is not on the ground midway between the axles",
+        fix: "Move the origin (Blender: Set Origin, then apply transforms); the lowest point must sit between the ground and the wheel radius.",
+    },
+    ErrorDoc {
+        code: "WP-F008",
+        title: "A model has more triangles than its quality tier allows",
+        fix: "Decimate the mesh, or raise game.toml [quality] tier; traffic vehicles have smaller budgets than the player's.",
+    },
+    ErrorDoc {
+        code: "WP-F009",
+        title: "An AI-generated model is used as a vehicle",
+        fix: "AI models are allowed for background props only; model vehicles by hand or use CC0 or bought models.",
+    },
+    ErrorDoc {
+        code: "WP-F010",
+        title: "Some model primitives are not triangles",
+        fix: "Triangulate before export (Blender: Triangulate modifier); lines and points are not drawn.",
+    },
+    ErrorDoc {
         code: "WP-G001",
         title: "No game.toml found",
         fix: "Run inside a project, pass --project <dir>, or create one with `wp new <name>`.",

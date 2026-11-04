@@ -69,6 +69,10 @@ pub struct Project {
     pub roads: BTreeMap<String, Loaded<RoadNetworkDef>>,
     /// By mission name (file name without `.mission.ron`).
     pub missions: BTreeMap<String, Loaded<wp_mission::MissionDef>>,
+    /// Licence files of assets, by the asset's path.
+    pub assets: BTreeMap<String, Loaded<wp_asset::AssetMeta>>,
+    /// Every model in the project that loaded, by path.
+    pub models: std::sync::Arc<wp_asset::ModelLibrary>,
     /// Files that exist but failed to parse, so references to them can say so.
     pub failed: Vec<String>,
 }
@@ -198,7 +202,70 @@ impl Project {
             }
         }
 
+        let mut models = Vec::new();
+        let mut assets = BTreeMap::new();
+        for ext in wp_asset::MODEL_EXTS {
+            for path in find_files(root, ext) {
+                match wp_asset::load_model(root, &path) {
+                    Ok(m) => {
+                        if m.skipped > 0 {
+                            diags.push(
+                                Diagnostic::warning(
+                                    "WP-F010",
+                                    format!(
+                                        "{} primitives are not triangles and are not drawn",
+                                        m.skipped
+                                    ),
+                                )
+                                .in_file(path.clone())
+                                .help("triangulate the mesh before export (Blender: Triangulate modifier, or export with Apply Modifiers)"),
+                            );
+                        }
+                        models.push((path.clone(), std::sync::Arc::new(m)));
+                    }
+                    Err(d) => {
+                        failed.push(path.clone());
+                        diags.push(d);
+                    }
+                }
+                let meta = wp_asset::meta_path(&path);
+                if !root.join(&meta).is_file() {
+                    diags.push(
+                        Diagnostic::error("WP-F003", "asset has no licence file")
+                            .in_file(path.clone())
+                            .help(format!(
+                                "add {meta}: (source: \"...\", author: \"...\", licence: Cc0) — see `wp schema asset`"
+                            )),
+                    );
+                    continue;
+                }
+                match load_ron::<wp_asset::AssetMeta>(root, &meta) {
+                    Ok(m) => {
+                        if m.value.licence.needs_credit()
+                            && m.value
+                                .credit
+                                .as_deref()
+                                .is_none_or(|c| c.trim().is_empty())
+                        {
+                            diags.push(
+                                m.error_at(
+                                    "WP-F004",
+                                    "licence",
+                                    format!("{} needs a credit line", m.value.licence.label()),
+                                )
+                                .help("add credit: Some(\"<title> by <author>, CC BY 4.0\") for the credits screen"),
+                            );
+                        }
+                        assets.insert(path, m);
+                    }
+                    Err(d) => diags.push(d),
+                }
+            }
+        }
+
         let project = Project {
+            assets,
+            models: std::sync::Arc::new(wp_asset::ModelLibrary::new(models)),
             missions,
             root: root.to_path_buf(),
             game,
@@ -210,7 +277,151 @@ impl Project {
             failed,
         };
         diags.extend(project.check_references());
+        diags.extend(project.check_models());
         (Some(project), diags)
+    }
+
+    /// Vehicle models: present, sized like the vehicle, on the ground and
+    /// within the quality tier's triangle budgets.
+    fn check_models(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let tier = match self.game.value.quality.tier {
+            wp_world::QualityTier::Low => 0,
+            wp_world::QualityTier::Mid => 1,
+            wp_world::QualityTier::Flagship => 2,
+        };
+        let in_traffic = |name: &str| {
+            self.scenes.values().any(|s| {
+                s.value
+                    .traffic
+                    .as_ref()
+                    .is_some_and(|t| t.vehicles.iter().any(|v| v == name))
+            })
+        };
+        for v in self.vehicles.values() {
+            let Some(path) = &v.value.model else {
+                continue;
+            };
+            let Some((_, model)) = self.models.find(path) else {
+                let why = if self.failed.contains(path) {
+                    "failed to load"
+                } else {
+                    "does not exist"
+                };
+                out.push(
+                    v.error_at("WP-F005", "model", format!("model `{path}` {why}"))
+                        .help(format!(
+                            "models in the project: {}",
+                            list(
+                                self.models
+                                    .iter()
+                                    .map(|(p, _)| p.to_string())
+                                    .collect::<Vec<_>>()
+                                    .iter()
+                            )
+                        )),
+                );
+                continue;
+            };
+            let fp = wp_vehicle::vehicle_footprint(&v.value);
+            let size = model.size();
+            let (length, width) = (fp.front - fp.rear, fp.width);
+            // Mirrors may stick out up to 0.5 m beyond the body's width.
+            let long = (size.x - length).abs() > 0.1 * length;
+            let wide = size.y < 0.9 * width || size.y > width + 0.5;
+            if long || wide {
+                out.push(
+                    v.warning_at(
+                        "WP-F006",
+                        "model",
+                        format!(
+                            "model is {:.2} × {:.2} m but the vehicle is {length:.2} × {width:.2} m",
+                            size.x, size.y
+                        ),
+                    )
+                    .help("model in metres, to the vehicle's body dimensions (set `body` for exact sizes); X forward in the engine is glTF +Z"),
+                );
+            }
+            let mid = (v.value.cg_to_front_axle_m - v.value.rear_axle_from_cg()) / 2.0;
+            let model_mid = (model.min.x + model.max.x) / 2.0;
+            let body_mid = (fp.front + fp.rear) / 2.0 - mid;
+            // Wheels are drawn by the engine, so a body may sit above the ground.
+            let r = v.value.wheel.radius_m;
+            if model.min.z < -0.05 || model.min.z > r || (model_mid - body_mid).abs() > 0.25 {
+                out.push(
+                    v.warning_at(
+                        "WP-F007",
+                        "model",
+                        format!(
+                            "model origin is off: lowest point at {:.2} m, centre {:.2} m from the axle midpoint (expected {body_mid:.2})",
+                            model.min.z, model_mid
+                        ),
+                    )
+                    .help("put the origin on the ground, midway between the front and rear axles"),
+                );
+            }
+            let budget = wp_asset::PLAYER_TRIANGLES[tier];
+            if model.triangles > budget {
+                out.push(
+                    v.error_at(
+                        "WP-F008",
+                        "model",
+                        format!(
+                            "model has {} triangles; the {:?} tier allows {budget} for a player vehicle",
+                            model.triangles, self.game.value.quality.tier
+                        ),
+                    )
+                    .help("decimate the mesh (Blender: Decimate modifier) or pick a higher [quality] tier"),
+                );
+            } else if in_traffic(&v.value.name)
+                && model.triangles > wp_asset::TRAFFIC_TRIANGLES[tier]
+            {
+                out.push(
+                    v.warning_at(
+                        "WP-F008",
+                        "model",
+                        format!(
+                            "model has {} triangles; traffic vehicles at the {:?} tier get {}",
+                            model.triangles,
+                            self.game.value.quality.tier,
+                            wp_asset::TRAFFIC_TRIANGLES[tier]
+                        ),
+                    )
+                    .help("decimate the mesh, or keep this vehicle out of scene traffic"),
+                );
+            }
+            if self.assets.get(path).is_some_and(|a| a.value.generated) {
+                out.push(
+                    v.warning_at(
+                        "WP-F009",
+                        "model",
+                        "AI-generated models are for background props, not vehicles",
+                    )
+                    .help("model the vehicle by hand, or use a CC0 or bought model"),
+                );
+            }
+        }
+        out
+    }
+
+    /// Credits for the assets in use: (asset path, line). CC0 and own work
+    /// need none but are listed when they name a credit.
+    pub fn credits(&self) -> Vec<(String, String)> {
+        self.assets
+            .iter()
+            .map(|(path, m)| {
+                let m = &m.value;
+                let line = m.credit.clone().unwrap_or_else(|| {
+                    format!(
+                        "{} by {} ({})",
+                        path.rsplit('/').next().unwrap_or(path),
+                        m.author,
+                        m.licence.label()
+                    )
+                });
+                (path.clone(), line)
+            })
+            .collect()
     }
 
     /// Cross-file checks: every name a file refers to must exist.

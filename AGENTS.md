@@ -49,6 +49,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_script` | Luau mission scripts: sandbox, hooks, `mission` API, deterministic random |
 | `wp_mission` | Missions: bus stops on routes, timetable, passengers, score; `MissionPlugin` |
 | `wp_test` | `.scenario.ron`, drivers (`drivers.rs`), assertions, the scenario runner |
+| `wp_asset` | glTF models in the engine frame (one part per material, roles from names), `.asset.ron` licences, triangle budgets |
 | `wp_rhi` | wgpu device setup (headless or window), offscreen targets, PNG capture |
 | `wp_render` | Frame extraction from the ECS, cameras, sky/ground/vehicle pipeline |
 | `wp_platform` | Window, keyboard driving, fixed-timestep interactive loop (winit) |
@@ -154,5 +155,11 @@ cap the internal render height (540/720/900) and upscale (`Renderer::set_max_hei
 traffic ×0.6/1/1.3, pedestrians ×0.5/1/1.5, rain ×0.5/1/1. Tests and `wp shot` run without a tier. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
-Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;
+Assets (`wp_asset`): `.glb` under `assets/`, each with `<stem>.asset.ron` (source, author, licence
+Own/Cc0/CcBy3/CcBy4/Purchased, credit). A vehicle's `model: Some("assets/vehicles/x.glb")` replaces its boxes
+(origin on the ground midway between the axles; wheels stay procedural; materials named paint…/glass…/
+brake…/head… get roles). `wp check`: WP-F001–F010 (licence, size, origin, tier triangle budgets).
+`wp asset info|list`, `wp credits`, `wp docs assets`. The sandbox's hatchback and city bus models come from
+`tools/models/vehicles.py` (our own, CC0). Textures are not drawn yet; `wp asset build` (LODs, KTX2) is M4.
+Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.

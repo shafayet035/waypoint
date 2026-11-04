@@ -34,6 +34,7 @@ wp_world = { path = "crates/wp_world" }
 wp_traffic = { path = "crates/wp_traffic" }
 wp_mission = { path = "crates/wp_mission" }
 wp_script = { path = "crates/wp_script" }
+wp_asset = { path = "crates/wp_asset" }
 wp_road = { path = "crates/wp_road" }
 wp_test = { path = "crates/wp_test" }
 waypoint = { path = "crates/waypoint" }

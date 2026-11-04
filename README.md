@@ -84,7 +84,8 @@ tap the top edge to change camera. The simulator needs an iOS runtime
 - **M3 (living city, in progress):** AI traffic that follows lanes, keeps its distance, obeys traffic
   lights and give-way rules; crash physics; pedestrians on sidewalks and zebra crossings; bus missions
   with stops, timetables and passengers (`wp run --mission route_1`), scriptable in Lua (Luau).
-  Next: streaming and the asset pipeline.
+  3D models: glTF (`.glb`) vehicles with licence files checked by `wp check` (`wp docs assets`).
+  Next: streaming.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

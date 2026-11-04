@@ -28,10 +28,17 @@ use wp_vehicle::{
 };
 use wp_world::Player;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a draw item draws. Items are drawn in this order (cubes, wheels,
+/// then model parts by model and part).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MeshId {
     Cube,
     Wheel,
+    /// Part `part` of model `model` in [`FrameView::models`].
+    Model {
+        model: u32,
+        part: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +72,9 @@ pub struct FrameView {
     pub roads: Option<std::sync::Arc<wp_road::RoadNetwork>>,
     /// How wet the road is, 0–1 (darker, glossier asphalt).
     pub wetness: f32,
+    /// Models that [`MeshId::Model`] items refer to; the renderer uploads
+    /// them once per library.
+    pub models: Option<std::sync::Arc<wp_asset::ModelLibrary>>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -89,6 +99,9 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
     let mut items = Vec::new();
     let mut shadows = Vec::new();
     let library = world.get_resource::<VehicleLibrary>();
+    let models = world
+        .get_resource::<wp_asset::Models>()
+        .map(|m| m.0.clone());
     let players = world.query::<&Player>().entities();
 
     world
@@ -103,7 +116,21 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
             } else {
                 palette(e.index())
             };
-            vehicle_items(&mut items, &mut shadows, def, pose, veh, paint, braking);
+            let model = def
+                .model
+                .as_ref()
+                .and_then(|p| models.as_ref()?.find(p))
+                .map(|(i, m)| (i, m.as_ref()));
+            vehicle_items(
+                &mut items,
+                &mut shadows,
+                def,
+                pose,
+                veh,
+                paint,
+                braking,
+                model,
+            );
         });
     world
         .query::<(&Pose, &wp_traffic::pedestrian::Pedestrian)>()
@@ -186,6 +213,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         shadows,
         roads: world.get_resource::<wp_world::Roads>().map(|r| r.0.clone()),
         wetness: weather.wetness,
+        models,
     }
 }
 

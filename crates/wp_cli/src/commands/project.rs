@@ -9,7 +9,16 @@ pub fn check(ctx: &Ctx) -> CmdResult {
     let (project, diags) = Project::load(&ctx.project);
     let files = project
         .as_ref()
-        .map(|p| 1 + p.vehicles.len() + p.scenes.len() + p.scenarios.len())
+        .map(|p| {
+            1 + p.vehicles.len()
+                + p.scenes.len()
+                + p.scenarios.len()
+                + p.trailers.len()
+                + p.roads.len()
+                + p.missions.len()
+                + p.models.len()
+                + p.assets.len()
+        })
         .unwrap_or(0);
     let ms = start.elapsed().as_millis();
     if ctx.json {
@@ -46,10 +55,11 @@ pub fn schema(_ctx: &Ctx, kind: &str) -> CmdResult {
         "trailer" => schema_json::<waypoint::vehicle::TrailerDef>(),
         "road" => schema_json::<waypoint::road::RoadNetworkDef>(),
         "mission" => schema_json::<waypoint::mission::MissionDef>(),
+        "asset" => schema_json::<waypoint::asset::AssetMeta>(),
         other => {
             return Err(cli_error(
                 format!("unknown schema type `{other}`"),
-                "types: game, vehicle, trailer, road, scene, scenario, mission",
+                "types: game, vehicle, trailer, road, scene, scenario, mission, asset",
             ));
         }
     };

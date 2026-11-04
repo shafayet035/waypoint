@@ -480,3 +480,70 @@ fn broken_mission_script_is_reported_with_its_line() {
     assert!(d["location"]["line"].as_u64().is_some(), "{d}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn assets_need_licences_and_matching_models() {
+    let dir = temp_dir("assets");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    let (code, v) = json(&game, &["asset", "list"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["assets"].as_array().unwrap().len(), 2);
+    assert_eq!(v["assets"][1]["used_by"][0], "hatchback");
+
+    // A model without its licence file is rejected.
+    let meta = game.join("assets/vehicles/hatchback.asset.ron");
+    std::fs::remove_file(&meta).unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-F003", "{v}");
+
+    // CC BY needs a credit line.
+    std::fs::write(&meta, "(source: \"x\", author: \"y\", licence: CcBy4)").unwrap();
+    let (_, v) = json(&game, &["check"]);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-F004", "{v}");
+    std::fs::write(
+        &meta,
+        "(source: \"x\", author: \"y\", licence: CcBy4, credit: Some(\"Car by y\"))",
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["credits"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["credits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "Car by y")
+    );
+
+    // The bus model on the car: wrong size, caught with the vehicle's line.
+    let car = game.join("vehicles/hatchback.vehicle.ron");
+    let src = std::fs::read_to_string(&car)
+        .unwrap()
+        .replace("hatchback.glb", "city_bus.glb");
+    std::fs::write(&car, src).unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 0, "warnings only: {v}");
+    let codes: Vec<&str> = v["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"WP-F006"), "{v}");
+    assert_eq!(
+        v["diagnostics"][0]["location"]["file"],
+        "vehicles/hatchback.vehicle.ron"
+    );
+
+    // A missing model is an error.
+    let src = std::fs::read_to_string(&car)
+        .unwrap()
+        .replace("city_bus.glb", "nope.glb");
+    std::fs::write(&car, src).unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-F005", "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

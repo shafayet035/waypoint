@@ -35,7 +35,7 @@ mkdir -p "$APP"
 cp "target/$TARGET/release/waypoint-player" "$APP/waypoint-player"
 mkdir -p "$APP/game"
 # Ship only the game's data, not build output or VCS folders.
-(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' \) -not -path './target/*') |
+(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' -o -name '*.lua' -o -name '*.glb' -o -name '*.gltf' -o -name '*.bin' \) -not -path './target/*') |
   while read -r f; do mkdir -p "$APP/game/$(dirname "$f")"; cp "$PROJECT/$f" "$APP/game/$f"; done
 
 SDK_VERSION=$(xcrun --sdk "$SDK" --show-sdk-version)

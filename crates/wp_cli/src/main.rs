@@ -39,9 +39,9 @@ enum Cmd {
     },
     /// Validate every project file against its schema and cross-references.
     Check,
-    /// Print the JSON Schema of a data type: game, vehicle, trailer, road, scene, scenario.
+    /// Print the JSON Schema of a data type: game, vehicle, trailer, road, scene, scenario, mission, asset.
     Schema { kind: String },
-    /// Offline docs. Topics: cli, errors, errors/<CODE>, scenario, scripting, vehicle.
+    /// Offline docs. Topics: cli, errors, errors/<CODE>, assets, scenario, scripting, vehicle.
     Docs { topic: Option<String> },
     /// Drive in a window (keyboard), or --headless to simulate and print the final state.
     Run(commands::RunArgs),
@@ -63,6 +63,19 @@ enum Cmd {
     /// Import map data into the project.
     #[command(subcommand)]
     Import(ImportCmd),
+    /// Models: what the engine sees in them, licences, budgets.
+    #[command(subcommand)]
+    Asset(AssetCmd),
+    /// Print the credits screen: asset credits and map attributions.
+    Credits,
+}
+
+#[derive(Subcommand)]
+enum AssetCmd {
+    /// Triangles, size, materials and their roles, licence.
+    Info { file: String },
+    /// Every model in the project with its licence and the vehicles using it.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -124,6 +137,9 @@ fn main() {
     let result = match cli.cmd {
         Cmd::New { name, template } => commands::new(&ctx, &name, &template),
         Cmd::Check => commands::check(&ctx),
+        Cmd::Asset(AssetCmd::Info { file }) => commands::asset_info(&ctx, &file),
+        Cmd::Asset(AssetCmd::List) => commands::asset_list(&ctx),
+        Cmd::Credits => commands::credits(&ctx),
         Cmd::Schema { kind } => commands::schema(&ctx, &kind),
         Cmd::Docs { topic } => commands::docs(&ctx, topic.as_deref()),
         Cmd::Run(args) => commands::run(&ctx, &args),

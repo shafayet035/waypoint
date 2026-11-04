@@ -47,6 +47,7 @@ pub(super) fn vehicle_items(
     veh: &Vehicle,
     paint: Vec3,
     braking: bool,
+    model: Option<(u32, &wp_asset::Model)>,
 ) {
     let base =
         Mat4::from_translation(pose.position.extend(0.0)) * Mat4::from_rotation_z(pose.heading);
@@ -95,7 +96,32 @@ pub(super) fn vehicle_items(
         BodyStyle::Auto => BodyStyle::Car,
         s => s,
     };
-    if style == BodyStyle::TruckCab {
+    if let Some((index, model)) = model {
+        // The model's origin is on the ground midway between the axles.
+        let at = body * Mat4::from_translation(Vec3::new((a - b) * 0.5, 0.0, 0.0));
+        for (k, part) in model.parts.iter().enumerate() {
+            let m = &part.material;
+            let (color, emissive) = match m.role {
+                wp_asset::Role::Paint => (paint, m.emissive),
+                wp_asset::Role::BrakeLight => (
+                    Vec3::from(m.base_color),
+                    if braking { 6.0 } else { m.emissive.max(0.8) },
+                ),
+                _ => (Vec3::from(m.base_color), m.emissive),
+            };
+            items.push(DrawItem {
+                mesh: MeshId::Model {
+                    model: index,
+                    part: k as u32,
+                },
+                transform: at,
+                color,
+                roughness: m.roughness,
+                metallic: m.metallic,
+                emissive,
+            });
+        }
+    } else if style == BodyStyle::TruckCab {
         // Cab over the front axle, then an open chassis with the fifth wheel.
         let cab_rear = shape.front - 2.3;
         let cab_floor = r * 1.6;

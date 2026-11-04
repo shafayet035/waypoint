@@ -59,6 +59,12 @@ struct RoadCache {
     layers: Vec<GpuMesh>,
 }
 
+/// GPU meshes for a model library: one per part of each model.
+struct ModelCache {
+    library: usize,
+    meshes: Vec<Vec<GpuMesh>>,
+}
+
 /// Materials of the road layers, in `wp_road::RoadMeshes` order.
 const ROAD_MATERIALS: [([f32; 3], f32); 3] = [
     ([0.045, 0.046, 0.05], 0.85), // asphalt
@@ -122,6 +128,7 @@ pub struct Renderer {
     /// rebuilt only when the network changes.
     roads: Option<RoadCache>,
     road_instances: wgpu::Buffer,
+    models: Option<ModelCache>,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
     /// Window (output) size; `width`/`height` are the internal size.
@@ -301,6 +308,7 @@ impl Renderer {
             instance_capacity,
             roads: None,
             road_instances,
+            models: None,
             msaa,
             depth,
             out_width: width,
@@ -446,7 +454,7 @@ impl Renderer {
         gpu.queue
             .write_buffer(&self.road_instances, 0, bytemuck::cast_slice(&road));
 
-        // Instances grouped by mesh: cubes first, then wheels.
+        // Instances grouped by mesh: cubes, wheels, then model parts.
         let raw = |d: &DrawItem| InstanceRaw {
             model: d.transform.to_cols_array_2d(),
             normal: {
@@ -460,25 +468,20 @@ impl Renderer {
             color: d.color.extend(1.0).to_array(),
             material: [d.roughness, d.metallic, d.emissive, 0.0],
         };
-        let cubes: Vec<InstanceRaw> = frame
-            .items
-            .iter()
-            .filter(|d| d.mesh == MeshId::Cube)
-            .map(raw)
-            .collect();
-        let wheels: Vec<InstanceRaw> = frame
-            .items
-            .iter()
-            .filter(|d| d.mesh == MeshId::Wheel)
-            .map(raw)
-            .collect();
-        let total = cubes.len() + wheels.len();
+        self.update_models(gpu, frame);
+        let mut groups: std::collections::BTreeMap<MeshId, Vec<InstanceRaw>> =
+            std::collections::BTreeMap::new();
+        for d in &frame.items {
+            if self.mesh(d.mesh).is_some() {
+                groups.entry(d.mesh).or_default().push(raw(d));
+            }
+        }
+        let total: usize = groups.values().map(Vec::len).sum();
         if total > self.instance_capacity {
             self.instance_capacity = total.next_power_of_two();
             self.instances = Self::instance_buffer(gpu, self.instance_capacity);
         }
-        let mut all = cubes.clone();
-        all.extend_from_slice(&wheels);
+        let all: Vec<InstanceRaw> = groups.values().flatten().copied().collect();
         if !all.is_empty() {
             gpu.queue
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(&all));
@@ -541,11 +544,13 @@ impl Renderer {
             }
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             let mut first = 0u64;
-            for (mesh, count) in [
-                (&self.cube, cubes.len() as u64),
-                (&self.wheel, wheels.len() as u64),
-            ] {
-                if count == 0 {
+            for (id, list) in &groups {
+                let count = list.len() as u64;
+                let Some(mesh) = self.mesh(*id) else {
+                    continue;
+                };
+                if count == 0 || mesh.index_count == 0 {
+                    first += count;
                     continue;
                 }
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -567,6 +572,60 @@ impl Renderer {
 }
 
 impl Renderer {
+    fn mesh(&self, id: MeshId) -> Option<&GpuMesh> {
+        match id {
+            MeshId::Cube => Some(&self.cube),
+            MeshId::Wheel => Some(&self.wheel),
+            MeshId::Model { model, part } => self
+                .models
+                .as_ref()?
+                .meshes
+                .get(model as usize)?
+                .get(part as usize),
+        }
+    }
+
+    /// Upload the frame's model library if it changed.
+    fn update_models(&mut self, gpu: &Gpu, frame: &FrameView) {
+        let Some(lib) = &frame.models else {
+            self.models = None;
+            return;
+        };
+        let id = std::sync::Arc::as_ptr(lib) as usize;
+        if self.models.as_ref().is_some_and(|c| c.library == id) {
+            return;
+        }
+        let meshes = lib
+            .iter()
+            .map(|(path, model)| {
+                model
+                    .parts
+                    .iter()
+                    .map(|p| {
+                        let data = mesh::MeshData {
+                            vertices: p
+                                .positions
+                                .iter()
+                                .zip(&p.normals)
+                                .map(|(pos, n)| mesh::Vertex {
+                                    position: *pos,
+                                    normal: *n,
+                                    tint: 0.0,
+                                })
+                                .collect(),
+                            indices: p.indices.clone(),
+                        };
+                        GpuMesh::new(gpu, &data, path)
+                    })
+                    .collect()
+            })
+            .collect();
+        self.models = Some(ModelCache {
+            library: id,
+            meshes,
+        });
+    }
+
     /// Build GPU meshes for the frame's road network if it changed.
     fn update_roads(&mut self, gpu: &Gpu, frame: &FrameView) {
         let Some(net) = &frame.roads else {

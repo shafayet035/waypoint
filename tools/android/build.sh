@@ -43,7 +43,7 @@ mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/assets/game"
 cp "target/$TARGET/release/libwp_player.so" "$STAGE/lib/arm64-v8a/"
 
 # Game data as assets, plus the file list the player uses to unpack them.
-(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' \) -not -path './target/*' | sed 's|^\./||' | sort) > "$STAGE/files.txt"
+(cd "$PROJECT" && find . -type f \( -name '*.toml' -o -name '*.ron' -o -name '*.md' -o -name '*.lua' -o -name '*.glb' -o -name '*.gltf' -o -name '*.bin' \) -not -path './target/*' | sed 's|^\./||' | sort) > "$STAGE/files.txt"
 while read -r f; do
   mkdir -p "$STAGE/assets/game/$(dirname "$f")"
   cp "$PROJECT/$f" "$STAGE/assets/game/$f"

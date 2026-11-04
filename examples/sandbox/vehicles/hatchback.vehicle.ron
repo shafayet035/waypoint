@@ -40,4 +40,5 @@
     roll_center_height_m: 0.12,
     front_roll_share: 0.6,
   ),
+  model: Some("assets/vehicles/hatchback.glb"),
 )

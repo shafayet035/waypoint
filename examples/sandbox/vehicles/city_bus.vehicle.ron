@@ -56,4 +56,5 @@
     front_roll_share: 0.5,
   ),
   body: Some((length_m: 12.0, width_m: 2.55, height_m: 3.1, front_overhang_m: 2.7)),
+  model: Some("assets/vehicles/city_bus.glb"),
 )

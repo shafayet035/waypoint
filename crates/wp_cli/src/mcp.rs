@@ -61,7 +61,7 @@ fn tools() -> Value {
         { "name": "screenshot", "description": "Render one frame headless at a simulated time and return it as an image.",
           "inputSchema": { "type": "object", "properties": shot_props } },
         { "name": "schema", "description": "JSON Schema of a project file type, with field descriptions and units.",
-          "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["game", "vehicle", "trailer", "road", "scene", "scenario", "mission"] } }, "required": ["type"] } },
+          "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["game", "vehicle", "trailer", "road", "scene", "scenario", "mission", "asset"] } }, "required": ["type"] } },
         { "name": "docs", "description": "Offline docs. Topics: cli, scenario, vehicle, errors, errors/<CODE>.",
           "inputSchema": { "type": "object", "properties": { "topic": { "type": "string" } } } },
         { "name": "session_start", "description": "Start a live simulation (replacing any previous one) at t = 0 with the player spawned. Returns sim.status.",

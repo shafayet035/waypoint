@@ -1,6 +1,7 @@
 //! The `wp` subcommands, one module per group. Shared helpers live here;
 //! each module brings them in with `use super::*`.
 
+mod asset;
 mod docs;
 mod drive;
 mod import;
@@ -9,6 +10,7 @@ mod new;
 mod project;
 mod test;
 
+pub use asset::{asset_info, asset_list, credits};
 pub use docs::docs;
 pub(crate) use drive::make_session;
 pub use drive::{DriveArgs, RunArgs, ServeArgs, ShotArgs, run, serve, shot};

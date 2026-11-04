@@ -26,6 +26,9 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
                                export an area at openstreetmap.org (Export → .osm). Keep the ODbL credit.
   wp import opendrive <file.xodr> --name N [--force]
                                ASAM OpenDRIVE → the same two files; drive side from the file's rule.
+  wp asset info <file.glb>     what the engine sees in a model: triangles, size, materials and roles
+  wp asset list                every model, its licence and the vehicles using it
+  wp credits                   the credits screen: asset credits and map attributions
   wp systems                   resolved system schedule
   wp plugins                   loaded plugins in load order
 
@@ -108,6 +111,28 @@ Check behaviour with `wp vehicle test <name>` (100 km/h tests are skipped for go
   turning_circle             diameter of the outer front wheel's path on full lock
 ";
 
+const DOCS_ASSETS: &str = "\
+Models: glTF 2.0 under assets/, e.g. assets/vehicles/hatchback.glb (Blender: File → Export → glTF 2.0,
+format .glb, +Y up). Each needs a licence file with the same stem (wp schema asset):
+
+  // assets/vehicles/hatchback.asset.ron
+  (source: \"Poly Haven\", author: \"A. Artist\", licence: CcBy4, credit: Some(\"Hatchback by A. Artist, CC BY 4.0\"))
+
+  licence: Own | Cc0 | CcBy3 | CcBy4 | Purchased(\"terms\")   CC BY needs `credit`; generated: true marks AI models
+  (background props only). `wp credits` prints the credits screen.
+
+Vehicles: model: Some(\"assets/vehicles/hatchback.glb\") in the .vehicle.ron. Origin on the ground midway
+between the axles, metres, sized to the vehicle (`body`); the engine draws the wheels. Material names set
+roles: paint… (drawn in the vehicle's colour: player red, traffic liveries), glass…, brake…/tail… (glow
+when braking), head… (headlamps); anything else keeps its colour. Textures are not drawn yet (M4).
+
+wp check: licence file present (WP-F003) and complete (WP-F004), model loads (WP-F001/F002), size and
+origin match the vehicle (WP-F006/F007), triangles within the [quality] tier's budget (WP-F008):
+player vehicle 40k / 80k / 150k, traffic 8k / 15k / 30k (low / mid / flagship).
+`wp asset info <file>` shows what the engine sees; `wp shot` shows how it looks.
+tools/models/vehicles.py builds the sandbox's low-poly models from code.
+";
+
 const DOCS_SCRIPTING: &str = "\
 Mission scripts: Lua (Luau, sandboxed). Set `script: Some(\"missions/route_1.lua\")` in a mission.
 `wp check` compiles every script (WP-L001 with the line); a runtime error fails the mission.
@@ -135,8 +160,9 @@ Luau extras over Lua 5.1: `+=`, `continue`, string interpolation, optional types
 
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
     let text = match topic {
-        None => "topics: cli, errors, errors/<CODE>, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        None => "topics: cli, errors, errors/<CODE>, assets, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
         Some("scripting") => DOCS_SCRIPTING.to_string(),
+        Some("assets") => DOCS_ASSETS.to_string(),
         Some("cli") => DOCS_CLI.to_string(),
         Some("scenario") => DOCS_SCENARIO.to_string(),
         Some("vehicle") => DOCS_VEHICLE.to_string(),
@@ -163,7 +189,7 @@ pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
             format!("{}: {}\n\nHow to fix: {}\n", e.code, e.title, e.fix)
         }
         Some(other) => {
-            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, scenario, vehicle"));
+            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, assets, scenario, scripting, vehicle"));
         }
     };
     if ctx.json {

@@ -13,6 +13,7 @@ wp_vehicle.workspace = true
 wp_world.workspace = true
 wp_road.workspace = true
 wp_traffic.workspace = true
+wp_asset.workspace = true
 wp_rhi.workspace = true
 glam.workspace = true
 bytemuck.workspace = true

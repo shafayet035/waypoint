@@ -8,6 +8,7 @@ pub mod drive;
 pub mod project;
 
 pub use wp_app as app;
+pub use wp_asset as asset;
 pub use wp_core as core;
 pub use wp_data as data;
 pub use wp_ecs as ecs;

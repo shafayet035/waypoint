@@ -69,7 +69,9 @@ impl DriveSpec {
                 Diagnostic::error("WP-C001", format!("scenario `{name}` is incomplete"))
                     .help("run `wp check`")
             })?;
-            let (app, player) = wp_test::prepare(&input, &make_app)?;
+            let (mut app, player) = wp_test::prepare(&input, &make_app)?;
+            app.world
+                .insert_resource(wp_asset::Models(project.models.clone()));
             return Ok(Drive {
                 app,
                 player,
@@ -133,6 +135,8 @@ impl DriveSpec {
         app.world
             .insert_reflected_resource("SimRng", SimRng::new(self.seed));
         wp_world::apply_scene(&mut app.world, scene, project.scene_roads(scene));
+        app.world
+            .insert_resource(wp_asset::Models(project.models.clone()));
         if let Some(tier) = self.quality {
             app.world.insert_resource(wp_world::Quality(tier));
         }

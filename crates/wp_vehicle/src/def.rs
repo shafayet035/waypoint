@@ -41,6 +41,12 @@ pub struct VehicleDef {
     /// A fifth wheel for towing a semi-trailer (tractor units).
     #[serde(default)]
     pub hitch: Option<HitchDef>,
+    /// Body model to draw (glTF `.glb`, a project path such as
+    /// `assets/vehicles/hatchback.glb`), origin on the ground midway between
+    /// the axles, sized to `body`. Wheels stay procedural. Without one the
+    /// body is drawn from boxes.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Where a semi-trailer's kingpin couples to this vehicle.
