@@ -207,7 +207,10 @@ the right for left-hand traffic, moving with roll and pitch; the cab shows a das
 night), a steering wheel that turns with the wheels, pillars and the roof edge. Look around: Q/E glance
 left/right, mouse drag to look anywhere; the view swings back when released (`ViewOptions.look`).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-WASM mod modules and per-mod capability permissions; traffic vehicles' sound.
+WASM mod modules and per-mod capability permissions.
+Traffic sound: `wp_audio::Mixer` mixes a voice per source to stereo (constant-power pan, fade in/out);
+`wp_platform::audio::sound_sources` gives the player's vehicle plus the 5 nearest within 60 m, quieter with
+distance and panned by direction (windows play it; `wp audio` mixes it to mono).
 Damage drives worse (`dynamics::Harm`): full power above 70 % health falling to 35 % when wrecked; a dent on a
 front corner pulls the steering towards it (about 1° per 30 cm).
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque

@@ -386,12 +386,12 @@ impl Handler {
         }
 
         if let Some(a) = &self.audio {
-            let sound = self
-                .session
-                .player
-                .and_then(|p| audio::sound_input(&self.session.app.world, p))
-                .filter(|_| !self.session.paused && !self.paused_by_suspend)
-                .unwrap_or_default();
+            let sound = match self.session.player {
+                Some(p) if !self.session.paused && !self.paused_by_suspend => {
+                    audio::sound_sources(&self.session.app.world, p)
+                }
+                _ => Vec::new(),
+            };
             a.set(sound);
         }
         let heading = self

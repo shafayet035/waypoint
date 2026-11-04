@@ -185,6 +185,86 @@ impl Voice {
     }
 }
 
+/// One sound in the scene: who makes it, what it is, and where it sits
+/// left to right for the listener (−1 left … 1 right).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Source {
+    /// Stable id (an entity), so each source keeps its own voice.
+    pub key: u64,
+    pub input: SoundInput,
+    pub pan: f32,
+}
+
+/// Mixes many vehicles into stereo. Each source keeps a [`Voice`] for as
+/// long as it is heard; a source that stops being listed fades out over
+/// one buffer and is dropped.
+#[derive(Clone, Debug)]
+pub struct Mixer {
+    sample_rate: u32,
+    voices: Vec<(u64, Voice, f32)>,
+    scratch: Vec<f32>,
+}
+
+impl Mixer {
+    pub fn new(sample_rate: u32) -> Mixer {
+        Mixer {
+            sample_rate,
+            voices: Vec::new(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Render `left.len()` frames of `sources` into `left` and `right`.
+    pub fn render(&mut self, sources: &[Source], left: &mut [f32], right: &mut [f32]) {
+        left.fill(0.0);
+        right.fill(0.0);
+        self.scratch.resize(left.len(), 0.0);
+        for src in sources {
+            if !self.voices.iter().any(|(k, _, _)| *k == src.key) {
+                self.voices
+                    .push((src.key, Voice::new(self.sample_rate), src.pan));
+            }
+        }
+        let mut gone = Vec::new();
+        for (i, (key, voice, pan)) in self.voices.iter_mut().enumerate() {
+            let (input, new_pan) = match sources.iter().find(|s| s.key == *key) {
+                Some(s) => (s.input, s.pan),
+                None => {
+                    gone.push(i);
+                    (
+                        SoundInput {
+                            volume: 0.0,
+                            ..voice.last
+                        },
+                        *pan,
+                    )
+                }
+            };
+            voice.render(&input, &mut self.scratch);
+            let n = left.len().max(1) as f32;
+            for (k, s) in self.scratch.iter().enumerate() {
+                let p = *pan + (new_pan - *pan) * (k as f32 + 1.0) / n;
+                // Constant-power pan.
+                let angle = (p.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+                left[k] += s * angle.cos();
+                right[k] += s * angle.sin();
+            }
+            *pan = new_pan;
+        }
+        for i in gone.into_iter().rev() {
+            self.voices.remove(i);
+        }
+        for s in left.iter_mut().chain(right.iter_mut()) {
+            *s = s.tanh();
+        }
+    }
+
+    /// Voices currently sounding.
+    pub fn voices(&self) -> usize {
+        self.voices.len()
+    }
+}
+
 /// 16-bit mono PCM WAV bytes.
 pub fn wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
@@ -304,5 +384,39 @@ mod tests {
         assert_eq!(&w[8..16], b"WAVEfmt ");
         assert_eq!(w.len(), 44 + 6);
         assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), 22_050);
+    }
+
+    #[test]
+    fn mixer_pans_and_fades_sources() {
+        let car = SoundInput {
+            rpm: 2000.0,
+            throttle: 0.5,
+            cylinders: 4,
+            volume: 0.8,
+            ..Default::default()
+        };
+        let mut m = Mixer::new(44_100);
+        let (mut l, mut r) = (vec![0.0; 4410], vec![0.0; 4410]);
+        let left_car = [Source {
+            key: 1,
+            input: car,
+            pan: -1.0,
+        }];
+        for _ in 0..3 {
+            m.render(&left_car, &mut l, &mut r);
+        }
+        let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+        assert!(
+            rms(&l) > 10.0 * rms(&r).max(1e-6),
+            "hard left: {} vs {}",
+            rms(&l),
+            rms(&r)
+        );
+        assert_eq!(m.voices(), 1);
+        // Gone from the list: one buffer to fade, then dropped.
+        m.render(&[], &mut l, &mut r);
+        assert_eq!(m.voices(), 0);
+        m.render(&[], &mut l, &mut r);
+        assert_eq!(rms(&l), 0.0);
     }
 }

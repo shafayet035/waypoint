@@ -432,16 +432,19 @@ pub fn audio(ctx: &Ctx, args: &AudioArgs) -> CmdResult {
         .unwrap_or(10.0);
     let ticks = app.time().ticks_for(seconds);
     let per_tick = RATE as usize / app.time().tick_hz as usize;
-    let mut voice = waypoint_audio::Voice::new(RATE);
+    let mut mixer = waypoint_audio::Mixer::new(RATE);
     let mut samples = Vec::with_capacity(ticks as usize * per_tick);
-    let mut buf = vec![0.0f32; per_tick];
+    let (mut left, mut right) = (vec![0.0f32; per_tick], vec![0.0f32; per_tick]);
     let mut peak_rpm = 0.0f32;
     for _ in 0..ticks {
         app.tick();
-        let input = wp_platform::audio::sound_input(&app.world, player).unwrap_or_default();
-        peak_rpm = peak_rpm.max(input.rpm);
-        voice.render(&input, &mut buf);
-        samples.extend_from_slice(&buf);
+        // The player's vehicle and the traffic around it, mixed to mono.
+        let sources = wp_platform::audio::sound_sources(&app.world, player);
+        if let Some(own) = sources.first() {
+            peak_rpm = peak_rpm.max(own.input.rpm);
+        }
+        mixer.render(&sources, &mut left, &mut right);
+        samples.extend(left.iter().zip(&right).map(|(l, r)| (l + r) * 0.5));
     }
     std::fs::write(&args.out, waypoint_audio::wav_bytes(&samples, RATE)).map_err(|e| {
         vec![Diagnostic::error(
