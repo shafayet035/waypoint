@@ -47,9 +47,38 @@ fn styled_light(x: f32) -> f32 {
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
-// The mesh's base colour texture (white when it has none).
+// The mesh's material maps (neutral when it has none): base colour (sRGB),
+// tangent-space normal, metallic-roughness (G roughness, B metallic),
+// emissive (sRGB), occlusion (R); strengths in mat_params.
+struct MaterialParams {
+    // x: normal strength (0 = none), y: occlusion strength, z: emissive from map (0/1).
+    params: vec4<f32>,
+};
 @group(1) @binding(0) var base_tex: texture_2d<f32>;
-@group(1) @binding(1) var base_sampler: sampler;
+@group(1) @binding(1) var normal_tex: texture_2d<f32>;
+@group(1) @binding(2) var mr_tex: texture_2d<f32>;
+@group(1) @binding(3) var emissive_tex: texture_2d<f32>;
+@group(1) @binding(4) var occlusion_tex: texture_2d<f32>;
+@group(1) @binding(5) var base_sampler: sampler;
+@group(1) @binding(6) var<uniform> mat: MaterialParams;
+
+// Normal mapping without stored tangents: build the tangent frame from
+// screen-space derivatives of position and texture coordinates.
+fn perturb_normal(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, map: vec3<f32>, strength: f32) -> vec3<f32> {
+    let dp1 = dpdx(p);
+    let dp2 = dpdy(p);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    // glTF normal maps point +Y up the image; texture v runs down it.
+    let b = -(dp2perp * duv1.y + dp1perp * duv2.y);
+    let scale = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-12));
+    let m = vec3<f32>((map.xy * 2.0 - 1.0) * strength, map.z * 2.0 - 1.0);
+    let bent = normalize(t * scale * m.x + b * scale * m.y + n * m.z);
+    return select(n, bent, strength > 0.0);
+}
 
 // Sun visibility from the shadow map, 0 (shadowed) to 1 (lit), with a 3×3
 // filter for soft edges. Outside the map, everything is lit; shadows fade
@@ -305,13 +334,18 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     // Sampled first, in uniform control flow.
     let albedo = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
-    let n = normalize(in.normal);
+    let normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
+    let mr = textureSample(mr_tex, base_sampler, in.uv);
+    let glow = textureSample(emissive_tex, base_sampler, in.uv).rgb;
+    let ao = mix(1.0, textureSample(occlusion_tex, base_sampler, in.uv).r, mat.params.y);
+    let n_geo = normalize(in.normal);
+    let n = perturb_normal(n_geo, in.rel, in.uv, normal_map, mat.params.x);
     let l = g.sun_dir.xyz;
     let v = normalize(-in.rel);
-    let rough = clamp(in.material.x, 0.02, 1.0);
-    let metal = clamp(in.material.y, 0.0, 1.0);
+    let rough = clamp(in.material.x * mr.g, 0.02, 1.0);
+    let metal = clamp(in.material.y * mr.b, 0.0, 1.0);
 
-    let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n));
+    let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n_geo));
     let h = normalize(l + v);
     let shininess = mix(512.0, 6.0, rough);
     var spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0;
@@ -324,13 +358,14 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
 
     let sun = g.sun_color.rgb * g.sun_dir.w;
-    let diffuse = albedo * (1.0 - metal) * (sun * ndl + ambient(n));
+    let diffuse = albedo * (1.0 - metal) * (sun * ndl + ambient(n) * ao);
     // Rough surfaces scatter the sky reflection away: fade it with roughness².
     let gloss = (1.0 - rough) * (1.0 - rough) * (1.0 - g.style.w) * select(1.0, 0.4, g.style.x > 0.5);
-    let env = sky_color(reflect(-v, n)) * fresnel * gloss;
+    let env = sky_color(reflect(-v, n)) * fresnel * gloss * ao;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
     col += local_lights(in.rel, n, v, albedo * (1.0 - metal), rough);
-    col += albedo * in.material.z;
+    // Glow: the emissive map's colour if there is one, else the surface's.
+    col += mix(albedo, glow, mat.params.z) * in.material.z;
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }

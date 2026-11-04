@@ -142,8 +142,9 @@ format .glb, +Y up). Each needs a licence file with the same stem (wp schema ass
 Vehicles: model: Some(\"assets/vehicles/hatchback.glb\") in the .vehicle.ron. Origin on the ground midway
 between the axles, metres, sized to the vehicle (`body`); the engine draws the wheels. Material names set
 roles: paint… (drawn in the vehicle's colour: player red, traffic liveries), glass…, brake…/tail… (glow
-when braking), head… (headlamps); anything else keeps its colour. Base colour textures (PNG/JPEG, with
-texture coordinates) are drawn, multiplied by the colour (a paint texture is tinted by the vehicle colour).
+when braking), head… (headlamps); anything else keeps its colour. Material maps (PNG/JPEG, TEXCOORD_0): base
+colour (multiplied by the colour; a paint texture is tinted by the vehicle colour), normal, metallic-roughness,
+emissive and occlusion. Phones keep textures up to the tier's size (1024/2048/4096 px).
 
 wp check: licence file present (WP-F003) and complete (WP-F004), model loads (WP-F001/F002), size and
 origin match the vehicle (WP-F006/F007), triangles within the [quality] tier's budget (WP-F008):

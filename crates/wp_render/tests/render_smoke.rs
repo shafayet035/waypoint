@@ -433,3 +433,119 @@ fn textured_models_show_their_texture() {
     assert!(tl.0 > 150 && tl.2 < 80, "top left should be red: {tl:?}");
     assert!(tr.2 > 150 && tr.0 < 80, "top right should be blue: {tr:?}");
 }
+
+/// One upright 4 m quad facing the camera, drawn with `material`.
+fn quad_frame(material: wp_asset::Material) -> wp_render::FrameView {
+    let corners = [
+        [0.0, 2.0, 0.0],
+        [0.0, 2.0, 4.0],
+        [0.0, -2.0, 4.0],
+        [0.0, -2.0, 0.0],
+    ];
+    let part = wp_asset::Part {
+        material,
+        positions: corners.to_vec(),
+        normals: vec![[-1.0, 0.0, 0.0]; 4],
+        uvs: vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+        indices: vec![0, 3, 2, 0, 2, 1],
+    };
+    let model = wp_asset::Model {
+        lods: vec![vec![part.clone()], vec![part.clone()]],
+        parts: vec![part],
+        min: glam::Vec3::new(0.0, -2.0, 0.0),
+        max: glam::Vec3::new(0.0, 2.0, 4.0),
+        triangles: 2,
+        textures: 1,
+        skipped: 0,
+    };
+    let app = world_with_car();
+    let mut frame = extract(&app.world, CameraMode::Chase);
+    frame.items.clear();
+    frame.shadows.clear();
+    frame.models = Some(std::sync::Arc::new(wp_asset::ModelLibrary::new([(
+        "quad.glb".to_string(),
+        std::sync::Arc::new(model),
+    )])));
+    frame.items.push(wp_render::DrawItem {
+        mesh: wp_render::MeshId::Model {
+            model: 0,
+            part: 0,
+            lod: 0,
+        },
+        transform: glam::Mat4::IDENTITY,
+        color: glam::Vec3::splat(0.08),
+        roughness: 0.9,
+        metallic: 0.0,
+        emissive: 0.0,
+    });
+    frame.camera = wp_render::Camera {
+        eye: glam::Vec3::new(-5.0, 0.0, 2.0),
+        target: glam::Vec3::new(0.0, 0.0, 2.0),
+        up: glam::Vec3::Z,
+        fov_y_deg: 55.0,
+    };
+    frame
+}
+
+fn solid(rgba: [u8; 4]) -> std::sync::Arc<wp_asset::Texture> {
+    std::sync::Arc::new(wp_asset::Texture {
+        width: 4,
+        height: 4,
+        rgba: rgba.repeat(16),
+    })
+}
+
+/// Normal, emissive and occlusion maps change the picture as they should.
+#[test]
+fn material_maps_shade_the_surface() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let (w, h) = (100, 100);
+    let centre = |frame: &wp_render::FrameView| {
+        let px = render_rgba(&gpu, frame, w, h).unwrap();
+        let i = ((50 * w + 50) * 4) as usize;
+        [px[i] as f32, px[i + 1] as f32, px[i + 2] as f32]
+    };
+    let grey = wp_asset::Material {
+        base_color: [0.5, 0.5, 0.5],
+        roughness: 0.9,
+        metallic: 0.0,
+        ..Default::default()
+    };
+    let plain = centre(&quad_frame(grey.clone()));
+
+    // Emissive map: glows in its own colour (green), not the surface's.
+    let mut f = quad_frame(wp_asset::Material {
+        emissive_texture: Some(solid([0, 255, 0, 255])),
+        ..grey.clone()
+    });
+    f.items[0].emissive = 2.0;
+    let glow = centre(&f);
+    assert!(
+        glow[1] > plain[1] + 40.0 && glow[1] > glow[0] + 40.0,
+        "green glow: {glow:?} vs {plain:?}"
+    );
+
+    // A normal map that tips every normal sideways changes the lighting.
+    let tipped = centre(&quad_frame(wp_asset::Material {
+        normal_texture: Some((solid([230, 128, 160, 255]), 1.0)),
+        ..grey.clone()
+    }));
+    let diff: f32 = tipped.iter().zip(&plain).map(|(a, b)| (a - b).abs()).sum();
+    assert!(diff > 10.0, "normal map ignored: {tipped:?} vs {plain:?}");
+
+    // Full occlusion darkens the ambient light.
+    let occluded = centre(&quad_frame(wp_asset::Material {
+        occlusion_texture: Some((solid([0, 0, 0, 255]), 1.0)),
+        ..grey
+    }));
+    assert!(
+        occluded[0] < plain[0] - 5.0,
+        "occlusion: {occluded:?} vs {plain:?}"
+    );
+}

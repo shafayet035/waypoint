@@ -137,39 +137,82 @@ struct GpuMesh {
     material: Option<std::sync::Arc<wgpu::BindGroup>>,
 }
 
-/// Base colour textures: one bind group per image (shared by every part
-/// that uses it), and a 1×1 white one for untextured meshes.
+/// Material textures. Each image is uploaded once (with mipmaps, capped to
+/// the tier's texture size) and shared; each material gets a bind group
+/// with its five maps and their strengths. Missing maps use neutral ones
+/// (white, a flat normal), so untextured meshes draw exactly as before.
 struct Textures {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The bind group for meshes without any maps.
     white: wgpu::BindGroup,
-    cache: Vec<(
+    white_srgb: std::sync::Arc<wgpu::TextureView>,
+    white_linear: std::sync::Arc<wgpu::TextureView>,
+    flat_normal: std::sync::Arc<wgpu::TextureView>,
+    /// Uploaded images: (image, sRGB?, view).
+    views: Vec<(
         std::sync::Arc<wp_asset::Texture>,
-        std::sync::Arc<wgpu::BindGroup>,
+        bool,
+        std::sync::Arc<wgpu::TextureView>,
     )>,
+    /// Material bind groups by their maps and strengths.
+    groups: Vec<(MaterialKey, std::sync::Arc<wgpu::BindGroup>)>,
+    /// Largest texture side kept (quality tier); bigger images are reduced.
+    max_size: u32,
+}
+
+/// What makes two materials' bind groups the same.
+#[derive(Clone, PartialEq)]
+struct MaterialKey {
+    maps: [usize; 5],
+    params: [u32; 4],
+}
+
+/// Per-material shader parameters (group 1, binding 6).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct MaterialParams {
+    /// x: normal strength (0 = no normal map), y: occlusion strength,
+    /// z: 1 when the emissive colour comes from a map, w: unused.
+    params: [f32; 4],
 }
 
 impl Textures {
     fn new(gpu: &Gpu) -> Textures {
+        let texture = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let layout = gpu
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("material"),
                 entries: &[
+                    texture(0),
+                    texture(1),
+                    texture(2),
+                    texture(3),
+                    texture(4),
                     wgpu::BindGroupLayoutEntry {
-                        binding: 0,
+                        binding: 5,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding: 1,
+                        binding: 6,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
                         count: None,
                     },
                 ],
@@ -184,27 +227,39 @@ impl Textures {
             anisotropy_clamp: 8,
             ..Default::default()
         });
-        let white_tex = wp_asset::Texture {
+        let pixel = |rgba: [u8; 4]| wp_asset::Texture {
             width: 1,
             height: 1,
-            rgba: vec![255; 4],
+            rgba: rgba.to_vec(),
         };
-        let white = Self::bind_group(gpu, &layout, &sampler, &white_tex);
+        let white_srgb = std::sync::Arc::new(Self::upload(gpu, &pixel([255; 4]), true, 1));
+        let white_linear = std::sync::Arc::new(Self::upload(gpu, &pixel([255; 4]), false, 1));
+        let flat_normal =
+            std::sync::Arc::new(Self::upload(gpu, &pixel([128, 128, 255, 255]), false, 1));
+        let views = [
+            &white_srgb,
+            &flat_normal,
+            &white_linear,
+            &white_srgb,
+            &white_linear,
+        ];
+        let white = Self::make_group(gpu, &layout, &sampler, views, [0.0; 4]);
         Textures {
             layout,
             sampler,
             white,
-            cache: Vec::new(),
+            white_srgb,
+            white_linear,
+            flat_normal,
+            views: Vec::new(),
+            groups: Vec::new(),
+            max_size: 4096,
         }
     }
 
-    fn bind_group(
-        gpu: &Gpu,
-        layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        t: &wp_asset::Texture,
-    ) -> wgpu::BindGroup {
-        // A full mip chain, box-filtered on the CPU.
+    /// Upload an image with a box-filtered mip chain, dropping levels
+    /// larger than `max_size`.
+    fn upload(gpu: &Gpu, t: &wp_asset::Texture, srgb: bool, max_size: u32) -> wgpu::TextureView {
         let mut levels = vec![(t.width.max(1), t.height.max(1), t.rgba.clone())];
         while let Some((w, h, px)) = levels.last().cloned()
             && (w > 1 || h > 1)
@@ -226,17 +281,27 @@ impl Textures {
             }
             levels.push((nw, nh, out));
         }
+        let first = levels
+            .iter()
+            .position(|(w, h, _)| *w.max(h) <= max_size.max(1))
+            .unwrap_or(levels.len() - 1);
+        let levels = &levels[first..];
+        let (w0, h0, _) = levels[0];
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("base colour"),
+            label: Some("material map"),
             size: wgpu::Extent3d {
-                width: t.width.max(1),
-                height: t.height.max(1),
+                width: w0,
+                height: h0,
                 depth_or_array_layers: 1,
             },
             mip_level_count: levels.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -261,42 +326,128 @@ impl Textures {
                 },
             );
         }
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn make_group(
+        gpu: &Gpu,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        views: [&std::sync::Arc<wgpu::TextureView>; 5],
+        params: [f32; 4],
+    ) -> wgpu::BindGroup {
+        let buffer = buffer_init(
+            gpu,
+            "material params",
+            bytemuck::bytes_of(&MaterialParams { params }),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let mut entries: Vec<wgpu::BindGroupEntry> = views
+            .iter()
+            .enumerate()
+            .map(|(i, v)| wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: wgpu::BindingResource::TextureView(v),
+            })
+            .collect();
+        entries.push(wgpu::BindGroupEntry {
+            binding: 5,
+            resource: wgpu::BindingResource::Sampler(sampler),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: 6,
+            resource: buffer.as_entire_binding(),
+        });
         gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
+            entries: &entries,
         })
     }
 
-    /// The bind group for an image, uploading it the first time.
-    fn get(
+    /// The view of an image, uploading it the first time.
+    fn view(
         &mut self,
         gpu: &Gpu,
         t: &std::sync::Arc<wp_asset::Texture>,
-    ) -> std::sync::Arc<wgpu::BindGroup> {
-        if let Some((_, g)) = self
-            .cache
+        srgb: bool,
+    ) -> std::sync::Arc<wgpu::TextureView> {
+        if let Some((_, _, v)) = self
+            .views
             .iter()
-            .find(|(k, _)| std::sync::Arc::ptr_eq(k, t))
+            .find(|(k, s, _)| std::sync::Arc::ptr_eq(k, t) && *s == srgb)
         {
-            return g.clone();
+            return v.clone();
         }
-        let g = std::sync::Arc::new(Self::bind_group(gpu, &self.layout, &self.sampler, t));
-        self.cache.push((t.clone(), g.clone()));
-        g
+        let v = std::sync::Arc::new(Self::upload(gpu, t, srgb, self.max_size));
+        self.views.push((t.clone(), srgb, v.clone()));
+        v
     }
 
-    /// A model part as a GPU mesh with its texture.
+    /// A material's bind group, or `None` when it has no maps at all.
+    fn group(
+        &mut self,
+        gpu: &Gpu,
+        m: &wp_asset::Material,
+    ) -> Option<std::sync::Arc<wgpu::BindGroup>> {
+        if m.base_color_texture.is_none()
+            && m.normal_texture.is_none()
+            && m.metallic_roughness_texture.is_none()
+            && m.emissive_texture.is_none()
+            && m.occlusion_texture.is_none()
+        {
+            return None;
+        }
+        let base = match &m.base_color_texture {
+            Some(t) => self.view(gpu, t, true),
+            None => self.white_srgb.clone(),
+        };
+        let normal = match &m.normal_texture {
+            Some((t, _)) => self.view(gpu, t, false),
+            None => self.flat_normal.clone(),
+        };
+        let mr = match &m.metallic_roughness_texture {
+            Some(t) => self.view(gpu, t, false),
+            None => self.white_linear.clone(),
+        };
+        let emissive = match &m.emissive_texture {
+            Some(t) => self.view(gpu, t, true),
+            None => self.white_srgb.clone(),
+        };
+        let occlusion = match &m.occlusion_texture {
+            Some((t, _)) => self.view(gpu, t, false),
+            None => self.white_linear.clone(),
+        };
+        let params = [
+            m.normal_texture.as_ref().map_or(0.0, |(_, s)| *s),
+            m.occlusion_texture.as_ref().map_or(0.0, |(_, s)| *s),
+            if m.emissive_texture.is_some() {
+                1.0
+            } else {
+                0.0
+            },
+            0.0,
+        ];
+        let views = [&base, &normal, &mr, &emissive, &occlusion];
+        let key = MaterialKey {
+            maps: views.map(|v| std::sync::Arc::as_ptr(v) as usize),
+            params: params.map(f32::to_bits),
+        };
+        if let Some((_, g)) = self.groups.iter().find(|(k, _)| *k == key) {
+            return Some(g.clone());
+        }
+        let g = std::sync::Arc::new(Self::make_group(
+            gpu,
+            &self.layout,
+            &self.sampler,
+            views,
+            params,
+        ));
+        self.groups.push((key, g.clone()));
+        Some(g)
+    }
+
+    /// A model part as a GPU mesh with its material.
     fn part_mesh(&mut self, gpu: &Gpu, p: &wp_asset::Part, label: &str) -> GpuMesh {
         let data = mesh::MeshData {
             vertices: p
@@ -313,11 +464,7 @@ impl Textures {
             indices: p.indices.clone(),
         };
         let mut m = GpuMesh::new(gpu, &data, label);
-        m.material = p
-            .material
-            .base_color_texture
-            .as_ref()
-            .map(|t| self.get(gpu, t));
+        m.material = self.group(gpu, &p.material);
         m
     }
 }
@@ -661,6 +808,13 @@ impl Renderer {
     pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
         self.max_height = max_height;
         self.apply_size(gpu);
+    }
+
+    /// Largest texture side kept on the GPU (quality tier); bigger images
+    /// are reduced to their largest mip that fits. Applies to images
+    /// uploaded after the call.
+    pub fn set_max_texture_size(&mut self, px: u32) {
+        self.textures.max_size = px.max(1);
     }
 
     /// How far models keep their detail (quality tier): 1 is the default.

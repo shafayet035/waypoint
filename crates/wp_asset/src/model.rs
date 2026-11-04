@@ -50,6 +50,14 @@ pub struct Material {
     pub emissive: f32,
     /// Base colour texture (sRGB), multiplied by `base_color`.
     pub base_color_texture: Option<std::sync::Arc<Texture>>,
+    /// Tangent-space normal map (linear) and its strength.
+    pub normal_texture: Option<(std::sync::Arc<Texture>, f32)>,
+    /// glTF metallic-roughness map (linear): G scales roughness, B metallic.
+    pub metallic_roughness_texture: Option<std::sync::Arc<Texture>>,
+    /// Emissive colour map (sRGB), times `emissive`.
+    pub emissive_texture: Option<std::sync::Arc<Texture>>,
+    /// Ambient occlusion map (linear, R) and its strength.
+    pub occlusion_texture: Option<(std::sync::Arc<Texture>, f32)>,
 }
 
 /// A decoded image: RGBA8, sRGB, rows top to bottom.
@@ -70,6 +78,10 @@ impl Default for Material {
             metallic: 1.0,
             emissive: 0.0,
             base_color_texture: None,
+            normal_texture: None,
+            metallic_roughness_texture: None,
+            emissive_texture: None,
+            occlusion_texture: None,
         }
     }
 }
@@ -283,10 +295,26 @@ impl Builder {
         let key = mat.index();
         if !self.parts.contains_key(&key) {
             let mut m = material(&mat);
-            m.base_color_texture = mat
-                .pbr_metallic_roughness()
+            let pbr = mat.pbr_metallic_roughness();
+            m.base_color_texture = pbr
                 .base_color_texture()
                 .and_then(|info| self.image(&info.texture().source(), buffers));
+            m.metallic_roughness_texture = pbr
+                .metallic_roughness_texture()
+                .and_then(|info| self.image(&info.texture().source(), buffers));
+            m.normal_texture = mat.normal_texture().and_then(|info| {
+                Some((self.image(&info.texture().source(), buffers)?, info.scale()))
+            });
+            m.emissive_texture = mat
+                .emissive_texture()
+                .and_then(|info| self.image(&info.texture().source(), buffers));
+            m.occlusion_texture = mat.occlusion_texture().and_then(|info| {
+                Some((
+                    self.image(&info.texture().source(), buffers)?,
+                    info.strength(),
+                ))
+            });
+
             self.parts.insert(
                 key,
                 Part {
@@ -354,7 +382,7 @@ fn material(mat: &gltf::Material) -> Material {
         roughness: pbr.roughness_factor(),
         metallic: pbr.metallic_factor(),
         emissive: e[0].max(e[1]).max(e[2]) * mat.emissive_strength().unwrap_or(1.0),
-        base_color_texture: None,
+        ..Material::default()
     }
 }
 
@@ -487,7 +515,7 @@ mod tests {
           "scenes": [{{"nodes": [0]}}], "scene": 0,
           "nodes": [{{"mesh": 0}}],
           "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "TEXCOORD_0": 1}}, "material": 0}}]}}],
-          "materials": [{{"name": "livery", "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}}}}}],
+          "materials": [{{"name": "livery", "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}, "metallicRoughnessTexture": {{"index": 0}}}}, "normalTexture": {{"index": 0, "scale": 0.5}}, "occlusionTexture": {{"index": 0, "strength": 0.7}}, "emissiveTexture": {{"index": 0}}}}],
           "textures": [{{"source": 0}}],
           "images": [{{"bufferView": 2, "mimeType": "image/png"}}],
           "accessors": [
@@ -516,6 +544,15 @@ mod tests {
         assert_eq!((t.width, t.height), (2, 2));
         assert_eq!(&t.rgba[0..4], &[255, 0, 0, 255]);
         assert_eq!(m.textures, 1);
+        let mat = &p.material;
+        assert_eq!(mat.normal_texture.as_ref().map(|(_, s)| *s), Some(0.5));
+        assert_eq!(mat.occlusion_texture.as_ref().map(|(_, s)| *s), Some(0.7));
+        assert!(mat.metallic_roughness_texture.is_some() && mat.emissive_texture.is_some());
+        // One image, decoded once and shared.
+        assert!(std::sync::Arc::ptr_eq(
+            t,
+            mat.emissive_texture.as_ref().unwrap()
+        ));
         // Levels of detail keep the coordinates.
         assert_eq!(m.lods[0][0].uvs.len(), m.lods[0][0].positions.len());
     }

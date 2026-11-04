@@ -166,9 +166,10 @@ brake…/head… get roles). `wp check`: WP-F001–F010 (licence, size, origin, 
 `tools/models/vehicles.py` (our own, CC0). Levels of detail: models load with two simpler copies (vertex
 clustering to ~50 % and ~25 % of the triangles, `wp_asset::simplify`); the renderer picks one per item from
 size ÷ distance × the tier's `lod_bias` (Low 0.6, Mid 1, Flagship 1.6). `wp asset build` checks every model
-and reports its levels against the tier budgets. Base colour textures (glTF PNG/JPEG, TEXCOORD_0) are drawn with
-CPU-built mipmaps, one bind group per image (group 1; white for untextured meshes). Not yet: normal,
-roughness and emissive maps; KTX2 packing.
+and reports its levels against the tier budgets. Materials: glTF base colour, normal (tangents from screen-space
+derivatives, no stored tangents), metallic-roughness, emissive and occlusion maps (PNG/JPEG, TEXCOORD_0), CPU-built
+mipmaps, one bind group per material (group 1; neutral maps for untextured meshes), each image uploaded once and
+capped to the tier's size (Low 1024, Mid 2048, Flagship 4096 px).
 Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
 Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn
@@ -224,4 +225,4 @@ Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the ha
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
 to 0 within 1 s with (FMVSS 126). Events `EscEngaged`/`EscReleased`; telemetry `tc_active`, `esc_active`.
-Not yet: testing on physical phones; running on an iOS simulator; normal/roughness maps and KTX2 packing.
+Not yet: testing on physical phones; running on an iOS simulator; GPU-compressed textures (ASTC/ETC2, KTX2).

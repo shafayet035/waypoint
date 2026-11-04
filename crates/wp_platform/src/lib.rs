@@ -277,6 +277,7 @@ impl Handler {
             renderer.set_shadows(&gpu, Some(wp_render::ShadowSettings { size, extent_m }));
             renderer.set_max_lights(q.max_lights());
             renderer.set_lod_bias(q.lod_bias());
+            renderer.set_max_texture_size(q.max_texture_px());
         }
         Ok(Gfx {
             window,

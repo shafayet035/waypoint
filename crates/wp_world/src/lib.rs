@@ -88,6 +88,14 @@ impl QualityTier {
             Self::Flagship => 900,
         }
     }
+    /// Largest texture side, px (the design's budget table).
+    pub fn max_texture_px(self) -> u32 {
+        match self {
+            Self::Low => 1024,
+            Self::Mid => 2048,
+            Self::Flagship => 4096,
+        }
+    }
     /// How far models keep full detail (multiplies the level-of-detail distances).
     pub fn lod_bias(self) -> f32 {
         match self {
