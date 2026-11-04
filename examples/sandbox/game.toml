@@ -3,6 +3,11 @@ name = "sandbox"
 version = "0.1.0"
 start_scene = "scenes/flat.scene.ron"
 
+[quality]
+# low, mid or flagship: render resolution cap (540/720/900 lines, upscaled),
+# traffic and pedestrian counts, rain density. `wp run --quality low` overrides.
+tier = "mid"
+
 [plugins]
 # Switch engine plugins off by name, e.g. disabled = ["vehicle"].
 disabled = []

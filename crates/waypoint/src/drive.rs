@@ -23,6 +23,9 @@ pub struct DriveSpec {
     pub trailer: Option<String>,
     /// Mission to play (its scene, vehicle and spawn unless given).
     pub mission: Option<String>,
+    /// Quality tier to run at (scales traffic and pedestrians); `None`
+    /// keeps the scene's numbers, as tests do.
+    pub quality: Option<wp_world::QualityTier>,
     /// Constant driver controls (ignored for scenarios, which have their own driver).
     pub input: VehicleInput,
     pub seed: u64,
@@ -130,6 +133,9 @@ impl DriveSpec {
         app.world
             .insert_reflected_resource("SimRng", SimRng::new(self.seed));
         wp_world::apply_scene(&mut app.world, scene, project.scene_roads(scene));
+        if let Some(tier) = self.quality {
+            app.world.insert_resource(wp_world::Quality(tier));
+        }
         if let Some(vehicles) = project.scene_vehicles(scene) {
             wp_traffic::setup(&mut app.world, scene, &vehicles);
         }

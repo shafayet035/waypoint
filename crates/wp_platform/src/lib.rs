@@ -32,6 +32,8 @@ pub struct WindowOptions {
     pub camera: CameraMode,
     /// Close automatically after this many real seconds (for smoke tests).
     pub exit_after_s: Option<f32>,
+    /// Render at most this tall and scale up (quality tier); `None`: full size.
+    pub max_height: Option<u32>,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -239,7 +241,8 @@ impl Handler {
             config.format = *srgb;
         }
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu, config.format, config.width, config.height);
+        let mut renderer = Renderer::new(&gpu, config.format, config.width, config.height);
+        renderer.set_max_height(&gpu, self.opts.max_height);
         Ok(Gfx {
             window,
             surface,

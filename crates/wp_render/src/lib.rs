@@ -22,6 +22,8 @@ use glam::Mat3;
 use wp_core::Diagnostic;
 use wp_rhi::{Gpu, OffscreenTarget, wgpu};
 
+mod upscale;
+
 pub const MSAA_SAMPLES: u32 = 4;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MAX_SHADOWS: usize = 16;
@@ -122,6 +124,12 @@ pub struct Renderer {
     road_instances: wgpu::Buffer,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
+    /// Window (output) size; `width`/`height` are the internal size.
+    out_width: u32,
+    out_height: u32,
+    /// Internal height cap (quality tier), and the upscaler when it applies.
+    max_height: Option<u32>,
+    upscaler: Option<upscale::Upscaler>,
 }
 
 impl Renderer {
@@ -295,6 +303,43 @@ impl Renderer {
             road_instances,
             msaa,
             depth,
+            out_width: width,
+            out_height: height,
+            max_height: None,
+            upscaler: None,
+        }
+    }
+
+    /// Cap the internal rendering height (quality tiers): taller windows
+    /// are drawn at this height and scaled up. `None` renders at full size.
+    pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
+        self.max_height = max_height;
+        self.apply_size(gpu);
+    }
+
+    /// The size frames are drawn at before any upscaling.
+    pub fn internal_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn apply_size(&mut self, gpu: &Gpu) {
+        let (w, h) = (self.out_width.max(1), self.out_height.max(1));
+        let (iw, ih) = match self.max_height {
+            Some(cap) if h > cap => (((w as u64 * cap as u64) / h as u64).max(1) as u32, cap),
+            _ => (w, h),
+        };
+        if (iw, ih) != (self.width, self.height) {
+            self.width = iw;
+            self.height = ih;
+            (self.msaa, self.depth) = Self::attachments(gpu, self.format, iw, ih);
+        }
+        if (iw, ih) == (w, h) {
+            self.upscaler = None;
+        } else {
+            match &mut self.upscaler {
+                Some(u) => u.resize(gpu, self.format, iw, ih),
+                None => self.upscaler = Some(upscale::Upscaler::new(gpu, self.format, iw, ih)),
+            }
         }
     }
 
@@ -335,15 +380,16 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
-        if (width, height) != (self.width, self.height) && width > 0 && height > 0 {
-            self.width = width;
-            self.height = height;
-            (self.msaa, self.depth) = Self::attachments(gpu, self.format, width, height);
+        if (width, height) != (self.out_width, self.out_height) && width > 0 && height > 0 {
+            self.out_width = width;
+            self.out_height = height;
+            self.apply_size(gpu);
         }
     }
 
+    /// The output (window) size.
     pub fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
+        (self.out_width, self.out_height)
     }
 
     /// Draw `frame` into `target` (same size and format as the renderer).
@@ -450,7 +496,10 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa,
                     depth_slice: None,
-                    resolve_target: Some(target),
+                    resolve_target: Some(match &self.upscaler {
+                        Some(u) => &u.view,
+                        None => target,
+                    }),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Discard,
@@ -509,6 +558,9 @@ impl Renderer {
                 pass.draw_indexed(0..mesh.index_count, 0, 0..count as u32);
                 first += count;
             }
+        }
+        if let Some(u) = &self.upscaler {
+            u.encode(&mut encoder, target);
         }
         gpu.queue.submit([encoder.finish()]);
     }

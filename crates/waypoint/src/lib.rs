@@ -58,6 +58,7 @@ pub fn start(
     let spec = drive::DriveSpec {
         scenario: scenario.map(str::to_string),
         seed,
+        quality: Some(project.game.value.quality.tier),
         ..Default::default()
     };
     spec.build(project).map(|d| (d.app, d.player))

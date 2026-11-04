@@ -56,6 +56,9 @@ pub struct RunArgs {
     /// Starting camera in a window: chase, top, side, showcase.
     #[arg(long, default_value = "chase")]
     camera: String,
+    /// Quality tier for the window: low, mid or flagship (default: game.toml's).
+    #[arg(long)]
+    quality: Option<String>,
     /// Close the window after this many real seconds (for smoke tests).
     #[arg(long)]
     exit_after: Option<f32>,
@@ -100,6 +103,7 @@ impl DriveArgs {
             vehicle: self.vehicle.clone(),
             trailer: self.trailer.clone(),
             mission: self.mission.clone(),
+            quality: None,
             input: VehicleInput {
                 throttle: self.throttle,
                 brake: self.brake,
@@ -126,11 +130,27 @@ fn camera_mode(name: &str) -> Result<CameraMode, Vec<Diagnostic>> {
 
 pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
     let project = load_project(ctx)?;
+    let tier = match args.quality.as_deref() {
+        None => project.game.value.quality.tier,
+        Some("low") => waypoint::world::QualityTier::Low,
+        Some("mid") => waypoint::world::QualityTier::Mid,
+        Some("flagship") => waypoint::world::QualityTier::Flagship,
+        Some(other) => {
+            return Err(cli_error(
+                format!("unknown quality tier `{other}`"),
+                "tiers: low, mid, flagship",
+            ));
+        }
+    };
+    let mut spec = args.drive.spec();
+    if !args.headless {
+        spec.quality = Some(tier);
+    }
     let Drive {
         mut app,
         player,
         label,
-    } = setup_drive(&project, &args.drive)?;
+    } = spec.build(&project).map_err(|d| vec![d])?;
 
     if !args.headless {
         let camera = camera_mode(&args.camera)?;
@@ -154,6 +174,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 camera,
                 exit_after_s: args.exit_after,
                 control,
+                max_height: Some(tier.max_height()),
             },
         )
         .map_err(|d| vec![d])?;

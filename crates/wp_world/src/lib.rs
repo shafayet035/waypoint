@@ -39,6 +39,60 @@ pub struct SceneDef {
     pub weather: Option<WeatherDef>,
 }
 
+/// How much detail the game runs with. Phones are grouped into three tiers
+/// (the design's table); the engine scales render resolution, traffic,
+/// pedestrians and effects to suit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityTier {
+    /// Older or budget phones: 30 fps target, upscaled from about 540p.
+    Low,
+    /// Mainstream phones: 60 fps, upscaled from about 720p.
+    #[default]
+    Mid,
+    /// Current flagships: 60 fps, upscaled from about 900p.
+    Flagship,
+}
+
+impl QualityTier {
+    /// Highest internal rendering height; taller screens are upscaled.
+    pub fn max_height(self) -> u32 {
+        match self {
+            Self::Low => 540,
+            Self::Mid => 720,
+            Self::Flagship => 900,
+        }
+    }
+    /// Multiplier on a scene's traffic count.
+    pub fn traffic_scale(self) -> f32 {
+        match self {
+            Self::Low => 0.6,
+            Self::Mid => 1.0,
+            Self::Flagship => 1.3,
+        }
+    }
+    /// Multiplier on a scene's pedestrian count.
+    pub fn pedestrian_scale(self) -> f32 {
+        match self {
+            Self::Low => 0.5,
+            Self::Mid => 1.0,
+            Self::Flagship => 1.5,
+        }
+    }
+    /// Multiplier on rain streaks drawn.
+    pub fn rain_density(self) -> f32 {
+        match self {
+            Self::Low => 0.5,
+            _ => 1.0,
+        }
+    }
+}
+
+/// The tier the app runs at (set by windows and the player; tests run
+/// without it, at the scene's own numbers).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Quality(pub QualityTier);
+
 /// A scene's weather.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

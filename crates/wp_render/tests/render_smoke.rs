@@ -65,3 +65,37 @@ fn renders_a_car() {
     }
     eprintln!("rendered on {:?}", gpu.info());
 }
+
+#[test]
+fn upscaled_frames_match_full_resolution() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let app = world_with_car();
+    let frame = extract(&app.world, CameraMode::Chase);
+    let (w, h) = (960, 540);
+    let full = render_rgba(&gpu, &frame, w, h).unwrap();
+    // The same frame drawn at 270 lines and scaled up.
+    let target = wp_rhi::OffscreenTarget::new(&gpu, w, h);
+    let mut r = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
+    r.set_max_height(&gpu, Some(270));
+    assert_eq!(r.internal_size(), (480, 270));
+    r.render(&gpu, &frame, &target.view);
+    let low = target.read_rgba(&gpu).unwrap();
+    assert_eq!(low.len(), full.len());
+    // Softer, but the same picture: small mean difference per channel.
+    let diff: f64 = full
+        .iter()
+        .zip(&low)
+        .map(|(a, b)| (*a as f64 - *b as f64).abs())
+        .sum::<f64>()
+        / full.len() as f64;
+    assert!(diff < 6.0, "mean difference {diff:.2} per channel");
+    if let Ok(dir) = std::env::var("WP_RENDER_OUT") {
+        wp_rhi::write_png(&Path::new(&dir).join("upscaled.png"), w, h, &low).unwrap();
+    }
+}

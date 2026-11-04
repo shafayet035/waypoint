@@ -174,7 +174,10 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         let t = world
             .get_resource::<wp_core::SimTime>()
             .map_or(0.0, |t| t.seconds()) as f32;
-        rain_items(&mut items, camera.eye, weather.rain, t);
+        let density = world
+            .get_resource::<wp_world::Quality>()
+            .map_or(1.0, |q| q.0.rain_density());
+        rain_items(&mut items, camera.eye, weather.rain * density, t);
     }
     FrameView {
         camera,

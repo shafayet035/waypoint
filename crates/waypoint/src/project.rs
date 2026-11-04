@@ -23,6 +23,17 @@ pub struct GameConfig {
     pub plugins: PluginsConfig,
     #[serde(default)]
     pub dev: DevConfig,
+    #[serde(default)]
+    pub quality: QualityConfig,
+}
+
+/// Quality settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QualityConfig {
+    /// low, mid or flagship (render resolution, traffic and effects).
+    #[serde(default)]
+    pub tier: wp_world::QualityTier,
 }
 
 /// Development-only settings. Leave empty in shipped games.

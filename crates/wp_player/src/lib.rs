@@ -44,6 +44,7 @@ pub fn play(
             camera: wp_render::CameraMode::Chase,
             exit_after_s,
             control,
+            max_height: Some(project.game.value.quality.tier.max_height()),
         },
     )
     .map_err(|d| vec![d])

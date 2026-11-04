@@ -148,7 +148,10 @@ can set `radius_m` so AI vehicles that fall out of range of the player are recyc
 maps: Gulshan, 25 cars within 250 m of a moving player).
 Weather: scene `weather: Some((rain, wetness))` → reflected `Weather` resource (live-editable); grip ×
 (1 − 0.3·wetness) via Ground; AI slows (speed × √grip, longer gaps, gentler); renderer: overcast sky,
-dark glossy wet asphalt, rain streaks. `car_brake_100_wet`: 57 m (dry 41 m). `town_traffic` gate: 12
+dark glossy wet asphalt, rain streaks. `car_brake_100_wet`: 57 m (dry 41 m).
+Quality tiers: game.toml `[quality] tier` (low/mid/flagship; `wp run --quality`). Windows and the player
+cap the internal render height (540/720/900) and upscale (`Renderer::set_max_height`, bilinear pass);
+traffic ×0.6/1/1.3, pedestrians ×0.5/1/1.5, rain ×0.5/1/1. Tests and `wp shot` run without a tier. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

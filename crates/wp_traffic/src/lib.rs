@@ -99,11 +99,21 @@ pub fn setup(world: &mut World, scene: &wp_world::SceneDef, vehicles: &[&Vehicle
             );
         }
     }
+    // The quality tier scales how many (if the app set one).
+    let tier = world.get_resource::<wp_world::Quality>().map(|q| q.0);
     if let Some(def) = &scene.traffic {
-        world.insert_resource(TrafficSetup { def: def.clone() });
+        let mut def = def.clone();
+        if let Some(t) = tier {
+            def.count = (def.count as f32 * t.traffic_scale()).round() as u32;
+        }
+        world.insert_resource(TrafficSetup { def });
     }
     if let Some(p) = &scene.pedestrians {
-        world.insert_resource(pedestrian::PedestrianSetup { count: p.count });
+        let count = match tier {
+            Some(t) => (p.count as f32 * t.pedestrian_scale()).round() as u32,
+            None => p.count,
+        };
+        world.insert_resource(pedestrian::PedestrianSetup { count });
     }
 }
 
