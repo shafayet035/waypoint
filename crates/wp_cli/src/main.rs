@@ -84,6 +84,17 @@ enum ImportCmd {
         #[arg(long)]
         force: bool,
     },
+    /// ASAM OpenDRIVE (.xodr) → roads/<name>.road.ron + scenes/<name>.scene.ron.
+    Opendrive {
+        /// The .xodr file.
+        file: PathBuf,
+        /// Name of the road network and scene.
+        #[arg(long)]
+        name: String,
+        /// Overwrite existing files.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -129,6 +140,9 @@ fn main() {
             lang,
             force,
         }) => commands::import_osm(&ctx, &file, &name, &drive_side, lang.as_deref(), force),
+        Cmd::Import(ImportCmd::Opendrive { file, name, force }) => {
+            commands::import_opendrive(&ctx, &file, &name, force)
+        }
         Cmd::Vehicle(VehicleCmd::Test { name, manoeuvre }) => {
             commands::vehicle_test(&ctx, &name, &manoeuvre)
         }

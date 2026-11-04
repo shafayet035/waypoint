@@ -22,6 +22,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp import osm <file.osm> --name N [--drive-side right|left] [--lang en] [--force]
                                OpenStreetMap → roads/N.road.ron + scenes/N.scene.ron (spawn \"start\");
                                export an area at openstreetmap.org (Export → .osm). Keep the ODbL credit.
+  wp import opendrive <file.xodr> --name N [--force]
+                               ASAM OpenDRIVE → the same two files; drive side from the file's rule.
   wp systems                   resolved system schedule
   wp plugins                   loaded plugins in load order
 

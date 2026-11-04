@@ -1,7 +1,9 @@
-//! `wp import osm`: turn OpenStreetMap data into a road network and a scene.
+//! `wp import osm` and `wp import opendrive`: turn map data into a road
+//! network and a scene. The importers are pure (`waypoint::road`); this
+//! module checks the project, places a spawn, writes the files and reports.
 
 use super::*;
-use waypoint::road::{DriveSide, LaneKind, RoadNetwork, osm};
+use waypoint::road::{DriveSide, RoadNetwork, RoadNetworkDef, opendrive, osm};
 
 pub fn import_osm(
     ctx: &Ctx,
@@ -21,6 +23,144 @@ pub fn import_osm(
             ));
         }
     };
+    let xml = read_source(
+        ctx,
+        file,
+        "export an area from openstreetmap.org (Export → .osm) or the Overpass API",
+    )?;
+    let (net, stats) = osm::import(&xml, name, side, lang).map_err(|e| {
+        import_error(
+            file,
+            e,
+            "the file must be OSM XML (.osm) with highway=* ways and their nodes",
+        )
+    })?;
+    let header = format!(
+        "// Imported from OpenStreetMap ({}) by `wp import osm`.\n\
+         // Map data © OpenStreetMap contributors, available under the Open Database\n\
+         // License (ODbL): https://www.openstreetmap.org/copyright\n\
+         // Origin (0, 0) = latitude {:.6}, longitude {:.6}; x = east, y = north, metres.\n",
+        file_name(file),
+        stats.origin.0,
+        stats.origin.1
+    );
+    let mut lines = vec![format!(
+        "imported {} of {} ways as {} roads ({} junctions), {:.0} × {:.0} m",
+        stats.drivable_ways,
+        stats.osm_ways,
+        stats.roads,
+        stats.junctions,
+        stats.extent_m.0,
+        stats.extent_m.1
+    )];
+    if !stats.clipped {
+        lines.push(
+            "the file has no <bounds>, so ways were not clipped: export from openstreetmap.org or add [bbox:...] to an Overpass query".into(),
+        );
+    }
+    let report = json!({
+        "osm_nodes": stats.osm_nodes,
+        "osm_ways": stats.osm_ways,
+        "drivable_ways": stats.drivable_ways,
+        "junctions": stats.junctions,
+        "clipped_to_bounds": stats.clipped,
+        "extent_m": [stats.extent_m.0, stats.extent_m.1],
+        "origin": { "lat": stats.origin.0, "lon": stats.origin.1 },
+    });
+    write_import(
+        ctx,
+        Imported {
+            net,
+            name,
+            force,
+            header,
+            report,
+            lines,
+            credit: Some(
+                "map data © OpenStreetMap contributors (ODbL); keep the attribution when you ship it",
+            ),
+        },
+    )
+}
+
+pub fn import_opendrive(ctx: &Ctx, file: &Path, name: &str, force: bool) -> CmdResult {
+    let xml = read_source(
+        ctx,
+        file,
+        "give an ASAM OpenDRIVE file (.xodr), as exported by RoadRunner, CARLA, esmini or similar tools",
+    )?;
+    let (net, stats) = opendrive::import(&xml, name).map_err(|e| {
+        import_error(
+            file,
+            e,
+            "the file must be ASAM OpenDRIVE (.xodr) with roads that have driving lanes",
+        )
+    })?;
+    let shifted = stats.shift != (0.0, 0.0);
+    let header = format!(
+        "// Imported from OpenDRIVE ({}) by `wp import opendrive`.\n\
+         // Keep the source file's licence and credit with the game.\n{}",
+        file_name(file),
+        if shifted {
+            format!(
+                "// Coordinates moved by ({:.2}, {:.2}) m to centre them on (0, 0).\n",
+                -stats.shift.0, -stats.shift.1
+            )
+        } else {
+            String::new()
+        }
+    );
+    let mut lines = vec![format!(
+        "imported {} of {} roads as {} ({} junctions; {} junction roads rebuilt by the engine, {} without driving lanes skipped), {:.0} × {:.0} m",
+        stats.roads_in_file - stats.connecting_roads - stats.skipped_roads,
+        stats.roads_in_file,
+        stats.roads,
+        stats.junctions_in_file,
+        stats.connecting_roads,
+        stats.skipped_roads,
+        stats.extent_m.0,
+        stats.extent_m.1
+    )];
+    lines.extend(stats.notes.iter().map(|n| format!("note: {n}")));
+    let report = json!({
+        "roads_in_file": stats.roads_in_file,
+        "junctions_in_file": stats.junctions_in_file,
+        "connecting_roads": stats.connecting_roads,
+        "skipped_roads": stats.skipped_roads,
+        "shift_m": [stats.shift.0, stats.shift.1],
+        "extent_m": [stats.extent_m.0, stats.extent_m.1],
+        "notes": stats.notes,
+    });
+    write_import(
+        ctx,
+        Imported {
+            net,
+            name,
+            force,
+            header,
+            report,
+            lines,
+            credit: None,
+        },
+    )
+}
+
+/// An importer's result, ready to write.
+struct Imported<'a> {
+    net: RoadNetworkDef,
+    name: &'a str,
+    force: bool,
+    /// Comment lines at the top of both files (source, licence, origin).
+    header: String,
+    /// Importer-specific fields for `--json`.
+    report: serde_json::Value,
+    /// Importer-specific lines for the text report.
+    lines: Vec<String>,
+    /// A credit line to print last, if the data needs one.
+    credit: Option<&'static str>,
+}
+
+fn read_source(ctx: &Ctx, file: &Path, help: &str) -> Result<String, Vec<Diagnostic>> {
     if !ctx.project.join("game.toml").exists() {
         return Err(vec![
             Diagnostic::error(
@@ -30,41 +170,45 @@ pub fn import_osm(
             .help("pass --project <dir>, or create one with `wp new <name>`"),
         ]);
     }
-    let xml = std::fs::read_to_string(file).map_err(|e| {
+    std::fs::read_to_string(file).map_err(|e| {
         vec![
-            Diagnostic::error("WP-D001", format!("cannot read {}: {e}", file.display()))
-                .help("export an area from openstreetmap.org (Export → .osm) or the Overpass API"),
+            Diagnostic::error("WP-D001", format!("cannot read {}: {e}", file.display())).help(help),
         ]
-    })?;
-    let (net, stats) = osm::import(&xml, name, side, lang).map_err(|e| {
-        vec![
-            Diagnostic::error("WP-I001", format!("cannot import {}: {e}", file.display()))
-                .help("the file must be OSM XML (.osm) with highway=* ways and their nodes"),
-        ]
-    })?;
+    })
+}
 
-    // A spawn point halfway along the longest lane from which the most of
-    // the map can be reached (edges of the data are often dead ends).
+fn import_error(file: &Path, e: String, help: &str) -> Vec<Diagnostic> {
+    vec![Diagnostic::error("WP-I001", format!("cannot import {}: {e}", file.display())).help(help)]
+}
+
+fn file_name(file: &Path) -> String {
+    file.file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Place a spawn, write `roads/<name>.road.ron` and `scenes/<name>.scene.ron`,
+/// check the project and report.
+fn write_import(ctx: &Ctx, imp: Imported) -> CmdResult {
+    let Imported {
+        net,
+        name,
+        force,
+        header,
+        mut report,
+        lines,
+        credit,
+    } = imp;
+    // A spawn point halfway along a long lane from which the most of the
+    // map can be reached (edges of the data are often dead ends).
     let built = RoadNetwork::build(&net);
-    let connected = built.largest_connected();
-    let connected_roads: std::collections::BTreeSet<usize> = connected
-        .iter()
-        .filter_map(|&l| match built.lanes[l].kind {
-            LaneKind::Road { road, .. } => Some(road),
-            LaneKind::Connector { .. } => None,
-        })
-        .collect();
-    let lane = connected
-        .iter()
-        .map(|&l| &built.lanes[l])
-        .filter(|l| matches!(l.kind, LaneKind::Road { .. }))
-        .max_by(|a, b| a.path.length().total_cmp(&b.path.length()))
-        .ok_or_else(|| {
-            vec![
-                Diagnostic::error("WP-I001", "the imported roads have no lanes")
-                    .help("pick a larger area with at least one drivable street"),
-            ]
-        })?;
+    let (lane, reachable_roads) = built.best_start(64).ok_or_else(|| {
+        vec![
+            Diagnostic::error("WP-I001", "the imported roads have no lanes")
+                .help("pick a larger area with at least one drivable road"),
+        ]
+    })?;
+    let lane = &built.lanes[lane];
     let (pos, dir) = lane.path.sample(lane.path.length() / 2.0);
     let heading = dir.y.atan2(dir.x).to_degrees();
 
@@ -78,17 +222,6 @@ pub fn import_osm(
             ));
         }
     }
-    let source = file
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let header = format!(
-        "// Imported from OpenStreetMap ({source}) by `wp import osm`.\n\
-         // Map data © OpenStreetMap contributors, available under the Open Database\n\
-         // License (ODbL): https://www.openstreetmap.org/copyright\n\
-         // Origin (0, 0) = latitude {:.6}, longitude {:.6}; x = east, y = north, metres.\n",
-        stats.origin.0, stats.origin.1
-    );
     let roads_ron = format!(
         "{header}{}\n",
         waypoint::data::to_ron(&net).map_err(|d| vec![d])?
@@ -118,50 +251,36 @@ pub fn import_osm(
     }
 
     if ctx.json {
-        print_json(&json!({
+        let common = json!({
             "ok": true,
             "roads_file": roads_rel,
             "scene_file": scene_rel,
-            "osm_nodes": stats.osm_nodes,
-            "osm_ways": stats.osm_ways,
-            "drivable_ways": stats.drivable_ways,
-            "roads": stats.roads,
-            "junctions": stats.junctions,
+            "drive_side": format!("{:?}", net.drive_side),
+            "roads": net.roads.len(),
             "lanes": built.lanes.len(),
-            "connected_roads": connected_roads.len(),
-            "clipped_to_bounds": stats.clipped,
-            "extent_m": [stats.extent_m.0, stats.extent_m.1],
-            "origin": { "lat": stats.origin.0, "lon": stats.origin.1 },
+            "reachable_roads": reachable_roads.len(),
             "spawn": { "lane": lane.name, "position": [pos.x, pos.y], "heading_deg": heading },
-        }));
-    } else {
-        println!(
-            "imported {} of {} ways as {} roads ({} junctions, {} lanes), {:.0} × {:.0} m",
-            stats.drivable_ways,
-            stats.osm_ways,
-            stats.roads,
-            stats.junctions,
-            built.lanes.len(),
-            stats.extent_m.0,
-            stats.extent_m.1
-        );
-        println!(
-            "{} of {} roads are connected (routable from the spawn); the rest are dead ends or isolated",
-            connected_roads.len(),
-            stats.roads
-        );
-        if !stats.clipped {
-            println!(
-                "the file has no <bounds>, so ways were not clipped: export from openstreetmap.org or add [bbox:...] to an Overpass query"
-            );
+        });
+        if let (Some(r), Some(c)) = (report.as_object_mut(), common.as_object()) {
+            r.extend(c.clone());
         }
+        print_json(&report);
+    } else {
+        for l in &lines {
+            println!("{l}");
+        }
+        println!(
+            "{} of {} roads can be reached from the spawn (one-way streets and dead ends limit the rest)",
+            reachable_roads.len(),
+            net.roads.len()
+        );
         println!(
             "wrote {roads_rel} and {scene_rel} (spawn \"start\" on lane {})",
             lane.name
         );
-        println!(
-            "map data © OpenStreetMap contributors (ODbL); keep the attribution when you ship it"
-        );
+        if let Some(c) = credit {
+            println!("{c}");
+        }
     }
     Ok(0)
 }

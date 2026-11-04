@@ -14,6 +14,7 @@ pub mod def;
 pub mod geometry;
 pub mod mesh;
 pub mod network;
+pub mod opendrive;
 pub mod osm;
 
 pub use def::{DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape};

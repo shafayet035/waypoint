@@ -369,7 +369,7 @@ fn import_osm_then_drive_a_route() {
         "each street splits at the two crossings inside it"
     );
     assert_eq!(
-        v["connected_roads"], 12,
+        v["reachable_roads"], 12,
         "a grid of two-way streets is fully connected"
     );
     let roads = std::fs::read_to_string(game.join("roads/grid.road.ron")).unwrap();
@@ -406,6 +406,53 @@ fn import_osm_then_drive_a_route() {
     let (code, v) = json(
         &game,
         &["import", "osm", empty.to_str().unwrap(), "--name", "x"],
+    );
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-I001");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn import_opendrive_then_drive_a_route() {
+    let dir = temp_dir("xodr");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    let xodr = repo().join("crates/wp_road/tests/data/crossing.xodr");
+    let xodr = xodr.to_str().unwrap();
+    let (code, v) = json(&game, &["import", "opendrive", xodr, "--name", "cross"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["roads_in_file"], 4);
+    assert_eq!(
+        v["connecting_roads"], 1,
+        "junction roads are rebuilt by the engine"
+    );
+    assert_eq!(v["roads"], 4, "road 2 splits where it gains a lane");
+    assert_eq!(v["drive_side"], "Right");
+    // Every road can be reached from the spawn (its own road counts).
+    assert_eq!(v["reachable_roads"], 4, "{v}");
+    let spawn_lane = v["spawn"]["lane"].as_str().unwrap().to_string();
+    let target = ["r1", "r2_1", "r3"]
+        .into_iter()
+        .find(|r| !spawn_lane.starts_with(&format!("{r}:")))
+        .unwrap();
+    std::fs::write(
+        game.join("tests/cross_route.scenario.ron"),
+        format!(
+            r#"(scene: "scenes/cross.scene.ron", seed: 1,
+  player: (vehicle: "hatchback", spawn: "start", driver: FollowRoute(to_road: "{target}", kmh: 30.0)),
+  duration_s: 120.0, assert: [RouteFollowed(max_offset_m: 0.8), NoNaN])"#
+        ),
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["test", "cross_route"]);
+    assert_eq!(code, 0, "{v}");
+
+    // Not OpenDRIVE: a coded import error.
+    let osm = dir.join("x.osm");
+    std::fs::write(&osm, "<osm></osm>").unwrap();
+    let (code, v) = json(
+        &game,
+        &["import", "opendrive", osm.to_str().unwrap(), "--name", "x"],
     );
     assert_eq!(code, 1);
     assert_eq!(v["diagnostics"][0]["code"], "WP-I001");

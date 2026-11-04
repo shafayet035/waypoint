@@ -12,7 +12,7 @@ mod test;
 pub use docs::docs;
 pub(crate) use drive::make_session;
 pub use drive::{DriveArgs, RunArgs, ServeArgs, ShotArgs, run, serve, shot};
-pub use import::import_osm;
+pub use import::{import_opendrive, import_osm};
 pub use info::{plugins, systems};
 pub use new::new;
 pub use project::{check, schema};

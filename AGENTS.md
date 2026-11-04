@@ -13,6 +13,7 @@ cargo run -p wp_cli -- --project examples/sandbox vehicle test hatchback
 cargo run -p wp_cli -- --project examples/sandbox shot --scenario skidpad --at 10s --camera showcase
 cargo run -p wp_cli -- --project examples/sandbox run      # opens a window; W/S/A/D to drive
 cargo run -p wp_cli -- --project <game> import osm map.osm --name town --drive-side left
+cargo run -p wp_cli -- --project <game> import opendrive map.xodr --name town
 ```
 
 To see what a scenario looks like at a moment, use `wp shot` and open the PNG.
@@ -101,7 +102,11 @@ lane centre). Routes change lanes (smooth blends on roads ≥ 30 m); junction co
 geometrically with 6 m kerb returns. `wp import osm` turns OpenStreetMap data into a road network
 and scene (clipped to the export bounds, one-way carriageways centred, left/right traffic); on a
 real Dhaka export, routes to 127 of 145 roads drive within 0.8 m of the lane centre (the rest are dead
-ends at the map edge). Still to do in M2: OpenDRIVE import; lane-drop tapers.
+ends at the map edge). `wp import opendrive` reads ASAM OpenDRIVE: exact line/arc/spiral/poly3/
+paramPoly3 reference lines, lane offsets, one road per lane section (lane counts can change), sidewalks,
+speed limits and LHT/RHT; junctions become nodes whose paths the engine rebuilds (straight-on lanes
+match by sideways position, so slip roads merge into the outer lane). On esmini's sample maps every
+reachable road drives within 0.8 m of the lane centre. Still to do in M2: lane-drop tapers.
 Driver aids (`wp_vehicle::assist`) sit between keys or thumbs and the car: brakes bite at 12 % and
 build to full in about 0.9 s, steering lock shrinks with speed (about 10° at 60 km/h), and counter-steer
 catches slides past 4° of sideslip. The window's input and the `Keyboard` scenario driver both use them;

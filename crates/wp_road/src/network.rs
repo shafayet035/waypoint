@@ -305,9 +305,36 @@ impl RoadNetwork {
                     // Where only two roads meet the road simply continues
                     // (a bend, not a junction): every lane flows on.
                     let continuation = ends.len() == 2;
+                    // Where a road just continues (a bend, a lane drop), lane i
+                    // flows into lane i. Straight on through a junction, each
+                    // lane flows into the lane ahead at the same sideways
+                    // position: lane for lane across a crossing, and into the
+                    // outer lane where a slip road merges.
+                    let in_line = || {
+                        let end = lanes[inn].path.points.last().copied().unwrap_or(p);
+                        let normal = Vec2::new(-t_out.y, t_out.x);
+                        let side = |q: Vec2| (q - p).dot(normal);
+                        leaving
+                            .iter()
+                            .copied()
+                            .filter(|&o| {
+                                matches!(lanes[o].kind, LaneKind::Road { road, .. } if road == r_out)
+                            })
+                            .min_by(|&a, &b| {
+                                let d = |l: LaneId| {
+                                    lanes[l]
+                                        .path
+                                        .points
+                                        .first()
+                                        .map_or(f32::MAX, |&q| (side(q) - side(end)).abs())
+                                };
+                                d(a).total_cmp(&d(b)).then(a.cmp(&b))
+                            })
+                            == Some(out)
+                    };
                     let allowed = match turn {
                         _ if continuation => i_out == i_in.min(n_out - 1),
-                        Turn::Straight => i_out == i_in.min(n_out - 1),
+                        Turn::Straight => in_line(),
                         t if t == across => i_in == 0 && i_out == 0,
                         t if t == away => i_in == n_in - 1 && i_out == n_out - 1,
                         _ => false,
@@ -434,6 +461,54 @@ impl RoadNetwork {
             }
         }
         None
+    }
+
+    /// Every lane reachable from `from` (following junctions and lane changes).
+    pub fn reachable(&self, from: LaneId) -> Vec<bool> {
+        let mut seen = vec![false; self.lanes.len()];
+        let mut stack = vec![from];
+        while let Some(l) = stack.pop() {
+            if std::mem::replace(&mut seen[l], true) {
+                continue;
+            }
+            stack.extend(self.lanes[l].next.iter().chain(&self.lanes[l].changes));
+        }
+        seen
+    }
+
+    /// A good place to start driving: the road lane from which the most roads
+    /// can be reached (ties go to the longer lane), searching the `candidates`
+    /// longest lanes. Returns the lane and the roads reachable from it.
+    pub fn best_start(&self, candidates: usize) -> Option<(LaneId, Vec<usize>)> {
+        let mut lanes: Vec<LaneId> = (0..self.lanes.len())
+            .filter(|&l| matches!(self.lanes[l].kind, LaneKind::Road { .. }))
+            .collect();
+        lanes.sort_by(|&a, &b| {
+            self.lanes[b]
+                .path
+                .length()
+                .total_cmp(&self.lanes[a].path.length())
+                .then(a.cmp(&b))
+        });
+        let mut best: Option<(LaneId, Vec<usize>)> = None;
+        for &l in lanes.iter().take(candidates) {
+            let seen = self.reachable(l);
+            let mut roads: Vec<usize> = seen
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| **s)
+                .filter_map(|(i, _)| match self.lanes[i].kind {
+                    LaneKind::Road { road, .. } => Some(road),
+                    LaneKind::Connector { .. } => None,
+                })
+                .collect();
+            roads.sort_unstable();
+            roads.dedup();
+            if best.as_ref().is_none_or(|b| roads.len() > b.1.len()) {
+                best = Some((l, roads));
+            }
+        }
+        best
     }
 
     /// The largest set of lanes that can all reach each other (the largest

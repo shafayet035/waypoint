@@ -32,6 +32,9 @@ scene with a spawn point on the connected part of the network. Map data © OpenS
 contributors, under the [ODbL](https://www.openstreetmap.org/copyright); the attribution is kept in
 the generated files and must ship with your game.
 
+OpenDRIVE maps (`.xodr`, from RoadRunner, CARLA, esmini and other tools) import the same way:
+`wp import opendrive map.xodr --name town`. Keep the source file's licence and credit with the game.
+
 ## Use it from Claude Code (MCP)
 
 ```sh
@@ -76,7 +79,7 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   control protocol and MCP server; the player app builds for Android and iOS.
 - **M1 (realistic drive):** suspension, rollover, ABS, air brakes, a city bus, and ECE R13 braking tests.
 - **M2 (in progress):** semi-trailers and reverse docking, road networks with routing and lane
-  changes, and OpenStreetMap import. Next: OpenDRIVE import.
+  changes, OpenStreetMap and OpenDRIVE import. Next: lane-drop tapers, then M3 (traffic and assets).
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 
