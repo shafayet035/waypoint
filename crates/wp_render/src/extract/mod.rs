@@ -63,6 +63,8 @@ pub struct FrameView {
     pub shadows: Vec<BlobShadow>,
     /// The scene's road network; the renderer builds and caches its meshes.
     pub roads: Option<std::sync::Arc<wp_road::RoadNetwork>>,
+    /// How wet the road is, 0–1 (darker, glossier asphalt).
+    pub wetness: f32,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -164,11 +166,59 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         }
         None => mode.camera(&Pose::default(), 4.2),
     };
+    let weather = world
+        .get_resource::<wp_world::Weather>()
+        .map(|w| *w)
+        .unwrap_or_default();
+    if weather.rain > 0.01 {
+        let t = world
+            .get_resource::<wp_core::SimTime>()
+            .map_or(0.0, |t| t.seconds()) as f32;
+        rain_items(&mut items, camera.eye, weather.rain, t);
+    }
     FrameView {
         camera,
-        environment: Environment::default(),
+        environment: Environment::default().with_rain(weather.rain),
         items,
         shadows,
         roads: world.get_resource::<wp_world::Roads>().map(|r| r.0.clone()),
+        wetness: weather.wetness,
+    }
+}
+
+/// Falling rain: thin bright streaks in a cylinder round the camera, up to
+/// 900 in a downpour. Positions come from a hash of the streak's number, so
+/// frames are deterministic.
+fn rain_items(items: &mut Vec<DrawItem>, eye: Vec3, rain: f32, t: f32) {
+    const HEIGHT: f32 = 14.0;
+    const FALL_M_S: f32 = 9.0;
+    let count = (900.0 * rain) as u32;
+    let hash = |i: u32, k: u32| {
+        let mut x = i.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2C1B_3C6D);
+        x ^= x >> 12;
+        (x & 0xFFFF) as f32 / 65535.0
+    };
+    for i in 0..count {
+        let angle = hash(i, 1) * std::f32::consts::TAU;
+        let r = 1.5 + 24.0 * hash(i, 2).sqrt();
+        let fall = (hash(i, 3) * HEIGHT - t * FALL_M_S).rem_euclid(HEIGHT);
+        let p = Vec3::new(
+            eye.x + angle.cos() * r,
+            eye.y + angle.sin() * r,
+            eye.z - 6.0 + fall,
+        );
+        if p.z < 0.0 {
+            continue;
+        }
+        items.push(DrawItem {
+            mesh: MeshId::Cube,
+            transform: Mat4::from_translation(p) * Mat4::from_scale(Vec3::new(0.012, 0.012, 0.5)),
+            color: Vec3::new(0.62, 0.66, 0.72),
+            roughness: 0.2,
+            metallic: 0.0,
+            emissive: 0.25,
+        });
     }
 }

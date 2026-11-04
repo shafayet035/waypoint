@@ -64,6 +64,22 @@ impl Default for Environment {
     }
 }
 
+impl Environment {
+    /// The same light under rain `r` (0–1): overcast sky, weaker sun, haze.
+    pub fn with_rain(mut self, r: f32) -> Self {
+        let r = r.clamp(0.0, 1.0);
+        let grey_zenith = Vec3::new(0.36, 0.39, 0.44);
+        let grey_horizon = Vec3::new(0.55, 0.57, 0.6);
+        self.sky_zenith = self.sky_zenith.lerp(grey_zenith, r * 0.9);
+        self.sky_horizon = self.sky_horizon.lerp(grey_horizon, r * 0.9);
+        self.sun_intensity *= 1.0 - 0.75 * r;
+        self.sun_color = self.sun_color.lerp(Vec3::new(0.85, 0.88, 0.92), r);
+        self.fog_density *= 1.0 + 3.0 * r;
+        self.exposure *= 1.0 + 0.35 * r;
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CameraMode {

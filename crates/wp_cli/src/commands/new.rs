@@ -126,6 +126,18 @@ const TEMPLATE_SANDBOX: &[(&str, &str)] = &[
         include_str!("../../../../examples/sandbox/tests/bus_route.scenario.ron"),
     ),
     (
+        "scenes/flat_wet.scene.ron",
+        include_str!("../../../../examples/sandbox/scenes/flat_wet.scene.ron"),
+    ),
+    (
+        "tests/car_brake_100_wet.scenario.ron",
+        include_str!("../../../../examples/sandbox/tests/car_brake_100_wet.scenario.ron"),
+    ),
+    (
+        "scenes/town_rain.scene.ron",
+        include_str!("../../../../examples/sandbox/scenes/town_rain.scene.ron"),
+    ),
+    (
         "tests/keyboard_slalom.scenario.ron",
         include_str!("../../../../examples/sandbox/tests/keyboard_slalom.scenario.ron"),
     ),

@@ -186,6 +186,8 @@ struct Itinerary {
 /// Traffic's own state between ticks (not part of snapshots).
 struct TrafficState {
     rng: SimRng,
+    /// Road grip now (1 dry, 0.7 soaked), for driving to the conditions.
+    grip: f32,
     /// Keep traffic this close to the player, m (None: everywhere).
     radius: Option<f32>,
     /// Vehicles moved back near the player after falling out of range.
@@ -261,6 +263,7 @@ fn traffic(world: &mut World) {
         let kept = world.remove_resource::<TrafficState>();
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
+            grip: 1.0,
             radius: setup.radius_m,
             recycled: 0,
             target: setup.count,
@@ -296,6 +299,10 @@ fn traffic(world: &mut World) {
 
     let bodies = bodies(world);
     let now = world.resource::<wp_core::SimTime>().seconds();
+    let grip = world
+        .get_resource::<wp_world::Weather>()
+        .map_or(1.0, |w| w.grip());
+    world.resource_mut::<TrafficState>().grip = grip;
     let approaching = if roads
         .junctions
         .iter()
@@ -503,6 +510,7 @@ pub fn autopilot(world: &mut World, e: Entity, stops: Vec<Waypoint>) -> bool {
             .map_or(0, |mut r| r.next_u64());
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
+            grip: 1.0,
             radius: None,
             recycled: 0,
             target: 0,
@@ -724,12 +732,17 @@ fn drive(
     };
     // Heavy vehicles corner and brake gently (standing passengers, high
     // centre of gravity, air brakes).
-    let idm = idm_for(def);
-    let lateral = if heavy(def) { 1.8 } else { 2.5 };
+    // Drive to the conditions: on a wet road, slower (cornering speed goes
+    // with the square root of grip), gentler and further apart.
+    let grip = state.grip;
+    let mut idm = idm_for(def);
+    idm.decel *= grip;
+    idm.headway_s += (1.0 - grip) * 2.0;
+    let lateral = if heavy(def) { 1.8 } else { 2.5 } * grip;
     let v0 = route_speed_kmh_with(
         &path,
         s,
-        v0 * 3.6 * pace,
+        v0 * 3.6 * pace * grip.sqrt(),
         to_stop,
         lateral,
         1.0,

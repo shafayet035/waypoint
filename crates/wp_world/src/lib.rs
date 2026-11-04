@@ -34,6 +34,40 @@ pub struct SceneDef {
     /// People walking the sidewalks (roads need `sidewalk_m` > 0).
     #[serde(default)]
     pub pedestrians: Option<PedestrianDef>,
+    /// Rain. Wet roads have less grip; drivers slow down.
+    #[serde(default)]
+    pub weather: Option<WeatherDef>,
+}
+
+/// A scene's weather.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WeatherDef {
+    /// How hard it rains, 0 (dry) to 1 (downpour).
+    #[serde(default)]
+    pub rain: f32,
+    /// How wet the road is, 0 to 1; defaults to `rain`.
+    #[serde(default)]
+    pub wetness: Option<f32>,
+}
+
+/// The weather now (`world.set` on "Weather" changes it live).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Weather {
+    /// 0 (dry) to 1 (downpour).
+    pub rain: f32,
+    /// How wet the road is, 0 to 1.
+    pub wetness: f32,
+    /// The scene's dry-road grip, which wetness scales.
+    pub dry_friction: f32,
+}
+
+impl Weather {
+    /// Grip multiplier on a road this wet: 1.0 dry, 0.7 soaked (typical
+    /// asphalt goes from μ ≈ 1.0 to ≈ 0.7).
+    pub fn grip(&self) -> f32 {
+        1.0 - 0.3 * self.wetness.clamp(0.0, 1.0)
+    }
 }
 
 /// Pedestrians for a scene: they walk to random places along the sidewalks
@@ -233,9 +267,16 @@ pub fn apply_scene(world: &mut World, scene: &SceneDef, roads: Option<&wp_road::
             world.remove_resource::<Roads>();
         }
     }
+    let weather = scene.weather.clone().unwrap_or_default();
+    let w = Weather {
+        rain: weather.rain.clamp(0.0, 1.0),
+        wetness: weather.wetness.unwrap_or(weather.rain).clamp(0.0, 1.0),
+        dry_friction: scene.ground.friction_scale,
+    };
     world.insert_resource(Ground {
-        friction_scale: scene.ground.friction_scale,
+        friction_scale: scene.ground.friction_scale * w.grip(),
     });
+    world.insert_reflected_resource("Weather", w);
     world.insert_resource(Gravity(scene.ground.gravity));
     world.insert_resource(Docks(scene.docks.clone()));
 }
@@ -260,5 +301,15 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.world.register::<Name>();
         app.world.register::<Player>();
+        // Wet roads: grip follows the weather (which may change live).
+        app.add_system(wp_ecs::Stage::Input, "weather_grip", |w| {
+            if let Some(weather) = w.get_resource::<Weather>().map(|x| *x)
+                && let Some(mut g) = w.get_resource_mut::<Ground>()
+            {
+                g.friction_scale = weather.dry_friction * weather.grip();
+            }
+        })
+        .reads_resource("Weather")
+        .writes_resource("Ground");
     }
 }

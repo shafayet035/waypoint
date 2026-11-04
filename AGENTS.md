@@ -145,7 +145,10 @@ on_arrive/on_depart/on_complete/on_fail; `mission.*` API queues commands. `wp ch
 (WP-L001 with the line); `wp docs scripting`. route_1.lua adds a school group on lap two.
 Scale: `RoadNetwork::lane_at` uses a 25 m lane grid (results identical to a full scan); scene traffic
 can set `radius_m` so AI vehicles that fall out of range of the player are recycled near them (big OSM
-maps: Gulshan, 25 cars within 250 m of a moving player). `town_traffic` gate: 12
+maps: Gulshan, 25 cars within 250 m of a moving player).
+Weather: scene `weather: Some((rain, wetness))` → reflected `Weather` resource (live-editable); grip ×
+(1 − 0.3·wetness) via Ground; AI slows (speed × √grip, longer gaps, gentler); renderer: overcast sky,
+dark glossy wet asphalt, rain streaks. `car_brake_100_wet`: 57 m (dry 41 m). `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

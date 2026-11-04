@@ -1,0 +1,9 @@
+// The flat plane in heavy rain: the road is soaked, grip 70 % of dry.
+(
+  name: "flat_wet",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  weather: Some((rain: 1.0)),
+  spawns: [
+    (name: "start", position: (0.0, 0.0), heading_deg: 0.0),
+  ],
+)

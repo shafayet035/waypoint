@@ -1,0 +1,13 @@
+// The town with AI traffic in the rain: wet roads, slower and more careful drivers. "car_park" is off the road, so a parked player
+// never blocks anyone; "avenue_start" puts you in the traffic.
+(
+  name: "town_rain",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/town.road.ron"),
+  traffic: Some((count: 12, vehicles: ["hatchback", "hatchback", "city_bus"])),
+  weather: Some((rain: 0.8)),
+  spawns: [
+    (name: "avenue_start", position: (-125.0, -5.25), heading_deg: 0.0),
+    (name: "car_park", position: (-60.0, 50.0), heading_deg: 0.0),
+  ],
+)

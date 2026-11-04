@@ -272,7 +272,7 @@ impl Renderer {
                 gpu,
                 "road instances",
                 bytemuck::cast_slice(&raw),
-                wgpu::BufferUsages::VERTEX,
+                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             )
         };
         let instance_capacity = 256;
@@ -373,6 +373,32 @@ impl Renderer {
         }
         gpu.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        // Road materials for this wetness: wet asphalt is darker and glossy.
+        let w = frame.wetness.clamp(0.0, 1.0);
+        let road: Vec<InstanceRaw> = ROAD_MATERIALS
+            .iter()
+            .enumerate()
+            .map(|(i, (c, rough))| {
+                let (dark, gloss) = match i {
+                    0 => (0.45, 0.18),
+                    1 => (0.15, 0.3),
+                    _ => (0.3, 0.45),
+                };
+                let k = 1.0 - dark * w;
+                InstanceRaw {
+                    model: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                    normal: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                    ],
+                    color: [c[0] * k, c[1] * k, c[2] * k, 1.0],
+                    material: [rough + (gloss - rough) * w, 0.0, 0.0, 0.0],
+                }
+            })
+            .collect();
+        gpu.queue
+            .write_buffer(&self.road_instances, 0, bytemuck::cast_slice(&road));
 
         // Instances grouped by mesh: cubes first, then wheels.
         let raw = |d: &DrawItem| InstanceRaw {

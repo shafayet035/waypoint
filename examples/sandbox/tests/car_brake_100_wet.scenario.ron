@@ -1,0 +1,21 @@
+// Weather: the same full stop from 100 km/h on a soaked road. Grip falls to
+// 70 % of dry, so the car (41 m dry) needs about 55–60 m; ABS still works
+// and it stops straight.
+(
+  scene: "scenes/flat_wet.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "start",
+    initial_kmh: 100.0,
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 10.0,
+  assert: [
+    BrakingDistance(max_m: 62.0),
+    Mfdd(min_mps2: 5.5),
+    ExpectEvent("AbsEngaged"),
+    FinalPositionWithin(min: (50.0, -0.5), max: (62.0, 0.5)),
+    NoNaN,
+  ],
+)
