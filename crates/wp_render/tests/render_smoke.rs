@@ -233,3 +233,46 @@ fn night_has_headlights() {
         "headlights should light the scene: {n:.0} vs {u:.0}"
     );
 }
+
+/// A game's look changes the picture: toon bands the light, flat drops highlights.
+#[test]
+fn art_styles_change_the_picture() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let mut app = world_with_car();
+    let (w, h) = (320, 180);
+    let mut shot = |style: wp_world::ArtStyle| {
+        let look = wp_world::LookDef {
+            style,
+            ..Default::default()
+        }
+        .resolve();
+        app.world.insert_reflected_resource("Look", look);
+        let frame = extract(&app.world, CameraMode::Showcase);
+        assert_eq!(frame.look.style, style);
+        render_rgba(&gpu, &frame, w, h).unwrap()
+    };
+    let real = shot(wp_world::ArtStyle::Realistic);
+    let toon = shot(wp_world::ArtStyle::Toon);
+    let flat = shot(wp_world::ArtStyle::Flat);
+    let differ = |a: &[u8], b: &[u8]| {
+        a.iter()
+            .zip(b)
+            .filter(|(x, y)| x.abs_diff(**y) > 12)
+            .count()
+    };
+    assert!(
+        differ(&real, &toon) > (w * h) as usize,
+        "toon looks different"
+    );
+    assert!(
+        differ(&real, &flat) > (w * h) as usize,
+        "flat looks different"
+    );
+    assert!(differ(&toon, &flat) > (w * h) as usize);
+}

@@ -89,6 +89,25 @@ impl Environment {
     /// golden light near the horizon, a dark blue night, and the eye's
     /// exposure opening up after dusk.
     pub fn at_hour(hour: f32) -> Self {
+        Self::at_hour_from(Environment::default(), hour)
+    }
+
+    /// Daylight colours from a game's look (sky, ground, haze, exposure).
+    pub fn from_look(look: &wp_world::Look) -> Self {
+        let base = Environment::default();
+        Environment {
+            sky_zenith: Vec3::from(look.sky_top),
+            sky_horizon: Vec3::from(look.sky_horizon),
+            ground_base: Vec3::from(look.ground),
+            ground_line: Vec3::from(look.ground_lines),
+            fog_density: base.fog_density * look.fog,
+            exposure: base.exposure * look.exposure,
+            ..base
+        }
+    }
+
+    /// [`Environment::at_hour`] with `base` as the daylight colours.
+    pub fn at_hour_from(base: Environment, hour: f32) -> Self {
         let day = (hour.rem_euclid(24.0) - 6.0) / 12.0;
         let elevation = 75f32.to_radians() * (std::f32::consts::PI * day).sin();
         let azimuth = -std::f32::consts::PI * day;
@@ -100,7 +119,6 @@ impl Environment {
         let s = sun_dir.z;
         let daylight = smoothstep(-0.10, 0.20, s);
         let golden = 1.0 - smoothstep(0.0, 0.35, s.abs());
-        let base = Environment::default();
         let sunset = Vec3::new(0.85, 0.5, 0.32);
         let horizon = Vec3::new(0.012, 0.016, 0.03).lerp(base.sky_horizon, daylight);
         Environment {
@@ -109,7 +127,7 @@ impl Environment {
             sun_color: base.sun_color.lerp(Vec3::new(1.0, 0.55, 0.3), golden),
             sky_zenith: Vec3::new(0.004, 0.006, 0.016).lerp(base.sky_zenith, daylight),
             sky_horizon: horizon.lerp(sunset, golden * daylight * 0.6),
-            exposure: 1.0 + 1.0 * (1.0 - daylight),
+            exposure: base.exposure * (1.0 + 1.0 * (1.0 - daylight)),
             ..base
         }
     }

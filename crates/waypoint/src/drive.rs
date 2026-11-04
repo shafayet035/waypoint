@@ -72,6 +72,8 @@ impl DriveSpec {
             let (mut app, player) = wp_test::prepare(&input, &make_app)?;
             app.world
                 .insert_resource(wp_asset::Models(project.models.clone()));
+            app.world
+                .insert_reflected_resource("Look", project.game.value.look.resolve());
             return Ok(Drive {
                 app,
                 player,
@@ -137,6 +139,8 @@ impl DriveSpec {
         wp_world::apply_scene(&mut app.world, scene, project.scene_roads(scene));
         app.world
             .insert_resource(wp_asset::Models(project.models.clone()));
+        app.world
+            .insert_reflected_resource("Look", project.game.value.look.resolve());
         if let Some(tier) = self.quality {
             app.world.insert_resource(wp_world::Quality(tier));
         }

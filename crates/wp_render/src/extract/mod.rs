@@ -106,6 +106,8 @@ pub struct FrameView {
     pub lights: Vec<PointLight>,
     /// Crash-damaged models that [`MeshId::Deformed`] items refer to.
     pub deformed: Vec<DeformedModel>,
+    /// The game's art style.
+    pub look: wp_world::Look,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -135,9 +137,14 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         .get_resource::<wp_world::Weather>()
         .map(|w| *w)
         .unwrap_or_default();
+    let look = world
+        .get_resource::<wp_world::Look>()
+        .map(|l| *l)
+        .unwrap_or_default();
+    let day = Environment::from_look(&look);
     let environment = match world.get_resource::<wp_world::TimeOfDay>() {
-        Some(t) => Environment::at_hour(t.hour),
-        None => Environment::default(),
+        Some(t) => Environment::at_hour_from(day, t.hour),
+        None => day,
     }
     .with_rain(weather.rain);
     let darkness = environment.darkness();
@@ -277,6 +284,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         models,
         lights,
         deformed,
+        look,
     }
 }
 

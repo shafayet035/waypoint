@@ -46,6 +46,8 @@ struct Globals {
     light_view_proj: [[f32; 4]; 4],
     shadow_params: [f32; 4],
     lights: [[f32; 4]; MAX_LIGHTS * 3],
+    /// Art style: toon bands (0 = smooth), saturation, grid (0/1), flat (0/1).
+    style: [f32; 4],
 }
 
 /// Most local lights a frame can use (the uniform's size).
@@ -116,7 +118,8 @@ struct ModelCache {
     meshes: Vec<Vec<GpuMesh>>,
 }
 
-/// Materials of the road layers, in `wp_road::RoadMeshes` order.
+/// Materials of the road layers, in `wp_road::RoadMeshes` order (colours
+/// come from the game's look; these are the realistic defaults).
 const ROAD_MATERIALS: [([f32; 3], f32); 3] = [
     ([0.045, 0.046, 0.05], 0.85), // asphalt
     ([0.78, 0.78, 0.76], 0.55),   // markings
@@ -641,6 +644,16 @@ impl Renderer {
             light_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
             shadow_params: [0.0; 4],
             lights: [[0.0; 4]; MAX_LIGHTS * 3],
+            style: [
+                frame.look.bands,
+                frame.look.saturation,
+                if frame.look.grid { 1.0 } else { 0.0 },
+                if frame.look.style == wp_world::ArtStyle::Flat {
+                    1.0
+                } else {
+                    0.0
+                },
+            ],
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -673,10 +686,13 @@ impl Renderer {
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         // Road materials for this wetness: wet asphalt is darker and glossy.
         let w = frame.wetness.clamp(0.0, 1.0);
+        let look = &frame.look;
+        let road_colours = [look.asphalt, look.markings, look.sidewalk];
         let road_mats: Vec<InstanceRaw> = ROAD_MATERIALS
             .iter()
+            .zip(road_colours)
             .enumerate()
-            .map(|(i, (c, rough))| {
+            .map(|(i, ((_, rough), c))| {
                 let (dark, gloss) = match i {
                     0 => (0.45, 0.18),
                     1 => (0.15, 0.3),

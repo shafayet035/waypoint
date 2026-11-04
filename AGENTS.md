@@ -195,6 +195,10 @@ Sound (`wp_audio`): a synthesized voice per player vehicle: firing-frequency har
 half-order rumble, intake hiss with throttle, road roar with speed, squeal when sliding. Tuned per vehicle with
 `sound: (volume, pitch, roughness, rumble, intake, road, skid)` (multipliers). Windows play it via cpal (device
 opened on a thread; `wp run --mute`); `wp audio --scenario X --out f.wav` renders it headless for analysis.
+Art styles: game.toml `[look]` → reflected `Look` resource (live-editable): `style = "realistic" | "toon" |
+"flat"` (toon: banded light, one crisp highlight, bold colour, no grid; flat: matte pastel, wrapped light, no
+reflections) plus overrides: sky_top, sky_horizon, ground, grid, asphalt, markings, sidewalk (sRGB 0–255),
+saturation, fog, exposure, toon_bands. Every tier keeps the game's style; only detail drops.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
 WASM mod modules and per-mod capability permissions; damage effects on driving; traffic vehicles' sound.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque

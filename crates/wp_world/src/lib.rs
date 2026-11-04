@@ -1,7 +1,9 @@
 //! Scenes. M0 scenes are a flat ground plane with named spawn points; roads,
 //! tiles and streaming arrive with `wp_road` and world streaming in M2–M3.
 
+mod look;
 use glam::Vec2;
+pub use look::{ArtStyle, Look, LookDef, srgb};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use wp_app::{App, Plugin};

@@ -87,6 +87,7 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   3D models: glTF (`.glb`) vehicles with licence files checked by `wp check` (`wp docs assets`).
   Road tiles stream around the camera on a worker thread, drawn camera-relative for big maps.
   Sun shadows from a shadow map sized by quality tier; time of day with headlights and street lamps at night.
+  Each game picks its art style in game.toml `[look]`: realistic, toon or flat, with colour overrides.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

@@ -27,7 +27,22 @@ struct Globals {
     // colour × intensity + spot cosine (< −1: omni), spot direction.
     // params.w holds the count.
     lights: array<vec4<f32>, 192>,
+    // Art style: x toon bands (0 = smooth), y saturation, z ground grid (0/1), w flat (0/1).
+    style: vec4<f32>,
 };
+
+// Light falling on a surface (0–1) in the game's style: smooth, in hard toon
+// bands, or wrapped softly round the shape for the flat style.
+fn styled_light(x: f32) -> f32 {
+    if (g.style.x > 0.5) {
+        let b = g.style.x;
+        return clamp(ceil(x * b - 0.15) / b, 0.0, 1.0);
+    }
+    if (g.style.w > 0.5) {
+        return x * 0.6 + 0.4 * step(0.001, x);
+    }
+    return x;
+}
 
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
@@ -60,7 +75,8 @@ fn sun_shadow(rel: vec3<f32>, n: vec3<f32>) -> f32 {
 
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
     // ACES filmic fit (Narkowicz 2015).
-    let x = c * g.params.z;
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let x = mix(vec3<f32>(luma), c, g.style.y) * g.params.z;
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
@@ -215,8 +231,8 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     let fine_fade = clamp(1.0 - length(fwidth(p)) * 8.0, 0.0, 1.0);
     let fine = mix(0.5, hash2(floor(p * 12.0)), fine_fade);
     var base = g.ground_base.rgb * (0.82 + 0.22 * coarse + 0.12 * (fine - 0.5));
-    base = mix(base, g.ground_line.rgb, grid(p, 10.0, 0.06) * 0.35);
-    base = mix(base, g.ground_line.rgb, grid(p, 50.0, 0.14) * 0.5);
+    base = mix(base, g.ground_line.rgb, grid(p, 10.0, 0.06) * 0.35 * g.style.z);
+    base = mix(base, g.ground_line.rgb, grid(p, 50.0, 0.14) * 0.5 * g.style.z);
     let n = vec3<f32>(0.0, 0.0, 1.0);
     let ndl = max(dot(n, g.sun_dir.xyz), 0.0);
     let blob = blob_shadows(p);
@@ -224,7 +240,7 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     // casts the real shadow); without one they stand in for it.
     let blob_sun = mix(blob, mix(1.0, blob, 0.3), g.shadow_params.y);
     let sun_vis = min(sun_shadow(in.rel, n), blob_sun);
-    var col = base * (g.sun_color.rgb * g.sun_dir.w * ndl * sun_vis + ambient(n) * mix(0.55, 1.0, blob));
+    var col = base * (g.sun_color.rgb * g.sun_dir.w * styled_light(ndl * sun_vis) + ambient(n) * mix(0.55, 1.0, blob));
     col = col + local_lights(in.rel, n, normalize(-in.rel), base, 0.85);
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
@@ -287,17 +303,22 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let rough = clamp(in.material.x, 0.02, 1.0);
     let metal = clamp(in.material.y, 0.0, 1.0);
 
-    let ndl = max(dot(n, l), 0.0) * sun_shadow(in.rel, n);
+    let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n));
     let h = normalize(l + v);
     let shininess = mix(512.0, 6.0, rough);
-    let spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0;
+    var spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0;
+    // Toon: one crisp highlight; flat: matte, no highlights or reflections.
+    if (g.style.x > 0.5) {
+        spec = step(8.0, spec) * 4.0;
+    }
+    spec = spec * (1.0 - g.style.w);
     let f0 = mix(vec3<f32>(0.04), in.color, metal);
     let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
 
     let sun = g.sun_color.rgb * g.sun_dir.w;
     let diffuse = in.color * (1.0 - metal) * (sun * ndl + ambient(n));
     // Rough surfaces scatter the sky reflection away: fade it with roughness².
-    let gloss = (1.0 - rough) * (1.0 - rough);
+    let gloss = (1.0 - rough) * (1.0 - rough) * (1.0 - g.style.w) * select(1.0, 0.4, g.style.x > 0.5);
     let env = sky_color(reflect(-v, n)) * fresnel * gloss;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
     col += local_lights(in.rel, n, v, in.color * (1.0 - metal), rough);

@@ -27,6 +27,9 @@ pub struct GameConfig {
     pub quality: QualityConfig,
     #[serde(default)]
     pub mods: ModsConfig,
+    /// Art style: a preset (realistic, toon, flat) and colour overrides.
+    #[serde(default)]
+    pub look: wp_world::LookDef,
 }
 
 /// Mod settings.
