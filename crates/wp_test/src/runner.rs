@@ -64,6 +64,11 @@ pub struct Metrics {
     pub collisions: u32,
     /// Times any vehicle (player or traffic) entered a junction on red.
     pub red_light_violations: u32,
+    /// People on foot hit by any vehicle.
+    pub pedestrians_hit: u32,
+    /// Pedestrians at the end, if the scene has them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pedestrians: Option<wp_traffic::pedestrian::PedestrianStats>,
     /// AI traffic at the end, if the scene has traffic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traffic: Option<wp_traffic::TrafficStats>,
@@ -243,6 +248,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
     let mut event_counts: BTreeMap<String, u32> = BTreeMap::new();
     let mut collision_reports = 0u32;
     let mut red_lights = 0u32;
+    let mut people_hit = 0u32;
     let (mut route_worst, mut route_finished, mut route_error): (
         Option<f32>,
         bool,
@@ -261,6 +267,10 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
             // Each collision is reported to both vehicles.
             collision_reports += events.iter().filter(|e| e.kind() == "Collision").count() as u32;
             red_lights += events.iter().filter(|e| e.kind() == "RanRedLight").count() as u32;
+            people_hit += events
+                .iter()
+                .filter(|e| e.kind() == "HitPedestrian")
+                .count() as u32;
             for e in events.iter().filter(|e| event_entity(e) == player_id) {
                 *event_counts.entry(e.kind().to_string()).or_default() += 1;
                 if event_log.len() < 50 {
@@ -331,6 +341,11 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         events: event_counts,
         collisions: collision_reports / 2,
         red_light_violations: red_lights,
+        pedestrians_hit: people_hit,
+        pedestrians: app
+            .world
+            .get_resource::<wp_traffic::pedestrian::PedestrianStats>()
+            .map(|p| p.clone()),
         traffic: app
             .world
             .get_resource::<wp_traffic::TrafficStats>()
@@ -619,6 +634,19 @@ fn evaluate(a: &Assertion, run: &Run) -> (bool, String) {
                 format!("ended at ({x:.2}, {y:.2})"),
             )
         }
+        Assertion::NoPedestrianHits => (
+            m.pedestrians_hit == 0,
+            match &m.pedestrians {
+                Some(p) => format!(
+                    "{} people hit; {} walking made {} crossings",
+                    m.pedestrians_hit, p.walking, p.crossings
+                ),
+                None => format!(
+                    "{} people hit (no pedestrians in the scene)",
+                    m.pedestrians_hit
+                ),
+            },
+        ),
         Assertion::NoRedLightViolations => (
             m.red_light_violations == 0,
             format!("{} red lights run", m.red_light_violations),

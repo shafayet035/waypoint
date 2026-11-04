@@ -128,7 +128,10 @@ Junction control on road nodes: `Signals` (phases from opposite approaches, draw
 and `Priority(major)` (minor roads give way to major-road traffic within 6 s). AI traffic obeys both;
 `RanRedLight` events and `NoRedLightViolations` catch anyone entering on red. Gates: `town_traffic`
 (lights at the centre) and `village_traffic` (priority crossroads, signalled T): no collisions or red
-lights. `town_traffic` gate: 12
+lights. Pedestrians (`wp_traffic::pedestrian`) walk a sidewalk graph built from the roads
+(`wp_road::sidewalk`: sidewalk centre lines, zebra crossings at junction arms and dead ends, corner
+links), cross with the lights or when no vehicle is within 5 s, and are obstacles to AI drivers, who
+stop short of zebras; `HitPedestrian` and `NoPedestrianHits` (village: 30 people, none hit). `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
 Not yet: testing on physical phones; running on an iOS simulator; vehicle meshes (glTF) instead of procedural boxes;

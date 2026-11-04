@@ -1,7 +1,8 @@
 // M3 junction-control gate: 16 AI cars drive the village for five minutes.
 // At the crossroads, Church Lane and Mill Lane give way to the High Street;
-// the east T-junction has traffic lights. Nobody may run a red light or
-// touch another car, and traffic must keep flowing.
+// the east T-junction has traffic lights. 30 people walk the sidewalks and
+// cross at zebra crossings. Nobody may run a red light, touch another car or
+// hit a pedestrian, and traffic must keep flowing.
 (
   scene: "scenes/village.scene.ron",
   seed: 5,
@@ -14,6 +15,7 @@
   assert: [
     NoCollisions,
     NoRedLightViolations,
+    NoPedestrianHits,
     TrafficFlows(min_trips: 20),
     NoNaN,
     Deterministic,

@@ -31,6 +31,18 @@ pub struct SceneDef {
     /// Vehicles standing still in the scene, brakes on (obstacles, set dressing).
     #[serde(default)]
     pub parked: Vec<ParkedDef>,
+    /// People walking the sidewalks (roads need `sidewalk_m` > 0).
+    #[serde(default)]
+    pub pedestrians: Option<PedestrianDef>,
+}
+
+/// Pedestrians for a scene: they walk to random places along the sidewalks
+/// and cross at zebra crossings (with the lights where there are signals).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianDef {
+    /// How many people to keep walking.
+    pub count: u32,
 }
 
 /// A vehicle parked in a scene.

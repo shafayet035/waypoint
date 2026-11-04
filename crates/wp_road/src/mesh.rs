@@ -175,6 +175,25 @@ pub fn build_meshes(net: &RoadNetwork) -> RoadMeshes {
             }
         }
     }
+    // Zebra crossings: white bars across each crossing, 0.5 m wide and
+    // 1 m apart, over the carriageway between the two sidewalks.
+    for e in &net.sidewalks.edges {
+        let crate::sidewalk::WalkKind::Crossing { road, .. } = e.kind else {
+            continue;
+        };
+        let (a, b) = (e.path.points[0], *e.path.points.last().expect("two points"));
+        let d = (b - a).normalize_or_zero();
+        let n = Vec2::new(-d.y, d.x);
+        let half = net.roads[road].def.sidewalk_m / 2.0;
+        let span = a.distance(b) - 2.0 * half;
+        let bars = (span / 1.0).floor() as i32;
+        for k in 0..bars {
+            let p = a + d * (half + 0.5 + k as f32);
+            let left = [p - d * 0.25 + n * 1.5, p + d * 0.25 + n * 1.5];
+            let right = [p - d * 0.25 - n * 1.5, p + d * 0.25 - n * 1.5];
+            m.markings.strip(&left, &right, MARKING_Z);
+        }
+    }
     // Junction areas: a fan over the road ends' corner points.
     for j in &net.junctions {
         if j.corners.len() < 3 {

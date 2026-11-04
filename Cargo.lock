@@ -2932,6 +2932,7 @@ dependencies = [
  "wp_physics",
  "wp_rhi",
  "wp_road",
+ "wp_traffic",
  "wp_vehicle",
  "wp_world",
 ]

@@ -12,6 +12,7 @@
 
 pub mod control;
 pub mod idm;
+pub mod pedestrian;
 
 use control::{TRACK_AHEAD_M, TRACK_BACK_M, route_speed_kmh, speed_control, stanley_steering};
 use glam::Vec2;
@@ -99,6 +100,9 @@ pub fn setup(world: &mut World, scene: &wp_world::SceneDef, vehicles: &[&Vehicle
     if let Some(def) = &scene.traffic {
         world.insert_resource(TrafficSetup { def: def.clone() });
     }
+    if let Some(p) = &scene.pedestrians {
+        world.insert_resource(pedestrian::PedestrianSetup { count: p.count });
+    }
 }
 
 pub struct TrafficPlugin;
@@ -112,6 +116,21 @@ impl Plugin for TrafficPlugin {
     }
     fn build(&self, app: &mut App) {
         app.world.register::<TrafficAgent>();
+        app.world.register::<pedestrian::Pedestrian>();
+        app.add_system(Stage::Agents, "pedestrians", pedestrian::pedestrians)
+            .reads_resource("Roads")
+            .writes::<Pose>()
+            .writes::<Velocity>()
+            .writes_resource("PedestrianStats");
+        app.add_system(
+            Stage::Post,
+            "detect_pedestrian_hits",
+            pedestrian::detect_pedestrian_hits,
+        )
+        .reads::<Pose>()
+        .reads::<wp_physics::Collider>()
+        .writes::<pedestrian::Pedestrian>()
+        .writes_resource("Events<VehicleEvent>");
         app.add_system(Stage::Post, "watch_signals", watch_signals)
             .reads::<Pose>()
             .reads::<Vehicle>()
@@ -393,6 +412,19 @@ fn bodies(world: &World) -> Vec<Body> {
             });
         }
     });
+    // People on foot: small obstacles (only ones on the road matter to drivers).
+    world
+        .query::<(&Pose, &pedestrian::Pedestrian)>()
+        .for_each(|e, (pose, _)| {
+            let velocity = world.get::<Velocity>(e).map_or(Vec2::ZERO, |v| v.linear);
+            out.push(Body {
+                entity: e,
+                position: pose.position,
+                velocity,
+                rear: -0.3,
+                width: 0.6,
+            });
+        });
     let trailers = world.get_resource::<TrailerLibrary>();
     world.query::<(&Pose, &Trailer)>().for_each(|e, (pose, t)| {
         if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&t.model)) {
@@ -513,7 +545,8 @@ fn drive(
         }
         // A merging driver watches the whole lane being entered, not just
         // its own path, so it slots in behind whoever is there in good time.
-        let (back, reach) = if changing {
+        // People only matter in the lane itself.
+        let (back, reach) = if changing && b.width > 1.0 {
             (fp.rear + b.rear - 2.0, 3.0 * lane_half)
         } else {
             (0.5, lane_half)
@@ -546,6 +579,13 @@ fn drive(
             continue;
         }
         let entry = if j == 0 { 0.0 } else { ends[j - 1] };
+        // Where the approach has sidewalks a zebra crosses its end: stop
+        // short of it.
+        let setback = net.lanes[route[j]]
+            .approach
+            .map_or(0.0, |r| net.roads[r].def.sidewalk_m)
+            .max(0.0);
+        let stop_at = entry - if setback > 0.0 { setback + 0.5 } else { 0.0 };
         let ahead = entry - s;
         if ahead > speed.max(0.0).powi(2) / (2.0 * IDM.decel) + 15.0 {
             break; // not near yet
@@ -562,7 +602,7 @@ fn drive(
             if state.claims.get(&route[j]).is_some_and(|c| c.0 == me) {
                 state.claims.remove(&route[j]);
             }
-            stop_line = Some(entry);
+            stop_line = Some(stop_at);
             break;
         }
         if state.claims.get(&route[j]).is_some_and(|c| c.0 == me) {
@@ -574,7 +614,7 @@ fn drive(
             break;
         }
         if gives_way(net, route[j], me, approaching) {
-            stop_line = Some(entry);
+            stop_line = Some(stop_at);
             break;
         }
         let reach = envelope(net, def, route[j]);
@@ -598,7 +638,7 @@ fn drive(
         } else {
             // Wait short of where any blocking vehicle's swept path would
             // reach this vehicle's approach (long vehicles swing wide).
-            let mut line = entry;
+            let mut line = stop_at;
             for (other, other_reach) in blockers {
                 // Its path across, and the start of the lane it leaves into
                 // (a long vehicle is still swinging for a body length).
@@ -717,6 +757,7 @@ pub struct Approach {
 fn approaches(net: &RoadNetwork, bodies: &[Body]) -> Vec<Approach> {
     bodies
         .iter()
+        .filter(|b| b.width > 1.0) // vehicles only
         .filter_map(|b| {
             let (lane, s, _) = net.lane_at(b.position)?;
             let LaneKind::Road { road, forward, .. } = net.lanes[lane].kind else {
@@ -967,7 +1008,7 @@ fn spawn_one(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
         .and_then(|e| world.get::<Pose>(*e).map(|p| p.position));
     let others: Vec<Vec2> = bodies(world)
         .iter()
-        .filter(|b| Some(b.entity) != reuse)
+        .filter(|b| Some(b.entity) != reuse && b.width > 1.0)
         .map(|b| b.position)
         .collect();
     let candidates: Vec<LaneId> = (0..net.lanes.len())

@@ -1,7 +1,8 @@
 // A village: a ring road around a crossroads, one lane each way at 50 km/h.
 // The main road (west–east) has priority at the crossroads, so traffic from
 // the north and south gives way; the east T-junction has traffic lights; the
-// other T-junctions take turns.
+// other T-junctions take turns. The High Street and the lanes have sidewalks
+// with zebra crossings at the junctions.
 (
   name: "village",
   drive_side: Right,
@@ -27,7 +28,7 @@
     (id: "ring_w2", name: Some("Ring Road"), from: "w", to: "nw", shape: Straight),
     (id: "main_west", name: Some("High Street"), from: "w", to: "c", shape: Straight, sidewalk_m: 2.0),
     (id: "main_east", name: Some("High Street"), from: "c", to: "e", shape: Straight, sidewalk_m: 2.0),
-    (id: "church_lane", name: Some("Church Lane"), from: "c", to: "n", shape: Straight),
-    (id: "mill_lane", name: Some("Mill Lane"), from: "s", to: "c", shape: Straight),
+    (id: "church_lane", name: Some("Church Lane"), from: "c", to: "n", shape: Straight, sidewalk_m: 2.0),
+    (id: "mill_lane", name: Some("Mill Lane"), from: "s", to: "c", shape: Straight, sidewalk_m: 2.0),
   ],
 )

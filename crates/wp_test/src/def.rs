@@ -133,6 +133,8 @@ pub enum Assertion {
     NoCollisions,
     /// No vehicle (player or traffic) enters a junction on red.
     NoRedLightViolations,
+    /// No vehicle (player or traffic) hits a person on foot.
+    NoPedestrianHits,
     /// The player ends inside the box from `min` to `max` (x, y in m).
     FinalPositionWithin { min: (f32, f32), max: (f32, f32) },
     /// The scene's AI traffic reaches at least `min_trips` destinations in
@@ -189,6 +191,7 @@ impl Assertion {
             Self::NoNaN => "NoNaN".into(),
             Self::NoCollisions => "NoCollisions".into(),
             Self::NoRedLightViolations => "NoRedLightViolations".into(),
+            Self::NoPedestrianHits => "NoPedestrianHits".into(),
             Self::FinalPositionWithin { min, max } => format!(
                 "FinalPositionWithin(({:.1}, {:.1})–({:.1}, {:.1}))",
                 min.0, min.1, max.0, max.1

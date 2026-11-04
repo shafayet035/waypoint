@@ -63,13 +63,17 @@ Assertions
   MaxSideslipDeg(9.0)   no spin or big slide   MaxDecelG(0.4)   no harsh braking
   TrafficFlows(min_trips: 10)   the scene's AI traffic keeps reaching destinations (no gridlock)
   NoRedLightViolations   no vehicle enters a signalled junction on red
+  NoPedestrianHits   no vehicle hits a person on foot
   FinalPositionWithin(min: (70.0, -3.0), max: (78.0, 3.0))   where the player ends up
   NoEvent(\"WheelLift\")   ExpectEvent(\"AbsEngaged\")   NoNaN   Deterministic   NoCollisions
   RouteFollowed(max_offset_m: 0.6)   FollowRoute finished, never further than this from the lane centre
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
 Events: GearShift, AbsEngaged, AbsReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
-Collision (bodies touching), RanRedLight.
+Collision (bodies touching), RanRedLight, HitPedestrian.
+
+Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"])), pedestrians: Some((count: 30)) (they walk
+roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))].
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).

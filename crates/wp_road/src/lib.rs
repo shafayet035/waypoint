@@ -16,6 +16,7 @@ pub mod mesh;
 pub mod network;
 pub mod opendrive;
 pub mod osm;
+pub mod sidewalk;
 
 pub use def::{Control, DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape, SignalTiming};
 pub use geometry::Polyline;
@@ -23,3 +24,4 @@ pub use mesh::{Mesh, RoadMeshes, build_meshes};
 pub use network::{
     Junction, Lane, LaneId, LaneKind, Light, RoadGeometry, RoadNetwork, Taper, Turn, taper_length_m,
 };
+pub use sidewalk::{SidewalkGraph, WalkEdge, WalkKind, WalkNode};

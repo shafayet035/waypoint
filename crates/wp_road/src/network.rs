@@ -239,6 +239,8 @@ pub struct RoadNetwork {
     pub roads: Vec<RoadGeometry>,
     pub lanes: Vec<Lane>,
     pub junctions: Vec<Junction>,
+    /// Where pedestrians walk: sidewalks, crossings and corners.
+    pub sidewalks: crate::sidewalk::SidewalkGraph,
 }
 
 impl RoadNetwork {
@@ -583,12 +585,23 @@ impl RoadNetwork {
                 }
             }
         }
+        let arms_at: BTreeMap<usize, Vec<(usize, bool)>> = at_node
+            .iter()
+            .map(|(&n, ends)| {
+                (
+                    n,
+                    ends.iter().map(|&(ri, starts, _)| (ri, starts)).collect(),
+                )
+            })
+            .collect();
+        let sidewalks = crate::sidewalk::SidewalkGraph::build(&roads, &arms_at);
         RoadNetwork {
             name: def.name.clone(),
             drive_side: def.drive_side,
             roads,
             lanes,
             junctions,
+            sidewalks,
         }
     }
 

@@ -3,12 +3,14 @@
 
 mod camera;
 mod dock;
+mod pedestrian;
 mod signal;
 mod trailer;
 mod vehicle;
 
 pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
+use pedestrian::pedestrian_items;
 use signal::signal_items;
 use trailer::trailer_items;
 pub use vehicle::{BodyShape, body_shape};
@@ -98,6 +100,11 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
                 palette(e.index())
             };
             vehicle_items(&mut items, &mut shadows, def, pose, veh, paint, braking);
+        });
+    world
+        .query::<(&Pose, &wp_traffic::pedestrian::Pedestrian)>()
+        .for_each(|e, (pose, p)| {
+            pedestrian_items(&mut items, &mut shadows, pose, p.down, palette(e.index()));
         });
     if let Some(roads) = world.get_resource::<wp_world::Roads>() {
         let t = world
