@@ -1,0 +1,20 @@
+// The harbour town: brick warehouses facing the water along Quay Road (the
+// quay side stays open), and narrow, brightly painted houses climbing Market
+// Street, Hill Road and Cliff Road.
+(
+  name: "harbour",
+  styles: {
+    "warehouse": (walls: [(140, 72, 58), (118, 64, 54), (152, 96, 70)], roof: (70, 70, 74),
+                  storey_m: 4.2, bay_m: 4.5, window: 0.3, lit: 0.15),
+    "harbour_house": (walls: [(232, 92, 80), (246, 196, 72), (84, 160, 200), (120, 190, 140),
+                              (240, 236, 224), (226, 140, 170)],
+                      roof: (70, 66, 80), storey_m: 2.9, bay_m: 2.6, window: 0.4, lit: 0.55, shops: true),
+  },
+  streets: [
+    // Left of Quay Road going east is inland; the right side is the water.
+    (roads: ["quay_west", "quay_east"], sides: Left, styles: ["warehouse"],
+     frontage_m: (16.0, 30.0), depth_m: (14.0, 22.0), height_m: (8.0, 14.0), gap_m: (1.0, 5.0), seed: 11),
+    (roads: ["market_street", "hill_road", "cliff_road"], styles: ["harbour_house"],
+     frontage_m: (6.0, 10.0), depth_m: (8.0, 12.0), height_m: (6.0, 12.0), gap_m: (0.0, 1.5), seed: 12),
+  ],
+)

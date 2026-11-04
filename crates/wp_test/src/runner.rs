@@ -18,6 +18,8 @@ pub struct ScenarioInput<'a> {
     pub vehicle: &'a VehicleDef,
     /// The scene's road network, if it has one.
     pub roads: Option<&'a wp_road::RoadNetworkDef>,
+    /// The scene's buildings, if it has any.
+    pub scenery: Option<&'a wp_world::scenery::SceneryDef>,
     /// Semi-trailer to couple to the player, if the scenario names one.
     pub trailer: Option<&'a wp_vehicle::TrailerDef>,
     /// Vehicles the scene uses for traffic and parked vehicles.
@@ -256,7 +258,7 @@ pub fn prepare(
     if !input.wasm.is_empty() {
         wp_wasm::load(&mut app.world, input.wasm);
     }
-    wp_world::apply_scene(&mut app.world, input.scene, input.roads);
+    wp_world::apply_scene(&mut app.world, input.scene, input.roads, input.scenery);
     wp_traffic::setup(&mut app.world, input.scene, &input.traffic);
     let (pos, heading) = wp_world::spawn_transform(spawn);
     let player = wp_vehicle::spawn_vehicle(&mut app.world, input.vehicle, pos, heading);

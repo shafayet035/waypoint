@@ -4,6 +4,7 @@
   name: "town",
   ground: (friction_scale: 1.0, gravity: 9.81),
   roads: Some("roads/town.road.ron"),
+  scenery: Some("scenery/town.scenery.ron"),
   spawns: [
     (name: "avenue_start", position: (-125.0, -5.25), heading_deg: 0.0),
     (name: "market_street", position: (1.75, -90.0), heading_deg: 90.0),

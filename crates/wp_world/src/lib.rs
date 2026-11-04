@@ -2,6 +2,7 @@
 //! tiles and streaming arrive with `wp_road` and world streaming in M2–M3.
 
 mod look;
+pub mod scenery;
 use glam::Vec2;
 pub use look::{ArtStyle, Look, LookDef, srgb};
 use schemars::JsonSchema;
@@ -27,6 +28,9 @@ pub struct SceneDef {
     /// Road network file (`roads/<name>.road.ron`), relative to the project root.
     #[serde(default)]
     pub roads: Option<String>,
+    /// Buildings (`scenery/<name>.scenery.ron`), relative to the project root.
+    #[serde(default)]
+    pub scenery: Option<String>,
     /// AI traffic on the road network.
     #[serde(default)]
     pub traffic: Option<TrafficDef>,
@@ -377,11 +381,23 @@ impl Component for Player {
 }
 
 /// Apply a scene's ground settings to the world.
-pub fn apply_scene(world: &mut World, scene: &SceneDef, roads: Option<&wp_road::RoadNetworkDef>) {
-    match roads {
-        Some(def) => {
-            world.insert_resource(Roads(std::sync::Arc::new(wp_road::RoadNetwork::build(def))))
+pub fn apply_scene(
+    world: &mut World,
+    scene: &SceneDef,
+    roads: Option<&wp_road::RoadNetworkDef>,
+    scenery: Option<&scenery::SceneryDef>,
+) {
+    let net = roads.map(|def| std::sync::Arc::new(wp_road::RoadNetwork::build(def)));
+    match scenery {
+        Some(def) => world.insert_resource(scenery::CurrentScenery(std::sync::Arc::new(
+            scenery::Scenery::build(def, net.as_deref()),
+        ))),
+        None => {
+            world.remove_resource::<scenery::CurrentScenery>();
         }
+    }
+    match net {
+        Some(net) => world.insert_resource(Roads(net)),
         None => {
             world.remove_resource::<Roads>();
         }

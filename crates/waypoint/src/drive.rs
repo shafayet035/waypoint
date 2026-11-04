@@ -136,7 +136,12 @@ impl DriveSpec {
         app.finish()?;
         app.world
             .insert_reflected_resource("SimRng", SimRng::new(self.seed));
-        wp_world::apply_scene(&mut app.world, scene, project.scene_roads(scene));
+        wp_world::apply_scene(
+            &mut app.world,
+            scene,
+            project.scene_roads(scene),
+            project.scene_scenery(scene),
+        );
         if !project.wasm_modules.is_empty() {
             wp_wasm::load(&mut app.world, &project.wasm_modules);
         }

@@ -87,6 +87,8 @@ pub struct Project {
     pub trailers: BTreeMap<String, Loaded<TrailerDef>>,
     /// Road networks by path relative to the root.
     pub roads: BTreeMap<String, Loaded<RoadNetworkDef>>,
+    /// Scenery (buildings) by path relative to the root.
+    pub scenery: BTreeMap<String, Loaded<wp_world::scenery::SceneryDef>>,
     /// By mission name (file name without `.mission.ron`).
     pub missions: BTreeMap<String, Loaded<wp_mission::MissionDef>>,
     /// Licence files of assets, by the asset's path.
@@ -105,6 +107,7 @@ pub const SCENE_EXT: &str = ".scene.ron";
 pub const SCENARIO_EXT: &str = ".scenario.ron";
 pub const TRAILER_EXT: &str = ".trailer.ron";
 pub const ROAD_EXT: &str = ".road.ron";
+pub const SCENERY_EXT: &str = ".scenery.ron";
 pub const MISSION_EXT: &str = ".mission.ron";
 pub const REPLAY_EXT: &str = ".replay.ron";
 
@@ -193,6 +196,18 @@ impl Project {
                 Ok(r) => {
                     diags.extend(RoadNetworkDef::validate(&r));
                     roads.insert(path, r);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
+        let mut scenery = BTreeMap::new();
+        for (path, real) in vfs.files(SCENERY_EXT) {
+            use wp_world::scenery::SceneryDef;
+            match load_ron::<SceneryDef>(root, &real).inspect_err(|_| failed.push(path.clone())) {
+                Ok(s) => {
+                    diags.extend(SceneryDef::validate(&s));
+                    scenery.insert(path, s);
                 }
                 Err(d) => diags.push(d),
             }
@@ -316,6 +331,7 @@ impl Project {
             scenarios,
             trailers,
             roads,
+            scenery,
             failed,
         };
         diags.extend(project.check_references());
@@ -546,6 +562,69 @@ impl Project {
                     scene
                         .error_at("WP-W005", "roads", format!("road network `{path}` {why}"))
                         .help(format!("known road files: {}", list(self.roads.keys()))),
+                );
+            }
+        }
+        for scene in self.scenes.values() {
+            let Some(path) = &scene.value.scenery else {
+                continue;
+            };
+            let Some(file) = self.scenery.get(path) else {
+                let why = if self.failed.contains(path) {
+                    "failed to load"
+                } else {
+                    "does not exist"
+                };
+                out.push(
+                    scene
+                        .error_at("WP-B006", "scenery", format!("scenery `{path}` {why}"))
+                        .help(format!(
+                            "known scenery files: {}",
+                            list(self.scenery.keys())
+                        )),
+                );
+                continue;
+            };
+            let roads = self.scene_roads(&scene.value);
+            if roads.is_none() && !file.value.streets.is_empty() {
+                out.push(
+                    file.warning_at(
+                        "WP-B004",
+                        "streets",
+                        format!("scene `{}` has no roads, so `streets` builds nothing there", scene.value.name),
+                    )
+                    .help("give the scene a road network, or place buildings one by one in `buildings`"),
+                );
+            }
+            let Some(roads) = roads else {
+                continue;
+            };
+            for st in &file.value.streets {
+                for r in &st.roads {
+                    if !roads.roads.iter().any(|x| &x.id == r) {
+                        out.push(
+                            file.error_at(
+                                "WP-B004",
+                                "roads",
+                                format!("street names road `{r}`, which is not in {}", roads.name),
+                            )
+                            .help("use road ids from the scene's .road.ron, or leave `roads` empty for every road with a sidewalk"),
+                        );
+                    }
+                }
+            }
+            let net = wp_road::RoadNetwork::build(roads);
+            for (i, depth) in wp_world::scenery::buildings_on_roads(&file.value, &net) {
+                out.push(
+                    file.warning_at(
+                        "WP-B007",
+                        "buildings",
+                        format!(
+                            "building {i} reaches {depth:.1} m into a road or sidewalk of {}",
+                            roads.name
+                        ),
+                    )
+                    .help("move it back from the road; `wp shot` shows where it stands"),
                 );
             }
         }
@@ -828,6 +907,7 @@ impl Project {
             name,
             scenario: s,
             roads: self.scene_roads(scene),
+            scenery: self.scene_scenery(scene),
             traffic: self.scene_vehicles(scene)?,
             mission: match &s.mission {
                 Some(m) => Some(&self.missions.get(m)?.value),
@@ -864,6 +944,15 @@ impl Project {
     pub fn mission_script(&self, def: &wp_mission::MissionDef) -> Option<(String, String)> {
         let path = def.script.as_ref()?;
         self.vfs.read(path)
+    }
+
+    /// The scenery a scene refers to, if any (and if it loaded).
+    pub fn scene_scenery(&self, scene: &SceneDef) -> Option<&wp_world::scenery::SceneryDef> {
+        scene
+            .scenery
+            .as_ref()
+            .and_then(|p| self.scenery.get(p))
+            .map(|s| &s.value)
     }
 
     /// The road network a scene refers to, if any (and if it loaded).

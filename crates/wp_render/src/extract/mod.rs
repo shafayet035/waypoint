@@ -99,6 +99,8 @@ pub struct FrameView {
     pub shadows: Vec<BlobShadow>,
     /// The scene's road network; the renderer builds and caches its meshes.
     pub roads: Option<std::sync::Arc<wp_road::RoadNetwork>>,
+    /// The scene's buildings, if it has any.
+    pub scenery: Option<std::sync::Arc<wp_world::scenery::Scenery>>,
     /// How wet the road is, 0–1 (darker, glossier asphalt).
     pub wetness: f32,
     /// Models that [`MeshId::Model`] items refer to; the renderer uploads
@@ -332,6 +334,9 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         items,
         shadows,
         roads: world.get_resource::<wp_world::Roads>().map(|r| r.0.clone()),
+        scenery: world
+            .get_resource::<wp_world::scenery::CurrentScenery>()
+            .map(|s| s.0.clone()),
         wetness: weather.wetness,
         models,
         lights,

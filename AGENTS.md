@@ -44,7 +44,7 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 | `wp_physics` | Planar rigid bodies, `Pose`, `Velocity`, `RigidBody`, `Ground` |
 | `wp_vehicle` | `.vehicle.ron`/`.trailer.ron`, validation, `VehiclePlugin` + `TrailerPlugin`, tyres, drivetrain, brakes, suspension |
 | `wp_road` | `.road.ron` road networks: geometry, lanes, junction connectors, A* routing, road meshes |
-| `wp_world` | `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
+| `wp_world` | Scenery (buildings: `scenery.rs`), `.scene.ron`, spawn points, scene traffic settings, `Name`, `Player` |
 | `wp_traffic` | AI traffic: routes, lane following, IDM car-following, junction claims; shared path controllers |
 | `wp_script` | Luau mission scripts: sandbox, hooks, `mission` API, deterministic random |
 | `wp_mission` | Missions: bus stops on routes, timetable, passengers, score; `MissionPlugin` |
@@ -231,4 +231,11 @@ Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the ha
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
 to 0 within 1 s with (FMVSS 126). Events `EscEngaged`/`EscReleased`; telemetry `tc_active`, `esc_active`.
+Buildings (`wp_world::scenery`): a scene's `scenery: Some("scenery/<name>.scenery.ron")` holds hand-placed
+`buildings` (outline + height + style) and `streets` (rows generated along roads behind the sidewalk, seeded; never on a
+road, junction or each other). Styles (built in: plaster, brick, concrete, office, shophouse; games add their own):
+wall colours, roof, storey_m, bay_m, window share, lit share, shop fronts. Meshes are plain data (`scenery::build_tiles`,
+per-vertex sRGB colour + facade pattern); the renderer draws windows procedurally (box-filtered, so distant facades do
+not shimmer), lights a share at night, casts shadows from buildings near the shadow map, and streams building tiles
+like road tiles (`TileCache`). WP-B001–B007; `wp docs scenery`, `wp schema scenery`. Sandbox town and harbour have scenery.
 Not yet: testing on physical phones; running on an iOS simulator.

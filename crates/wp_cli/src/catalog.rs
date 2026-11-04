@@ -9,6 +9,41 @@ pub struct ErrorDoc {
 
 pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
+        code: "WP-B001",
+        title: "A building's footprint has no area",
+        fix: "List three or more distinct corners in order round the building, (x, y) in metres.",
+    },
+    ErrorDoc {
+        code: "WP-B002",
+        title: "A building or street uses an unknown style",
+        fix: "Use a built-in style (plaster, brick, concrete, office, shophouse) or define it under `styles`.",
+    },
+    ErrorDoc {
+        code: "WP-B003",
+        title: "A building's height is out of range",
+        fix: "Use height_m above 0 and at most 600.",
+    },
+    ErrorDoc {
+        code: "WP-B004",
+        title: "A street row names a road that is not there, or the scene has no roads",
+        fix: "Use road ids from the scene's .road.ron (or leave `roads` empty for every road with a sidewalk); street rows need a road network.",
+    },
+    ErrorDoc {
+        code: "WP-B005",
+        title: "A building style or street size range is invalid",
+        fix: "Styles need wall colours, storey_m 1.5–10, bay_m 0.5–10, window and lit 0–1; size ranges are (min, max) with 0 < min ≤ max.",
+    },
+    ErrorDoc {
+        code: "WP-B006",
+        title: "A scene's scenery file does not exist or failed to load",
+        fix: "Point `scenery` at a scenery/<name>.scenery.ron file, relative to the project root.",
+    },
+    ErrorDoc {
+        code: "WP-B007",
+        title: "A building stands on a road or sidewalk (warning)",
+        fix: "Move its footprint back from the road; vehicles and pedestrians use that space.",
+    },
+    ErrorDoc {
         code: "WP-A001",
         title: "A plugin depends on a plugin that is not loaded",
         fix: "Add the missing plugin, or disable the dependent plugin too in game.toml [plugins] disabled.",

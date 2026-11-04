@@ -21,7 +21,8 @@ struct Globals {
     shadow_rot: array<vec4<f32>, 16>,
     // Sun shadow map: camera-relative position → light clip space.
     light_view_proj: mat4x4<f32>,
-    // x: 1 / shadow map size, y: 1 when the shadow map is on, zw: unused.
+    // x: 1 / shadow map size, y: 1 when the shadow map is on, z: darkness
+    // (0 day – 1 night; lights windows), w: unused.
     shadow_params: vec4<f32>,
     // Local lights, three vec4 each: camera-relative position + range,
     // colour × intensity + spot cosine (< −1: omni), spot direction.
@@ -285,6 +286,11 @@ struct VertexIn {
     @location(1) normal: vec3<f32>,
     @location(2) tint: f32,
     @location(12) uv: vec2<f32>,
+    // sRGB colour multiplying the instance colour; alpha: window seed.
+    @location(13) color: vec4<f32>,
+    // Building facade: storey m / 10, bay m / 10, glass share, lit share
+    // (× 127/255, + 128/255 for shop windows). Zero: no windows.
+    @location(14) facade: vec4<f32>,
 };
 
 struct InstanceIn {
@@ -308,7 +314,30 @@ struct MeshOut {
     @location(2) color: vec3<f32>,
     @location(3) material: vec4<f32>,
     @location(4) uv: vec2<f32>,
+    @location(5) facade: vec4<f32>,
+    @location(6) seed: f32,
 };
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lin = select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+    return select(lin, vec3<f32>(1.0), c >= vec3<f32>(1.0));
+}
+
+// Share of [x − w/2, x + w/2] inside the repeating band [lo, hi) of each
+// unit cell: a box-filtered pulse, so distant windows blur instead of shimmering.
+fn band_integral(x: f32, lo: f32, hi: f32) -> f32 {
+    return floor(x) * (hi - lo) + clamp(fract(x) - lo, 0.0, hi - lo);
+}
+fn filtered_band(x: f32, lo: f32, hi: f32, w: f32) -> f32 {
+    let h = max(w, 1e-4) * 0.5;
+    return (band_integral(x + h, lo, hi) - band_integral(x - h, lo, hi)) / (2.0 * h);
+}
+
+fn hash3(p: vec3<f32>) -> f32 {
+    var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q = q + dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
 
 @vertex
 fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
@@ -320,29 +349,57 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     out.rel = world.xyz;
     out.normal = normalize(normal_m * v.normal);
     let hub = vec3<f32>(0.55, 0.56, 0.58);
-    out.color = mix(inst.color.rgb, hub, v.tint);
+    out.color = mix(inst.color.rgb * srgb_to_linear(v.color.rgb), hub, v.tint);
     var m = inst.material;
     // Hub areas are polished metal.
     m.x = mix(m.x, 0.3, v.tint);
     m.y = mix(m.y, 1.0, v.tint);
     out.material = m;
     out.uv = v.uv;
+    out.facade = v.facade;
+    out.seed = v.color.a;
     return out;
 }
 
 @fragment
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     // Sampled first, in uniform control flow.
-    let albedo = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
+    let albedo_map = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
     let normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
     let mr = textureSample(mr_tex, base_sampler, in.uv);
     let glow = textureSample(emissive_tex, base_sampler, in.uv).rgb;
     let ao = mix(1.0, textureSample(occlusion_tex, base_sampler, in.uv).r, mat.params.y);
+
+    // Building walls: windows in bays and storeys (facade.x > 0). The
+    // cell size in screen space filters them, so far facades stay calm.
+    let fac = in.facade;
+    let on_wall = select(0.0, 1.0, fac.x > 0.0 && fac.z > 0.0);
+    let cell = in.uv / vec2<f32>(max(fac.y * 10.0, 0.1), max(fac.x * 10.0, 0.1));
+    let fw = fwidth(cell);
+    let shops = fac.w > 0.5;
+    let lit_share = (fac.w * 255.0 - select(0.0, 128.0, shops)) / 127.0;
+    let shopfront = shops && cell.y < 1.0;
+    let wx = select(vec2<f32>(0.5 - fac.z * 0.5, 0.5 + fac.z * 0.5), vec2<f32>(0.06, 0.94), shopfront);
+    let wy = select(vec2<f32>(0.3, 0.85), vec2<f32>(0.04, 0.8), shopfront);
+    let glass = filtered_band(cell.x, wx.x, wx.y, fw.x) * filtered_band(cell.y, wy.x, wy.y, fw.y) * on_wall;
+    let pane = hash3(vec3<f32>(floor(cell), in.seed * 255.0));
+    let lit = step(pane, lit_share + select(0.0, 0.3, shopfront));
+    // Walls: a ledge at each floor and darker, dirtier bottoms.
+    let ledge = 1.0 - 0.12 * filtered_band(cell.y, 0.94, 1.0, fw.y) * on_wall;
+    let grime = mix(1.0, mix(0.78, 1.0, smoothstep(0.0, 0.8, in.uv.y)), on_wall);
+    let interior = vec3<f32>(0.025, 0.03, 0.035) + vec3<f32>(0.05, 0.045, 0.04) * hash3(vec3<f32>(floor(cell) + 7.0, in.seed));
+    let albedo = mix(albedo_map * ledge * grime, interior, glass);
+    // Lit rooms: mostly warm lamps, some cool screens and strip lights; shops brighter.
+    let tone = hash3(vec3<f32>(floor(cell) + 19.0, in.seed * 255.0));
+    let room = mix(vec3<f32>(1.0, 0.66, 0.36), vec3<f32>(0.75, 0.82, 1.0), step(0.8, tone));
+    let window_glow = mix(room * (0.18 + 0.22 * tone), vec3<f32>(1.0, 0.9, 0.75) * 0.5, select(0.0, 1.0, shopfront))
+        * (glass * lit * g.shadow_params.z);
+
     let n_geo = normalize(in.normal);
     let n = perturb_normal(n_geo, in.rel, in.uv, normal_map, mat.params.x);
     let l = g.sun_dir.xyz;
     let v = normalize(-in.rel);
-    let rough = clamp(in.material.x * mr.g, 0.02, 1.0);
+    let rough = mix(clamp(in.material.x * mr.g, 0.02, 1.0), 0.06, glass);
     let metal = clamp(in.material.y * mr.b, 0.0, 1.0);
 
     let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n_geo));
@@ -366,6 +423,7 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     col += local_lights(in.rel, n, v, albedo * (1.0 - metal), rough);
     // Glow: the emissive map's colour if there is one, else the surface's.
     col += mix(albedo, glow, mat.params.z) * in.material.z;
+    col += window_glow;
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }

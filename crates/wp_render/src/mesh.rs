@@ -10,8 +10,27 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// 0 = instance colour, 1 = hub metal. Used for wheel spokes.
     pub tint: f32,
-    /// Texture coordinates (0,0 for untextured meshes).
+    /// Texture coordinates (0,0 for untextured meshes); on building walls,
+    /// metres along the wall and up it.
     pub uv: [f32; 2],
+    /// sRGB colour multiplying the instance colour (white for most meshes);
+    /// alpha varies which windows of a building are lit.
+    pub color: [u8; 4],
+    /// Building facade pattern (see `wp_world::scenery::SceneryMesh`); zero: none.
+    pub facade: [u8; 4],
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            tint: 0.0,
+            uv: [0.0; 2],
+            color: [255; 4],
+            facade: [0; 4],
+        }
+    }
 }
 
 pub struct MeshData {
@@ -44,6 +63,7 @@ pub fn cube() -> MeshData {
                 normal: n,
                 tint: 0.0,
                 uv: [0.0, 0.0],
+                ..Default::default()
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -70,6 +90,7 @@ pub fn wheel() -> MeshData {
                 normal: [s, 0.0, c],
                 tint: 0.0,
                 uv: [0.0, 0.0],
+                ..Default::default()
             });
         }
     }
@@ -100,6 +121,7 @@ pub fn wheel() -> MeshData {
                     normal: n,
                     tint: 0.0,
                     uv: [0.0, 0.0],
+                    ..Default::default()
                 });
             }
             let centre = vertices.len() as u32;
@@ -108,18 +130,21 @@ pub fn wheel() -> MeshData {
                 normal: n,
                 tint: hub_tint,
                 uv: [0.0, 0.0],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: ring[0],
                 normal: n,
                 tint: hub_tint,
                 uv: [0.0, 0.0],
+                ..Default::default()
             });
             vertices.push(Vertex {
                 position: ring[1],
                 normal: n,
                 tint: hub_tint,
                 uv: [0.0, 0.0],
+                ..Default::default()
             });
             if side > 0.0 {
                 indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);

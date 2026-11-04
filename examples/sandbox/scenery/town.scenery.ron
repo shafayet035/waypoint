@@ -1,0 +1,27 @@
+// Buildings of the town. Station Avenue, Mill Road and Market Street are lined
+// with generated rows (the roads with sidewalks); the outer roads get lower,
+// sparser houses set back behind a verge; two office blocks stand by the centre.
+(
+  name: "town",
+  styles: {
+    // Low suburban houses: warm render, few lit windows.
+    "house": (walls: [(226, 214, 192), (204, 190, 166), (232, 224, 210)], roof: (128, 84, 70),
+              storey_m: 2.9, bay_m: 3.4, window: 0.38, lit: 0.5),
+  },
+  streets: [
+    // Main streets: shops on the avenue, flats above.
+    (roads: ["avenue_west", "avenue_east"], styles: ["shophouse", "plaster", "concrete"],
+     height_m: (9.0, 24.0), seed: 3),
+    (roads: ["north_road", "south_road"], styles: ["plaster", "brick", "shophouse"],
+     height_m: (7.0, 16.0), seed: 4),
+    // Outer roads: houses behind a 6 m verge, with gardens between.
+    (roads: ["top_road", "east_curve", "southwest_link"], styles: ["house", "brick"],
+     setback_m: 6.0, frontage_m: (9.0, 14.0), depth_m: (8.0, 12.0), height_m: (5.0, 9.0),
+     gap_m: (5.0, 14.0), seed: 5),
+  ],
+  buildings: [
+    // Office blocks on the inside of the north-east loop.
+    (footprint: [(40.0, 40.0), (75.0, 40.0), (75.0, 62.0), (40.0, 62.0)], height_m: 46.0, style: Some("office")),
+    (footprint: [(95.0, 40.0), (118.0, 40.0), (118.0, 75.0), (95.0, 75.0)], height_m: 32.0, style: Some("office")),
+  ],
+)

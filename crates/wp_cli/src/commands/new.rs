@@ -46,6 +46,10 @@ const TEMPLATE_SANDBOX: &[(&str, &[u8])] = &[
         include_bytes!("../../../../examples/sandbox/scenes/town.scene.ron"),
     ),
     (
+        "scenery/town.scenery.ron",
+        include_bytes!("../../../../examples/sandbox/scenery/town.scenery.ron"),
+    ),
+    (
         "tests/town_route.scenario.ron",
         include_bytes!("../../../../examples/sandbox/tests/town_route.scenario.ron"),
     ),

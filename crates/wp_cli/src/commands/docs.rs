@@ -97,7 +97,8 @@ Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
 \"Weather\" can be changed live with world.set), pedestrians: Some((count: 30)) (they walk
 roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))],
-time_of_day: Some((hour: 21.5, hours_per_hour: 60.0)) (night: headlights and street lamps; \"TimeOfDay\" is live-editable).
+time_of_day: Some((hour: 21.5, hours_per_hour: 60.0)) (night: headlights and street lamps; \"TimeOfDay\" is live-editable),
+scenery: Some(\"scenery/town.scenery.ron\") (buildings: `wp docs scenery`).
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).
@@ -201,14 +202,42 @@ No `os`, files or clock; math.random is seeded from the run's seed, so runs stay
 Luau extras over Lua 5.1: `+=`, `continue`, string interpolation, optional types.
 ";
 
+const DOCS_SCENERY: &str = "\
+Scenery: buildings beside the roads. A scene names a file: scenery: Some(\"scenery/town.scenery.ron\").
+
+(
+  name: \"town\",
+  styles: {   // optional; built in: plaster, brick, concrete, office, shophouse (same name replaces)
+    \"house\": (walls: [(226, 214, 192), (204, 190, 166)], roof: (128, 84, 70),
+               storey_m: 2.9, bay_m: 3.4, window: 0.38, lit: 0.5, shops: false),
+  },
+  streets: [  // rows generated along roads, behind the sidewalk; never on a road, junction or each other
+    (roads: [\"avenue_west\"], sides: Both, setback_m: 1.0, frontage_m: (10.0, 22.0), depth_m: (10.0, 16.0),
+     height_m: (9.0, 24.0), gap_m: (0.5, 4.0), styles: [\"shophouse\", \"plaster\"], seed: 3),
+  ],
+  buildings: [  // placed one by one: outline (x east, y north) in m, either direction round
+    (footprint: [(40.0, 40.0), (75.0, 40.0), (75.0, 62.0), (40.0, 62.0)], height_m: 46.0, style: Some(\"office\")),
+  ],
+)
+
+streets: roads empty = every road with a sidewalk; sides Left/Right are seen going from the road's `from`
+node to its `to` node. Heights round to whole storeys. The same seed always builds the same street.
+Styles: walls (sRGB, one picked per building), roof, storey_m, bay_m (window spacing; each wall fits a
+whole number of bays), window (glass share of a bay, 0 = blank), lit (share of windows lit at night),
+shops (shop windows on the ground floor). Windows are drawn by the renderer, not modelled.
+Buildings cast shadows and stream in 400 m tiles like the roads. `wp check`: WP-B001–B007 (B007 warns
+when a hand-placed building stands on a road or sidewalk). Schema: `wp schema scenery`.
+";
+
 pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
     let text = match topic {
-        None => "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
+        None => "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scenery, scripting, vehicle\nexample: wp docs errors/WP-V012\n".to_string(),
         Some("scripting") => DOCS_SCRIPTING.to_string(),
         Some("assets") => DOCS_ASSETS.to_string(),
         Some("mods") => DOCS_MODS.to_string(),
         Some("cli") => DOCS_CLI.to_string(),
         Some("scenario") => DOCS_SCENARIO.to_string(),
+        Some("scenery") => DOCS_SCENERY.to_string(),
         Some("vehicle") => DOCS_VEHICLE.to_string(),
         Some("errors") => {
             if ctx.json {
@@ -233,7 +262,7 @@ pub fn docs(ctx: &Ctx, topic: Option<&str>) -> CmdResult {
             format!("{}: {}\n\nHow to fix: {}\n", e.code, e.title, e.fix)
         }
         Some(other) => {
-            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scripting, vehicle"));
+            return Err(cli_error(format!("unknown docs topic `{other}`"), "topics: cli, errors, errors/<CODE>, assets, mods, scenario, scenery, scripting, vehicle"));
         }
     };
     if ctx.json {

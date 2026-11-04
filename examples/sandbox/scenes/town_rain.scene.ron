@@ -4,6 +4,7 @@
   name: "town_rain",
   ground: (friction_scale: 1.0, gravity: 9.81),
   roads: Some("roads/town.road.ron"),
+  scenery: Some("scenery/town.scenery.ron"),
   traffic: Some((count: 12, vehicles: ["hatchback", "hatchback", "city_bus"])),
   weather: Some((rain: 0.8)),
   spawns: [

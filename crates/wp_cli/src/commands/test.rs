@@ -222,6 +222,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
         pedestrians: None,
         weather: None,
         time_of_day: None,
+        scenery: None,
     };
     let make_app = || waypoint::make_app(project.disabled_plugins());
     let mut results = Vec::new();
@@ -235,6 +236,7 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             vehicle,
             trailer: None,
             roads: None,
+            scenery: None,
             traffic: Vec::new(),
             mission: None,
             mission_script: None,

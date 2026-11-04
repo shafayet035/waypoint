@@ -82,17 +82,157 @@ struct InstanceRaw {
     material: [f32; 4],
 }
 
-/// Road tiles for the current network. Windows build them on a worker
-/// thread and keep only tiles near the camera on the GPU (streaming);
-/// offscreen renders build and upload everything at once, so shots are
-/// complete and repeatable.
-struct RoadCache {
-    network: usize,
+/// A square of static geometry (roads or buildings), ready to upload:
+/// vertices relative to `centre`, one mesh per material layer.
+struct TileData {
+    centre: [f32; 2],
+    min: [f32; 3],
+    max: [f32; 3],
+    layers: Vec<mesh::MeshData>,
+}
+
+impl TileData {
+    fn from_road(t: wp_road::RoadTile) -> Self {
+        let layers = t
+            .layers
+            .into_iter()
+            .map(|l| mesh::MeshData {
+                vertices: l
+                    .positions
+                    .iter()
+                    .zip(&l.normals)
+                    .map(|(p, n)| mesh::Vertex {
+                        position: *p,
+                        normal: *n,
+                        ..Default::default()
+                    })
+                    .collect(),
+                indices: l.indices,
+            })
+            .collect();
+        Self {
+            centre: t.centre,
+            min: t.min,
+            max: t.max,
+            layers,
+        }
+    }
+
+    fn from_scenery(t: wp_world::scenery::SceneryTile) -> Self {
+        let m = t.mesh;
+        let vertices = (0..m.positions.len())
+            .map(|i| mesh::Vertex {
+                position: m.positions[i],
+                normal: m.normals[i],
+                tint: 0.0,
+                uv: m.uvs[i],
+                color: m.colors[i],
+                facade: m.facades[i],
+            })
+            .collect();
+        Self {
+            centre: t.centre,
+            min: t.min,
+            max: t.max,
+            layers: vec![mesh::MeshData {
+                vertices,
+                indices: m.indices,
+            }],
+        }
+    }
+}
+
+/// Static geometry in tiles: road networks and scenery. Windows build the
+/// tiles on a worker thread and keep only those near the camera on the GPU
+/// (streaming); offscreen renders build and upload everything at once, so
+/// shots are complete and repeatable.
+struct TileCache {
+    /// Identity of the source (the `Arc` it was built from).
+    source: usize,
     /// Tiles still being built on a worker thread.
-    pending: Option<std::sync::mpsc::Receiver<Vec<wp_road::RoadTile>>>,
-    tiles: Vec<wp_road::RoadTile>,
+    pending: Option<std::sync::mpsc::Receiver<Vec<TileData>>>,
+    tiles: Vec<TileData>,
     /// GPU meshes of resident tiles, by index into `tiles`.
-    resident: std::collections::BTreeMap<usize, [GpuMesh; 3]>,
+    resident: std::collections::BTreeMap<usize, Vec<GpuMesh>>,
+}
+
+impl TileCache {
+    /// Keep `slot` in step with `source` (`None`: nothing to draw): rebuild
+    /// when it changes, then upload tiles coming into `range` of `eye`
+    /// (nearest first) and drop those far behind; `range` `None` keeps all.
+    fn sync(
+        slot: &mut Option<TileCache>,
+        gpu: &Gpu,
+        source: Option<usize>,
+        build: impl FnOnce() -> Vec<TileData> + Send + 'static,
+        range: Option<f32>,
+        eye: glam::Vec3,
+    ) {
+        let Some(id) = source else {
+            *slot = None;
+            return;
+        };
+        if slot.as_ref().is_none_or(|c| c.source != id) {
+            let mut cache = TileCache {
+                source: id,
+                pending: None,
+                tiles: Vec::new(),
+                resident: Default::default(),
+            };
+            if range.is_some() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(build());
+                });
+                cache.pending = Some(rx);
+            } else {
+                cache.tiles = build();
+            }
+            *slot = Some(cache);
+        }
+        let cache = slot.as_mut().expect("set above");
+        if let Some(rx) = &cache.pending
+            && let Ok(tiles) = rx.try_recv()
+        {
+            cache.tiles = tiles;
+            cache.pending = None;
+        }
+        let distance = |t: &TileData| {
+            let half = (t.max[0] - t.min[0]).max(t.max[1] - t.min[1]) * 0.5;
+            (glam::Vec2::new(t.centre[0], t.centre[1]) - eye.truncate()).length() - half
+        };
+        let upload = |t: &TileData| -> Vec<GpuMesh> {
+            t.layers
+                .iter()
+                .map(|l| GpuMesh::new(gpu, l, "static tile"))
+                .collect()
+        };
+        match range {
+            None => {
+                for (i, t) in cache.tiles.iter().enumerate() {
+                    cache.resident.entry(i).or_insert_with(|| upload(t));
+                }
+            }
+            Some(range) => {
+                // Drop tiles well out of range (hysteresis avoids churn at the edge).
+                let tiles = &cache.tiles;
+                cache
+                    .resident
+                    .retain(|i, _| distance(&tiles[*i]) < range * 1.25);
+                let mut wanted: Vec<(f32, usize)> = tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, t)| !cache.resident.contains_key(i) && distance(t) < range)
+                    .map(|(i, t)| (distance(t), i))
+                    .collect();
+                wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
+                for (_, i) in wanted.into_iter().take(TILE_UPLOADS_PER_FRAME) {
+                    let meshes = upload(&cache.tiles[i]);
+                    cache.resident.insert(i, meshes);
+                }
+            }
+        }
+    }
 }
 
 /// What the last frame drew: for budgets (draw calls, triangles) and for
@@ -106,6 +246,17 @@ pub struct RenderStats {
     pub road_tiles_resident: u32,
     pub road_tiles_drawn: u32,
     pub road_tiles_total: u32,
+    /// Building tiles on the GPU, drawn this frame, and in the whole map.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub building_tiles_resident: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub building_tiles_drawn: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub building_tiles_total: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Road tiles uploaded per frame while streaming, nearest first, so a
@@ -562,6 +713,7 @@ impl Textures {
                     normal: p.normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]),
                     tint: 0.0,
                     uv: p.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                    ..Default::default()
                 })
                 .collect(),
             indices: p.indices.clone(),
@@ -632,7 +784,9 @@ pub struct Renderer {
     instance_capacity: usize,
     /// Road meshes for the current network (asphalt, markings, sidewalks),
     /// rebuilt only when the network changes.
-    roads: Option<RoadCache>,
+    roads: Option<TileCache>,
+    /// Building meshes for the current scenery, in tiles like the roads.
+    buildings: Option<TileCache>,
     road_instances: wgpu::Buffer,
     road_instance_capacity: usize,
     /// Keep road tiles within this distance of the camera (m) and build
@@ -790,8 +944,7 @@ impl Renderer {
             })
         };
 
-        let vertex_attrs =
-            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 12 => Float32x2];
+        let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 12 => Float32x2, 13 => Unorm8x4, 14 => Unorm8x4];
         let vertex_layout = || wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -891,6 +1044,7 @@ impl Renderer {
             roads: None,
             road_instances,
             road_instance_capacity,
+            buildings: None,
             stream_range: None,
             models: None,
             textures,
@@ -1136,6 +1290,7 @@ impl Renderer {
                 light_view_proj(env.sun_dir, frame.camera.target, eye, sh).to_cols_array_2d();
             globals.shadow_params = [1.0 / sh.size as f32, 1.0, 0.0, 0.0];
         }
+        globals.shadow_params[2] = env.darkness();
         let shadow_count = frame.shadows.len().min(MAX_SHADOWS);
         globals.params[1] = shadow_count as f32;
         for (i, s) in frame.shadows.iter().take(MAX_SHADOWS).enumerate() {
@@ -1208,36 +1363,94 @@ impl Renderer {
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(&all));
         }
 
-        self.update_roads(gpu, frame, eye);
-        // Road tiles to draw: resident and in view; three instances each
-        // (asphalt, markings, sidewalks), placed relative to the camera.
-        let mut road_draws: Vec<usize> = Vec::new();
-        let mut road_raw: Vec<InstanceRaw> = Vec::new();
+        self.update_tiles(gpu, frame, eye);
+        // Static tiles to draw (resident and in view), placed relative to the
+        // camera: roads with three instances each (asphalt, markings,
+        // sidewalks), buildings with one. `static_draws[k]` uses instance k.
+        let building_mat = InstanceRaw {
+            model: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            normal: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            color: [1.0; 4],
+            material: [0.85, 0.0, 0.0, 0.0],
+        };
+        let mut static_draws: Vec<(StaticKind, usize, usize)> = Vec::new();
+        let mut static_raw: Vec<InstanceRaw> = Vec::new();
+        let tile_model = |t: &TileData| {
+            let offset = glam::Vec3::new(t.centre[0] - eye.x, t.centre[1] - eye.y, -eye.z);
+            (
+                offset,
+                glam::Mat4::from_translation(offset).to_cols_array_2d(),
+            )
+        };
+        let mut road_tiles_drawn = 0;
         if let Some(cache) = &self.roads {
             for &i in cache.resident.keys() {
-                let t = &cache.tiles[i];
-                let offset = glam::Vec3::new(t.centre[0] - eye.x, t.centre[1] - eye.y, -eye.z);
-                if !in_view(&view_proj, offset, t) {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if !in_view(&view_proj, offset, &cache.tiles[i]) {
                     continue;
                 }
-                road_draws.push(i);
-                let model = glam::Mat4::from_translation(offset).to_cols_array_2d();
-                road_raw.extend(road_mats.iter().map(|m| InstanceRaw { model, ..*m }));
+                road_tiles_drawn += 1;
+                for (k, m) in road_mats.iter().enumerate() {
+                    static_draws.push((StaticKind::Road, i, k));
+                    static_raw.push(InstanceRaw { model, ..*m });
+                }
             }
         }
-        if road_raw.len() > self.road_instance_capacity {
-            self.road_instance_capacity = road_raw.len().next_power_of_two();
+        let mut building_tiles_drawn = 0;
+        if let Some(cache) = &self.buildings {
+            for &i in cache.resident.keys() {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if !in_view(&view_proj, offset, &cache.tiles[i]) {
+                    continue;
+                }
+                building_tiles_drawn += 1;
+                static_draws.push((StaticKind::Building, i, 0));
+                static_raw.push(InstanceRaw {
+                    model,
+                    ..building_mat
+                });
+            }
+        }
+        // Buildings near the shadow map's square cast shadows, even off screen.
+        let main_static = static_draws.len();
+        if self.shadow.is_some()
+            && let Some(cache) = &self.buildings
+        {
+            let light = glam::Mat4::from_cols_array_2d(&globals.light_view_proj);
+            for &i in cache.resident.keys() {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if in_view(&light, offset, &cache.tiles[i]) {
+                    static_draws.push((StaticKind::Building, i, 0));
+                    static_raw.push(InstanceRaw {
+                        model,
+                        ..building_mat
+                    });
+                }
+            }
+        }
+        if static_raw.len() > self.road_instance_capacity {
+            self.road_instance_capacity = static_raw.len().next_power_of_two();
             self.road_instances = Self::instance_buffer(gpu, self.road_instance_capacity);
         }
-        if !road_raw.is_empty() {
+        if !static_raw.is_empty() {
             gpu.queue
-                .write_buffer(&self.road_instances, 0, bytemuck::cast_slice(&road_raw));
+                .write_buffer(&self.road_instances, 0, bytemuck::cast_slice(&static_raw));
         }
         let mut stats = RenderStats {
-            instances: (total + road_raw.len()) as u32,
+            instances: (total + main_static) as u32,
             road_tiles_resident: self.roads.as_ref().map_or(0, |c| c.resident.len() as u32),
-            road_tiles_drawn: road_draws.len() as u32,
+            road_tiles_drawn,
             road_tiles_total: self.roads.as_ref().map_or(0, |c| c.tiles.len() as u32),
+            building_tiles_resident: self
+                .buildings
+                .as_ref()
+                .map_or(0, |c| c.resident.len() as u32),
+            building_tiles_drawn,
+            building_tiles_total: self.buildings.as_ref().map_or(0, |c| c.tiles.len() as u32),
             ..Default::default()
         };
         let mut encoder = gpu
@@ -1283,6 +1496,20 @@ impl Renderer {
                 }
                 first += count;
             }
+            for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().skip(main_static) {
+                if let Some(mesh) = self.static_mesh(kind, tile, layer) {
+                    let slot = slot as u64;
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.road_instances
+                            .slice(slot * stride..(slot + 1) * stride),
+                    );
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    stats.draw_calls += 1;
+                }
+            }
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1318,26 +1545,22 @@ impl Renderer {
             pass.set_pipeline(&self.ground);
             pass.draw(0..6, 0..1);
             pass.set_pipeline(&self.meshes_pipeline);
-            if let Some(cache) = &self.roads {
-                let stride = std::mem::size_of::<InstanceRaw>() as u64;
-                for (n, i) in road_draws.iter().enumerate() {
-                    for (k, mesh) in cache.resident[i].iter().enumerate() {
-                        if mesh.index_count == 0 {
-                            continue;
-                        }
-                        let slot = (n * 3 + k) as u64;
-                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                        pass.set_vertex_buffer(
-                            1,
-                            self.road_instances
-                                .slice(slot * stride..(slot + 1) * stride),
-                        );
-                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                        stats.draw_calls += 1;
-                        stats.triangles += mesh.index_count as u64 / 3;
-                    }
-                }
+            let stride = std::mem::size_of::<InstanceRaw>() as u64;
+            for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().take(main_static) {
+                let Some(mesh) = self.static_mesh(kind, tile, layer) else {
+                    continue;
+                };
+                let slot = slot as u64;
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(
+                    1,
+                    self.road_instances
+                        .slice(slot * stride..(slot + 1) * stride),
+                );
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                stats.draw_calls += 1;
+                stats.triangles += mesh.index_count as u64 / 3;
             }
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             let mut first = 0u64;
@@ -1376,7 +1599,27 @@ impl Renderer {
     }
 }
 
+/// Which tile cache a static draw comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StaticKind {
+    Road,
+    Building,
+}
+
 impl Renderer {
+    /// Layer `layer` of tile `tile`, if resident and not empty.
+    fn static_mesh(&self, kind: StaticKind, tile: usize, layer: usize) -> Option<&GpuMesh> {
+        let cache = match kind {
+            StaticKind::Road => self.roads.as_ref()?,
+            StaticKind::Building => self.buildings.as_ref()?,
+        };
+        cache
+            .resident
+            .get(&tile)?
+            .get(layer)
+            .filter(|m| m.index_count > 0)
+    }
+
     fn mesh(&self, id: MeshId) -> Option<&GpuMesh> {
         match id {
             MeshId::Cube => Some(&self.cube),
@@ -1469,90 +1712,44 @@ impl Renderer {
         });
     }
 
-    /// Keep the frame's road tiles on the GPU: rebuild them when the network
-    /// changes, then (when streaming) upload tiles coming into range and drop
-    /// those far behind.
-    fn update_roads(&mut self, gpu: &Gpu, frame: &FrameView, eye: glam::Vec3) {
-        let Some(net) = &frame.roads else {
-            self.roads = None;
-            return;
-        };
-        let id = std::sync::Arc::as_ptr(net) as usize;
-        if self.roads.as_ref().is_none_or(|c| c.network != id) {
-            let mut cache = RoadCache {
-                network: id,
-                pending: None,
-                tiles: Vec::new(),
-                resident: Default::default(),
-            };
-            if self.stream_range.is_some() {
-                let (tx, rx) = std::sync::mpsc::channel();
-                let net = net.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(wp_road::build_tiles(&net, wp_road::TILE_M));
-                });
-                cache.pending = Some(rx);
-            } else {
-                cache.tiles = wp_road::build_tiles(net, wp_road::TILE_M);
-            }
-            self.roads = Some(cache);
-        }
+    /// Keep the frame's road and building tiles on the GPU.
+    fn update_tiles(&mut self, gpu: &Gpu, frame: &FrameView, eye: glam::Vec3) {
         let range = self.stream_range;
-        let cache = self.roads.as_mut().expect("set above");
-        if let Some(rx) = &cache.pending
-            && let Ok(tiles) = rx.try_recv()
-        {
-            cache.tiles = tiles;
-            cache.pending = None;
-        }
-        let distance = |t: &wp_road::RoadTile| {
-            let half = (t.max[0] - t.min[0]).max(t.max[1] - t.min[1]) * 0.5;
-            (glam::Vec2::new(t.centre[0], t.centre[1]) - eye.truncate()).length() - half
-        };
-        let upload = |t: &wp_road::RoadTile| {
-            t.layers.clone().map(|l| {
-                let data = mesh::MeshData {
-                    vertices: l
-                        .positions
-                        .iter()
-                        .zip(&l.normals)
-                        .map(|(p, n)| mesh::Vertex {
-                            position: *p,
-                            normal: *n,
-                            tint: 0.0,
-                            uv: [0.0, 0.0],
-                        })
-                        .collect(),
-                    indices: l.indices,
-                };
-                GpuMesh::new(gpu, &data, "road tile")
-            })
-        };
-        match range {
-            None => {
-                for (i, t) in cache.tiles.iter().enumerate() {
-                    cache.resident.entry(i).or_insert_with(|| upload(t));
-                }
-            }
-            Some(range) => {
-                // Drop tiles well out of range (hysteresis avoids churn at the edge).
-                let tiles = &cache.tiles;
-                cache
-                    .resident
-                    .retain(|i, _| distance(&tiles[*i]) < range * 1.25);
-                let mut wanted: Vec<(f32, usize)> = tiles
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, t)| !cache.resident.contains_key(i) && distance(t) < range)
-                    .map(|(i, t)| (distance(t), i))
-                    .collect();
-                wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
-                for (_, i) in wanted.into_iter().take(TILE_UPLOADS_PER_FRAME) {
-                    let meshes = upload(&cache.tiles[i]);
-                    cache.resident.insert(i, meshes);
-                }
-            }
-        }
+        let net = frame.roads.clone();
+        TileCache::sync(
+            &mut self.roads,
+            gpu,
+            net.as_ref().map(|n| std::sync::Arc::as_ptr(n) as usize),
+            move || {
+                net.map(|n| {
+                    wp_road::build_tiles(&n, wp_road::TILE_M)
+                        .into_iter()
+                        .map(TileData::from_road)
+                        .collect()
+                })
+                .unwrap_or_default()
+            },
+            range,
+            eye,
+        );
+        let scenery = frame.scenery.clone();
+        TileCache::sync(
+            &mut self.buildings,
+            gpu,
+            scenery.as_ref().map(|s| std::sync::Arc::as_ptr(s) as usize),
+            move || {
+                scenery
+                    .map(|s| {
+                        wp_world::scenery::build_tiles(&s, wp_road::TILE_M)
+                            .into_iter()
+                            .map(TileData::from_scenery)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            },
+            range,
+            eye,
+        );
     }
 }
 
@@ -1589,9 +1786,9 @@ fn light_view_proj(
     proj * view * glam::Mat4::from_translation(eye)
 }
 
-/// Whether a road tile at `offset` from the camera can be on screen: false
+/// Whether a tile at `offset` from the camera can be on screen: false
 /// only when all eight corners of its box lie beyond one side of the view.
-fn in_view(view_proj: &glam::Mat4, offset: glam::Vec3, t: &wp_road::RoadTile) -> bool {
+fn in_view(view_proj: &glam::Mat4, offset: glam::Vec3, t: &TileData) -> bool {
     let mut out = [true; 5];
     for k in 0..8 {
         let p = offset
