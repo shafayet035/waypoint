@@ -191,8 +191,12 @@ collision adds a `Dent` (body frame, depth from speed and mass share: 0 below 5 
 between equal cars, at most 70 cm) to a `Damage` component (added on first hit, so crash-free runs hash as
 before) and lowers `health_pct`. `Collision` events carry `impact_kmh`; telemetry has `health_pct`. The renderer
 bends the vehicle's model around its dents (`extract::vehicle::deform`, uploaded once per change).
+Sound (`wp_audio`): a synthesized voice per player vehicle: firing-frequency harmonics (`engine.cylinders`),
+half-order rumble, intake hiss with throttle, road roar with speed, squeal when sliding. Tuned per vehicle with
+`sound: (volume, pitch, roughness, rumble, intake, road, skid)` (multipliers). Windows play it via cpal (device
+opened on a thread; `wp run --mute`); `wp audio --scenario X --out f.wav` renders it headless for analysis.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-WASM mod modules and per-mod capability permissions; damage effects on driving.
+WASM mod modules and per-mod capability permissions; damage effects on driving; traffic vehicles' sound.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back

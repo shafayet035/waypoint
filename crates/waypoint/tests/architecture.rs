@@ -20,7 +20,11 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
     .concat();
     let gameplay = [simulation.clone(), vec!["wp_script", "wp_mission"]].concat();
     let verification = [gameplay.clone(), vec!["wp_test"]].concat();
-    let presentation = [gameplay.clone(), vec!["wp_asset", "wp_rhi", "wp_render"]].concat();
+    let presentation = [
+        gameplay.clone(),
+        vec!["wp_asset", "wp_audio", "wp_rhi", "wp_render"],
+    ]
+    .concat();
     let agent = [presentation.clone(), vec!["wp_control"]].concat();
     let platform = [agent.clone(), vec!["wp_platform"]].concat();
     let everything = [
@@ -59,6 +63,7 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
         ),
         ("wp_test", verification),
         ("wp_asset", vec!["wp_core", "wp_data"]),
+        ("wp_audio", vec![]),
         ("wp_rhi", vec!["wp_core"]),
         ("wp_render", presentation),
         ("wp_control", agent),

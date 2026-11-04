@@ -45,6 +45,7 @@ pub fn play(
             exit_after_s,
             control,
             quality: Some(project.game.value.quality.tier),
+            audio: true,
         },
     )
     .map_err(|d| vec![d])

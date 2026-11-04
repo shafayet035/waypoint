@@ -1,0 +1,11 @@
+[package]
+name = "wp_audio"
+description = "Vehicle sound: a synthesized engine (firing-frequency harmonics, intake noise), tyre roar and skid squeal; WAV output."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

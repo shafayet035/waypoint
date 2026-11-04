@@ -47,6 +47,8 @@ enum Cmd {
     Run(commands::RunArgs),
     /// Render one frame to a PNG, headless: any scenario or drive at any time.
     Shot(commands::ShotArgs),
+    /// Render the player vehicle's sound (engine, road, skids) to a WAV, headless.
+    Audio(commands::AudioArgs),
     /// Control protocol on stdin/stdout (JSON-RPC 2.0, one request per line).
     Serve(commands::ServeArgs),
     /// Model Context Protocol server on stdin/stdout, for Claude and other agents.
@@ -201,6 +203,7 @@ fn main() {
         Cmd::Docs { topic } => commands::docs(&ctx, topic.as_deref()),
         Cmd::Run(args) => commands::run(&ctx, &args),
         Cmd::Shot(args) => commands::shot(&ctx, &args),
+        Cmd::Audio(args) => commands::audio(&ctx, &args),
         Cmd::Serve(args) => commands::serve(&ctx, &args),
         Cmd::Mcp => mcp::serve(&ctx),
         Cmd::Test { filter } => commands::test(&ctx, filter.as_deref()),

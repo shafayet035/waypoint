@@ -7,6 +7,7 @@
 //! right thumb high for throttle, low for brake, tap the top edge for camera. A control client (`wp run --control <port>`)
 //! can query and drive the same session while it runs.
 
+pub mod audio;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -36,6 +37,8 @@ pub struct WindowOptions {
     /// distance. `None` renders at full size with default shadows and the
     /// whole map resident.
     pub quality: Option<wp_world::QualityTier>,
+    /// Play the player vehicle's engine, road and skid sound.
+    pub audio: bool,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -113,7 +116,11 @@ fn run_with_event_loop(
         frames: 0,
         ticks: 0,
         last_title: Instant::now(),
+        audio: None,
     };
+    if handler.opts.audio {
+        handler.audio = Some(audio::EngineAudio::start());
+    }
     event_loop
         .run_app(&mut handler)
         .map_err(|e| Diagnostic::error("WP-P002", format!("window loop failed: {e}")))?;
@@ -221,6 +228,8 @@ struct Handler {
     frames: u64,
     ticks: u64,
     last_title: Instant,
+    /// Engine sound, if a sound device opened.
+    audio: Option<audio::EngineAudio>,
 }
 
 impl Handler {
@@ -363,6 +372,15 @@ impl Handler {
             }
         }
 
+        if let Some(a) = &self.audio {
+            let sound = self
+                .session
+                .player
+                .and_then(|p| audio::sound_input(&self.session.app.world, p))
+                .filter(|_| !self.session.paused && !self.paused_by_suspend)
+                .unwrap_or_default();
+            a.set(sound);
+        }
         let heading = self
             .session
             .player

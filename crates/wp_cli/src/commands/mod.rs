@@ -15,7 +15,7 @@ mod test;
 pub use asset::{asset_info, asset_list, credits};
 pub use docs::docs;
 pub(crate) use drive::make_session;
-pub use drive::{DriveArgs, RunArgs, ServeArgs, ShotArgs, run, serve, shot};
+pub use drive::{AudioArgs, DriveArgs, RunArgs, ServeArgs, ShotArgs, audio, run, serve, shot};
 pub use import::{import_opendrive, import_osm};
 pub use info::{plugins, systems};
 pub use mods::{mod_list, mod_new};

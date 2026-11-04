@@ -41,6 +41,10 @@ pub struct VehicleDef {
     /// A fifth wheel for towing a semi-trailer (tractor units).
     #[serde(default)]
     pub hitch: Option<HitchDef>,
+    /// How the vehicle sounds. Defaults suit a petrol car; the engine's note
+    /// follows `engine.cylinders` and the revs.
+    #[serde(default)]
+    pub sound: SoundDef,
     /// Body model to draw (glTF `.glb`, a project path such as
     /// `assets/vehicles/hatchback.glb`), origin on the ground midway between
     /// the axles, sized to `body`. Wheels stay procedural. Without one the
@@ -109,10 +113,62 @@ pub struct EngineDef {
     /// Speed governor: throttle is cut above this road speed, km/h (buses and trucks).
     #[serde(default)]
     pub governed_speed_kmh: Option<f32>,
+    /// Number of cylinders, for the engine's sound (firing frequency).
+    #[serde(default = "default_cylinders")]
+    pub cylinders: u8,
 }
 
 fn default_engine_brake() -> f32 {
     30.0
+}
+
+fn default_cylinders() -> u8 {
+    4
+}
+
+/// The synthesized vehicle sound. Every level is a multiplier: 1 is the default.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SoundDef {
+    /// Overall loudness.
+    #[serde(default = "one")]
+    pub volume: f32,
+    /// Engine note pitch: 1 follows the firing frequency; below 1 sounds bigger.
+    #[serde(default = "one")]
+    pub pitch: f32,
+    /// Higher harmonics: below 1 is smooth (petrol), above 1 rasps (diesel, sports exhaust).
+    #[serde(default = "one")]
+    pub roughness: f32,
+    /// Low half-order rumble (big diesels, V8s).
+    #[serde(default = "one")]
+    pub rumble: f32,
+    /// Intake and exhaust hiss with throttle.
+    #[serde(default = "one")]
+    pub intake: f32,
+    /// Tyre roar with speed.
+    #[serde(default = "one")]
+    pub road: f32,
+    /// Squeal when sliding.
+    #[serde(default = "one")]
+    pub skid: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+impl Default for SoundDef {
+    fn default() -> Self {
+        SoundDef {
+            volume: 1.0,
+            pitch: 1.0,
+            roughness: 1.0,
+            rumble: 1.0,
+            intake: 1.0,
+            road: 1.0,
+            skid: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

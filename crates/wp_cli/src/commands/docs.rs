@@ -17,6 +17,7 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)
   wp run --control <port>      also accept control-protocol requests on 127.0.0.1:<port> (0 = any free port)
   wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
+  wp audio [opts] --out f.wav  render the player vehicle's sound headless (engine, road, skids); wp run --mute
   wp serve [drive opts]        control protocol (JSON-RPC 2.0) on stdin/stdout, one request per line
   wp mcp                       Model Context Protocol server on stdin/stdout (tools, resources, screenshots)
   wp test [filter]             run scenario tests; exit 1 if any fail (golden replays included)
@@ -111,6 +112,8 @@ Units are in field names (mass_kg, radius_m, drag_area_m2). Model: brush tyres w
 length and sliding friction, body roll and pitch on springs, tipping about the outer wheels,
 torque-curve engine with optional speed governor, automatic gearbox, open differential, brakes
 (hydraulic, or air with reservoir, compressor and chamber lag) with optional ABS, aerodynamic drag.
+Sound: engine.cylinders sets the note; sound: (volume, pitch, roughness, rumble, intake, road, skid) tunes it
+(multipliers, 1 = default; a diesel bus: pitch 0.85, roughness 1.6, rumble 2.2).
 Optional sections: suspension, body (with style: Car | Bus | TruckCab), brakes.air, brakes.abs,
 brakes.traction_control, brakes.esc (stability control),
 engine.governed_speed_kmh, gearbox.reverse_ratio, hitch (fifth wheel for semi-trailers).

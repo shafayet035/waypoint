@@ -1,6 +1,7 @@
 //! Driving a session: `wp run` (window or headless), `wp shot`, `wp serve`.
 
 use super::*;
+use wp_audio as waypoint_audio;
 
 // ---- wp run / wp shot --------------------------------------------------------
 
@@ -71,6 +72,9 @@ pub struct RunArgs {
     /// Ticks between world hashes in a recording.
     #[arg(long, default_value_t = 60)]
     hash_every: u64,
+    /// No engine sound in the window.
+    #[arg(long)]
+    mute: bool,
     #[command(flatten)]
     drive: DriveArgs,
 }
@@ -187,6 +191,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 exit_after_s: args.exit_after,
                 control,
                 quality: Some(tier),
+                audio: !args.mute,
             },
         )
         .map_err(|d| vec![d])?;
@@ -387,6 +392,77 @@ pub fn shot(ctx: &Ctx, args: &ShotArgs) -> CmdResult {
             args.camera,
             app.time().seconds(),
             gpu.info().name
+        );
+    }
+    Ok(0)
+}
+
+// ---- wp audio ----------------------------------------------------------------
+
+#[derive(clap::Args)]
+pub struct AudioArgs {
+    /// Simulated seconds to record (a scenario's own length if omitted).
+    #[arg(long)]
+    seconds: Option<f32>,
+    /// Output WAV path (mono, 16-bit, 44.1 kHz).
+    #[arg(long, default_value = "engine.wav")]
+    out: std::path::PathBuf,
+    #[command(flatten)]
+    drive: DriveArgs,
+}
+
+/// `wp audio`: render the player vehicle's sound for a drive or scenario to WAV.
+pub fn audio(ctx: &Ctx, args: &AudioArgs) -> CmdResult {
+    const RATE: u32 = 44_100;
+    let project = load_project(ctx)?;
+    let Drive {
+        mut app,
+        player,
+        label,
+    } = setup_drive(&project, &args.drive)?;
+    let seconds = args
+        .seconds
+        .or_else(|| {
+            args.drive
+                .scenario
+                .as_ref()
+                .and_then(|s| project.scenarios.get(s))
+                .map(|s| s.value.duration_s)
+        })
+        .unwrap_or(10.0);
+    let ticks = app.time().ticks_for(seconds);
+    let per_tick = RATE as usize / app.time().tick_hz as usize;
+    let mut voice = waypoint_audio::Voice::new(RATE);
+    let mut samples = Vec::with_capacity(ticks as usize * per_tick);
+    let mut buf = vec![0.0f32; per_tick];
+    let mut peak_rpm = 0.0f32;
+    for _ in 0..ticks {
+        app.tick();
+        let input = wp_platform::audio::sound_input(&app.world, player).unwrap_or_default();
+        peak_rpm = peak_rpm.max(input.rpm);
+        voice.render(&input, &mut buf);
+        samples.extend_from_slice(&buf);
+    }
+    std::fs::write(&args.out, waypoint_audio::wav_bytes(&samples, RATE)).map_err(|e| {
+        vec![Diagnostic::error(
+            "WP-D001",
+            format!("cannot write {}: {e}", args.out.display()),
+        )]
+    })?;
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt();
+    if ctx.json {
+        print_json(&json!({
+            "ok": true,
+            "path": args.out,
+            "seconds": seconds,
+            "sample_rate": RATE,
+            "peak_rpm": peak_rpm,
+            "rms": rms,
+        }));
+    } else {
+        println!(
+            "wrote {} ({seconds:.1} s of {label}; peak {peak_rpm:.0} rpm, level {rms:.3})",
+            args.out.display()
         );
     }
     Ok(0)
