@@ -86,7 +86,7 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   with stops, timetables and passengers (`wp run --mission route_1`), scriptable in Lua (Luau).
   3D models: glTF (`.glb`) vehicles with licence files checked by `wp check` (`wp docs assets`).
   Road tiles stream around the camera on a worker thread, drawn camera-relative for big maps.
-  Sun shadows from a shadow map sized by quality tier.
+  Sun shadows from a shadow map sized by quality tier; time of day with headlights and street lamps at night.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

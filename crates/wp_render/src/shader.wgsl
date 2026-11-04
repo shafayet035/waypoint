@@ -23,6 +23,10 @@ struct Globals {
     light_view_proj: mat4x4<f32>,
     // x: 1 / shadow map size, y: 1 when the shadow map is on, zw: unused.
     shadow_params: vec4<f32>,
+    // Local lights, three vec4 each: camera-relative position + range,
+    // colour × intensity + spot cosine (< −1: omni), spot direction.
+    // params.w holds the count.
+    lights: array<vec4<f32>, 192>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -83,6 +87,36 @@ fn apply_fog(col: vec3<f32>, rel: vec3<f32>) -> vec3<f32> {
     let d = length(rel);
     let f = 1.0 - exp(-d * g.params.x);
     return mix(col, g.sky_horizon.rgb, f);
+}
+
+// Headlamps, tail lights and street lamps: Lambert diffuse plus a Blinn
+// highlight (bright on wet, glossy asphalt), with a smooth range falloff.
+fn local_lights(rel: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, rough: f32) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let count = u32(g.params.w);
+    let shininess = mix(512.0, 6.0, rough);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let a = g.lights[i * 3u];
+        let b = g.lights[i * 3u + 1u];
+        let d = a.xyz - rel;
+        let dist = length(d);
+        if (dist >= a.w) {
+            continue;
+        }
+        let l = d / max(dist, 1e-4);
+        let x = dist / a.w;
+        let window = clamp(1.0 - x * x * x * x, 0.0, 1.0);
+        var att = window * window / (dist * dist + 1.0);
+        if (b.w > -1.5) {
+            let dir = g.lights[i * 3u + 2u].xyz;
+            att = att * smoothstep(b.w, b.w + 0.1, dot(-l, dir));
+        }
+        let ndl = max(dot(n, l), 0.0);
+        let h = normalize(l + v);
+        let spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0 * (1.0 - rough * 0.8);
+        sum = sum + b.rgb * att * ndl * (albedo + vec3<f32>(spec * 0.04));
+    }
+    return sum;
 }
 
 // ---- Sky: a fullscreen triangle -----------------------------------------
@@ -191,6 +225,7 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     let blob_sun = mix(blob, mix(1.0, blob, 0.3), g.shadow_params.y);
     let sun_vis = min(sun_shadow(in.rel, n), blob_sun);
     var col = base * (g.sun_color.rgb * g.sun_dir.w * ndl * sun_vis + ambient(n) * mix(0.55, 1.0, blob));
+    col = col + local_lights(in.rel, n, normalize(-in.rel), base, 0.85);
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }
@@ -265,6 +300,7 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let gloss = (1.0 - rough) * (1.0 - rough);
     let env = sky_color(reflect(-v, n)) * fresnel * gloss;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
+    col += local_lights(in.rel, n, v, in.color * (1.0 - metal), rough);
     col += in.color * in.material.z;
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);

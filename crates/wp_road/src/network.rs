@@ -268,8 +268,49 @@ pub struct RoadNetwork {
     pub sidewalks: crate::sidewalk::SidewalkGraph,
     /// Bus stops, placed on their kerb-side lane.
     pub stops: Vec<Stop>,
+    /// Street lamps along roads with sidewalks (scenery and night light).
+    pub lamps: Vec<Lamp>,
     /// Road lanes by grid cell, for finding the lane under a point quickly.
     lane_grid: std::collections::BTreeMap<(i32, i32), Vec<LaneId>>,
+}
+
+/// A street lamp: a pole at the kerb with its arm over the road.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lamp {
+    pub position: Vec2,
+    /// Unit vector from the pole towards the road.
+    pub toward_road: Vec2,
+}
+
+/// Distance between lamps on one side of a road, m (staggered sides).
+pub const LAMP_SPACING_M: f32 = 30.0;
+
+/// Lamps on both sidewalks of every road that has them, staggered, kept
+/// clear of the junctions at the ends.
+fn street_lamps(roads: &[RoadGeometry]) -> Vec<Lamp> {
+    let mut out = Vec::new();
+    for g in roads {
+        if g.def.sidewalk_m <= 0.0 {
+            continue;
+        }
+        let len = g.centre.length();
+        for (side, edge, start) in [
+            (1.0f32, g.left_m, 12.0f32),
+            (-1.0, g.right_m, 12.0 + LAMP_SPACING_M / 2.0),
+        ] {
+            let mut s = start;
+            while s < len - 12.0 {
+                let (p, dir) = g.centre.sample(s);
+                let left = Vec2::new(-dir.y, dir.x);
+                out.push(Lamp {
+                    position: p + left * side * (edge + 0.45),
+                    toward_road: -left * side,
+                });
+                s += LAMP_SPACING_M;
+            }
+        }
+    }
+    out
 }
 
 /// Size of a lane-grid cell, m.
@@ -715,7 +756,9 @@ impl RoadNetwork {
             })
             .collect();
         let lane_grid = lane_grid(&lanes);
+        let lamps = street_lamps(&roads);
         RoadNetwork {
+            lamps,
             name: def.name.clone(),
             drive_side: def.drive_side,
             roads,

@@ -24,7 +24,7 @@ pub use def::{
 pub use geometry::Polyline;
 pub use mesh::{Mesh, RoadMeshes, RoadTile, TILE_M, build_meshes, build_tiles, split_tiles};
 pub use network::{
-    Junction, Lane, LaneId, LaneKind, Light, RoadGeometry, RoadNetwork, Stop, Taper, Turn,
-    taper_length_m,
+    Junction, LAMP_SPACING_M, Lamp, Lane, LaneId, LaneKind, Light, RoadGeometry, RoadNetwork, Stop,
+    Taper, Turn, taper_length_m,
 };
 pub use sidewalk::{SidewalkGraph, WalkEdge, WalkKind, WalkNode};

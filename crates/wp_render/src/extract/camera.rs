@@ -78,7 +78,47 @@ impl Default for Environment {
     }
 }
 
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 impl Environment {
+    /// Clear-sky light at `hour` (0–24): the sun rises in the east at 6,
+    /// stands 75° high in the south at noon and sets in the west at 18;
+    /// golden light near the horizon, a dark blue night, and the eye's
+    /// exposure opening up after dusk.
+    pub fn at_hour(hour: f32) -> Self {
+        let day = (hour.rem_euclid(24.0) - 6.0) / 12.0;
+        let elevation = 75f32.to_radians() * (std::f32::consts::PI * day).sin();
+        let azimuth = -std::f32::consts::PI * day;
+        let sun_dir = Vec3::new(
+            azimuth.cos() * elevation.cos(),
+            azimuth.sin() * elevation.cos(),
+            elevation.sin(),
+        );
+        let s = sun_dir.z;
+        let daylight = smoothstep(-0.10, 0.20, s);
+        let golden = 1.0 - smoothstep(0.0, 0.35, s.abs());
+        let base = Environment::default();
+        let sunset = Vec3::new(0.85, 0.5, 0.32);
+        let horizon = Vec3::new(0.012, 0.016, 0.03).lerp(base.sky_horizon, daylight);
+        Environment {
+            sun_dir,
+            sun_intensity: base.sun_intensity * smoothstep(-0.02, 0.25, s),
+            sun_color: base.sun_color.lerp(Vec3::new(1.0, 0.55, 0.3), golden),
+            sky_zenith: Vec3::new(0.004, 0.006, 0.016).lerp(base.sky_zenith, daylight),
+            sky_horizon: horizon.lerp(sunset, golden * daylight * 0.6),
+            exposure: 1.0 + 1.0 * (1.0 - daylight),
+            ..base
+        }
+    }
+
+    /// 0 in daylight to 1 at night (from the sun's height).
+    pub fn darkness(&self) -> f32 {
+        1.0 - smoothstep(-0.06, 0.12, self.sun_dir.z)
+    }
+
     /// The same light under rain `r` (0–1): overcast sky, weaker sun, haze.
     pub fn with_rain(mut self, r: f32) -> Self {
         let r = r.clamp(0.0, 1.0);
@@ -213,5 +253,31 @@ mod smoothing_tests {
         w.update(3.1, 0.016);
         let next = w.update(-3.1, 0.016);
         assert!(next > 3.1, "goes the short way: {next}");
+    }
+}
+
+#[cfg(test)]
+mod sky_tests {
+    use super::*;
+
+    #[test]
+    fn the_sun_follows_the_clock() {
+        let noon = Environment::at_hour(12.0);
+        assert!(
+            noon.sun_dir.z > 0.95 && noon.sun_dir.y < 0.0,
+            "high in the south"
+        );
+        assert_eq!(noon.darkness(), 0.0);
+        let morning = Environment::at_hour(8.0);
+        assert!(morning.sun_dir.x > 0.5, "east in the morning");
+        let evening = Environment::at_hour(17.5);
+        assert!(evening.sun_dir.x < -0.5, "west in the evening");
+        assert!(
+            evening.sun_color.z < noon.sun_color.z,
+            "warmer light near sunset"
+        );
+        let midnight = Environment::at_hour(0.0);
+        assert_eq!(midnight.darkness(), 1.0);
+        assert!(midnight.exposure > noon.exposure);
     }
 }

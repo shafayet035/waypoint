@@ -14,7 +14,7 @@ pub mod mesh;
 
 pub use extract::{
     BlobShadow, Camera, CameraMode, ChaseSmoothing, DrawItem, Environment, FrameView, MeshId,
-    extract, extract_with,
+    PointLight, extract, extract_with,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -45,7 +45,11 @@ struct Globals {
     shadow_rot: [[f32; 4]; MAX_SHADOWS],
     light_view_proj: [[f32; 4]; 4],
     shadow_params: [f32; 4],
+    lights: [[f32; 4]; MAX_LIGHTS * 3],
 }
+
+/// Most local lights a frame can use (the uniform's size).
+pub const MAX_LIGHTS: usize = 64;
 
 /// The sun's shadow map: one cascade centred on what the camera looks at.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,6 +175,8 @@ pub struct Renderer {
     shadow_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
     shadow: Option<ShadowSettings>,
+    /// Nearest local lights used per frame (quality tier).
+    max_lights: usize,
     sky: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
@@ -421,6 +427,7 @@ impl Renderer {
             shadow_sampler,
             shadow_view,
             shadow,
+            max_lights: 32,
             sky,
             ground,
             meshes_pipeline,
@@ -448,6 +455,11 @@ impl Renderer {
     pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
         self.max_height = max_height;
         self.apply_size(gpu);
+    }
+
+    /// Use at most `n` local lights per frame, nearest first (quality tier).
+    pub fn set_max_lights(&mut self, n: usize) {
+        self.max_lights = n.min(MAX_LIGHTS);
     }
 
     /// Sun shadows from a shadow map of this size and reach (quality tier);
@@ -623,7 +635,24 @@ impl Renderer {
             shadow_rot: [[0.0; 4]; MAX_SHADOWS],
             light_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
             shadow_params: [0.0; 4],
+            lights: [[0.0; 4]; MAX_LIGHTS * 3],
         };
+        // The nearest lights (ties by order, so frames are repeatable).
+        let mut order: Vec<(f32, usize)> = frame
+            .lights
+            .iter()
+            .enumerate()
+            .map(|(i, l)| ((l.position - eye).length() - l.range, i))
+            .collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let used = order.len().min(self.max_lights);
+        for (k, (_, i)) in order.iter().take(used).enumerate() {
+            let l = &frame.lights[*i];
+            globals.lights[k * 3] = (l.position - eye).extend(l.range).to_array();
+            globals.lights[k * 3 + 1] = l.color.extend(l.cone_cos).to_array();
+            globals.lights[k * 3 + 2] = l.direction.extend(0.0).to_array();
+        }
+        globals.params[3] = used as f32;
         if let Some(sh) = self.shadow {
             globals.light_view_proj =
                 light_view_proj(env.sun_dir, frame.camera.target, eye, sh).to_cols_array_2d();

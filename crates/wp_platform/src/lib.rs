@@ -255,6 +255,7 @@ impl Handler {
             renderer.set_streaming(Some(q.view_distance_m()));
             let (size, extent_m) = q.shadow_map();
             renderer.set_shadows(&gpu, Some(wp_render::ShadowSettings { size, extent_m }));
+            renderer.set_max_lights(q.max_lights());
         }
         Ok(Gfx {
             window,

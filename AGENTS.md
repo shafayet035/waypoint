@@ -176,6 +176,12 @@ first differing checkpoint), `wp replay record --scenario` (goldens; 8 in the sa
 Event subscriptions: `events.subscribe {kinds?, entity?}` pushes `events.event` notifications as they happen
 over `wp serve` (written before the step's response) and `wp run --control` (a writer thread per connection);
 MCP keeps `events.poll` (WP-K009 if subscribing there).
+Time of day and night: scene `time_of_day: Some((hour: 21.5, hours_per_hour: 60.0))` → reflected
+`TimeOfDay` resource (live-editable; the `clock` system advances it). `Environment::at_hour` moves the sun
+(east at 6, 75° south at noon, west at 18), warms it near the horizon and opens exposure at night.
+Headlights come on at dusk or in heavy rain (two spot beams + tail lamps per vehicle); roads with sidewalks
+get street lamps every 30 m (`RoadNetwork::lamps`, lit at dusk). The shader adds the nearest local lights
+(Low 16, Mid 32, Flagship 64). Sandbox: `scenes/town_night.scene.ron`.
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes

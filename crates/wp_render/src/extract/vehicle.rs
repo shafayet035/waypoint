@@ -48,7 +48,15 @@ pub(super) fn vehicle_items(
     paint: Vec3,
     braking: bool,
     model: Option<(u32, &wp_asset::Model)>,
+    lights: Option<&mut Vec<PointLight>>,
 ) {
+    let night = lights.is_some();
+    let head_glow = if night { 5.0 } else { 0.6 };
+    let tail_glow = match (braking, night) {
+        (true, _) => 6.0,
+        (false, true) => 2.5,
+        (false, false) => 0.8,
+    };
     let base =
         Mat4::from_translation(pose.position.extend(0.0)) * Mat4::from_rotation_z(pose.heading);
     let shape = body_shape(def);
@@ -105,8 +113,13 @@ pub(super) fn vehicle_items(
                 wp_asset::Role::Paint => (paint, m.emissive),
                 wp_asset::Role::BrakeLight => (
                     Vec3::from(m.base_color),
-                    if braking { 6.0 } else { m.emissive.max(0.8) },
+                    if braking || night {
+                        tail_glow
+                    } else {
+                        m.emissive.max(0.8)
+                    },
                 ),
+                wp_asset::Role::HeadLight if night => (Vec3::from(m.base_color), head_glow),
                 _ => (Vec3::from(m.base_color), m.emissive),
             };
             items.push(DrawItem {
@@ -204,7 +217,7 @@ pub(super) fn vehicle_items(
                 Vec3::new(0.9, 0.9, 0.85),
                 0.1,
                 0.0,
-                0.6,
+                head_glow,
             );
             box_at(
                 Vec3::new(shape.rear - 0.01, side * 1.0 - 0.12, r * 1.25),
@@ -212,7 +225,7 @@ pub(super) fn vehicle_items(
                 Vec3::new(0.7, 0.02, 0.02),
                 0.2,
                 0.0,
-                if braking { 6.0 } else { 0.8 },
+                tail_glow,
             );
         }
     } else {
@@ -280,7 +293,7 @@ pub(super) fn vehicle_items(
                 Vec3::new(0.9, 0.9, 0.85),
                 0.1,
                 0.0,
-                0.6,
+                head_glow,
             );
             box_at(
                 Vec3::new(shape.rear - 0.01, y0 - 0.15, lamp_z - 0.05),
@@ -288,7 +301,7 @@ pub(super) fn vehicle_items(
                 Vec3::new(0.7, 0.02, 0.02),
                 0.2,
                 0.0,
-                if braking { 6.0 } else { 0.8 },
+                tail_glow,
             );
         }
     }
@@ -311,6 +324,31 @@ pub(super) fn vehicle_items(
             metallic: 0.0,
             emissive: 0.0,
         });
+    }
+
+    if let Some(lights) = lights {
+        // Two dipped beams angled a little down, and the tail lamps.
+        let lamp_z = (sill + belt) * 0.5;
+        let beam = body
+            .transform_vector3(Vec3::new(1.0, 0.0, -0.07))
+            .normalize();
+        for side in [-1.0, 1.0] {
+            let y = side * (hw - 0.3);
+            lights.push(PointLight {
+                position: body.transform_point3(Vec3::new(shape.front + 0.1, y, lamp_z)),
+                color: Vec3::new(1.0, 0.95, 0.85) * 160.0,
+                range: 60.0,
+                direction: beam,
+                cone_cos: 24f32.to_radians().cos(),
+            });
+            lights.push(PointLight {
+                position: body.transform_point3(Vec3::new(shape.rear - 0.3, y, lamp_z)),
+                color: Vec3::new(1.0, 0.04, 0.02) * if braking { 3.0 } else { 0.8 },
+                range: 5.0,
+                direction: Vec3::Z,
+                cone_cos: -2.0,
+            });
+        }
     }
 
     let mid = (shape.front + shape.rear) * 0.5;

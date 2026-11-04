@@ -192,3 +192,44 @@ fn sun_shadows_darken_the_ground() {
         "shadow map should darken the frame: {shadowed} vs {lit}"
     );
 }
+
+/// At night the sky darkens, headlights come on and light the road ahead.
+#[test]
+fn night_has_headlights() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let mut app = world_with_car();
+    let day = extract(&app.world, CameraMode::Chase);
+    assert!(day.lights.is_empty(), "no lights by day");
+    app.world.insert_reflected_resource(
+        "TimeOfDay",
+        wp_world::TimeOfDay {
+            hour: 22.0,
+            rate: 0.0,
+        },
+    );
+    let night = extract(&app.world, CameraMode::Chase);
+    assert!(night.environment.darkness() > 0.9);
+    assert_eq!(night.lights.len(), 4, "two headlamps and two tail lamps");
+    let (w, h) = (320, 180);
+    let mean = |f: &wp_render::FrameView| {
+        let px = render_rgba(&gpu, f, w, h).unwrap();
+        px.chunks(4)
+            .map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64)
+            .sum::<f64>()
+            / (w * h) as f64
+    };
+    let mut unlit = night.clone();
+    unlit.lights.clear();
+    let (d, n, u) = (mean(&day), mean(&night), mean(&unlit));
+    assert!(n < d * 0.6, "night should be darker: {n:.0} vs {d:.0}");
+    assert!(
+        n > u * 1.05,
+        "headlights should light the scene: {n:.0} vs {u:.0}"
+    );
+}

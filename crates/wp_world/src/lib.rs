@@ -37,6 +37,29 @@ pub struct SceneDef {
     /// Rain. Wet roads have less grip; drivers slow down.
     #[serde(default)]
     pub weather: Option<WeatherDef>,
+    /// Time of day (sun, sky, headlights, street lamps). Absent: early afternoon.
+    #[serde(default)]
+    pub time_of_day: Option<TimeOfDayDef>,
+}
+
+/// A scene's clock.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TimeOfDayDef {
+    /// Hour at the start, 0–24 (21.5 is half past nine in the evening).
+    pub hour: f32,
+    /// Game hours per real hour: 0 stands still, 60 runs a day in 24 minutes.
+    #[serde(default)]
+    pub hours_per_hour: f32,
+}
+
+/// The time now (`world.set` on "TimeOfDay" changes it live).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimeOfDay {
+    /// 0–24.
+    pub hour: f32,
+    /// Game hours per simulated hour.
+    pub rate: f32,
 }
 
 /// How much detail the game runs with. Phones are grouped into three tiers
@@ -61,6 +84,14 @@ impl QualityTier {
             Self::Low => 540,
             Self::Mid => 720,
             Self::Flagship => 900,
+        }
+    }
+    /// Local lights (headlamps, street lamps) shaded per frame, nearest first.
+    pub fn max_lights(self) -> usize {
+        match self {
+            Self::Low => 16,
+            Self::Mid => 32,
+            Self::Flagship => 64,
         }
     }
     /// Sun shadow map: texels per side and the half-width it covers, m.
@@ -347,6 +378,15 @@ pub fn apply_scene(world: &mut World, scene: &SceneDef, roads: Option<&wp_road::
         friction_scale: scene.ground.friction_scale * w.grip(),
     });
     world.insert_reflected_resource("Weather", w);
+    if let Some(t) = &scene.time_of_day {
+        world.insert_reflected_resource(
+            "TimeOfDay",
+            TimeOfDay {
+                hour: t.hour.rem_euclid(24.0),
+                rate: t.hours_per_hour.max(0.0),
+            },
+        );
+    }
     world.insert_resource(Gravity(scene.ground.gravity));
     world.insert_resource(Docks(scene.docks.clone()));
 }
@@ -381,5 +421,14 @@ impl Plugin for WorldPlugin {
         })
         .reads_resource("Weather")
         .writes_resource("Ground");
+        app.add_system(wp_ecs::Stage::Input, "clock", |w| {
+            let dt = w.resource::<wp_core::SimTime>().dt();
+            if let Some(mut t) = w.get_resource_mut::<TimeOfDay>()
+                && t.rate > 0.0
+            {
+                t.hour = (t.hour + t.rate * dt / 3600.0).rem_euclid(24.0);
+            }
+        })
+        .writes_resource("TimeOfDay");
     }
 }

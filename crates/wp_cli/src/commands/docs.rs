@@ -87,7 +87,8 @@ Collision (bodies touching), RanRedLight, HitPedestrian.
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
 \"Weather\" can be changed live with world.set), pedestrians: Some((count: 30)) (they walk
-roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))].
+roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))],
+time_of_day: Some((hour: 21.5, hours_per_hour: 60.0)) (night: headlights and street lamps; \"TimeOfDay\" is live-editable).
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).
