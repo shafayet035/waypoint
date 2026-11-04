@@ -56,10 +56,11 @@ pub fn schema(_ctx: &Ctx, kind: &str) -> CmdResult {
         "road" => schema_json::<waypoint::road::RoadNetworkDef>(),
         "mission" => schema_json::<waypoint::mission::MissionDef>(),
         "asset" => schema_json::<waypoint::asset::AssetMeta>(),
+        "replay" => schema_json::<waypoint::vehicle::replay::Replay>(),
         other => {
             return Err(cli_error(
                 format!("unknown schema type `{other}`"),
-                "types: game, vehicle, trailer, road, scene, scenario, mission, asset",
+                "types: game, vehicle, trailer, road, scene, scenario, mission, asset, replay",
             ));
         }
     };

@@ -130,9 +130,15 @@ pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
 
 /// Serialise a value as pretty RON, the format project files use.
 pub fn to_ron<T: serde::Serialize>(value: &T) -> Result<String, Diagnostic> {
+    to_ron_depth(value, 6)
+}
+
+/// Pretty RON that puts anything nested deeper than `depth` on one line
+/// (long lists of small records stay one per line).
+pub fn to_ron_depth<T: serde::Serialize>(value: &T, depth: usize) -> Result<String, Diagnostic> {
     let config = ron::ser::PrettyConfig::new()
         .escape_strings(false)
-        .depth_limit(6)
+        .depth_limit(depth)
         .indentor("  ".to_string());
     ron::ser::to_string_pretty(value, config)
         .map_err(|e| Diagnostic::error("WP-D004", format!("cannot write RON: {e}")))

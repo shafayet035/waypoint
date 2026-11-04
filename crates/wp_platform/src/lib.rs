@@ -20,7 +20,7 @@ use winit::window::{Window, WindowId};
 use wp_control::{Session, tcp::Pending};
 use wp_core::Diagnostic;
 use wp_ecs::Entity;
-use wp_physics::{Pose, Velocity};
+use wp_physics::Pose;
 use wp_render::{CameraMode, ChaseSmoothing, Renderer, extract_with};
 use wp_rhi::{Gpu, GpuInfo, wgpu};
 use wp_vehicle::{Controls, DriverAids, Vehicle, VehicleInput, VehicleLibrary};
@@ -50,6 +50,9 @@ pub struct WindowSummary {
     pub gpu: Option<GpuInfo>,
     /// What the last frame drew (draw calls, triangles, road tiles).
     pub render: Option<wp_render::RenderStats>,
+    /// The session's recording, if it was recording when the window closed.
+    #[serde(skip)]
+    pub replay: Option<wp_vehicle::replay::Replay>,
 }
 
 /// Run a session in a window until the user closes it. The session's player
@@ -125,6 +128,7 @@ fn run_with_event_loop(
         sim_seconds: handler.session.app.time().seconds(),
         gpu: handler.gfx.as_ref().map(|g| g.gpu.info()),
         render: handler.gfx.as_ref().map(|g| g.renderer.stats()),
+        replay: handler.session.stop_recording(),
     })
 }
 
@@ -188,11 +192,10 @@ impl Touches {
 }
 
 /// Pose and part state to restore on R.
-type Snapshot = (Pose, Vehicle);
+type Snapshot = wp_vehicle::replay::StartState;
 
 fn snapshot(session: &Session, e: Entity) -> Option<Snapshot> {
-    let w = &session.app.world;
-    Some((*w.get::<Pose>(e)?, w.get::<Vehicle>(e)?.clone()))
+    wp_vehicle::replay::StartState::capture(&session.app.world, e)
 }
 
 struct Handler {
@@ -281,14 +284,11 @@ impl Handler {
     }
 
     fn reset_player(&mut self) {
-        let (Some(e), Some((pose, vehicle))) = (self.session.player, self.reset.clone()) else {
+        let (Some(e), Some(start)) = (self.session.player, self.reset.clone()) else {
             return;
         };
-        let w = &mut self.session.app.world;
-        w.insert(e, pose);
-        w.insert(e, Velocity::default());
-        w.insert(e, vehicle);
-        w.insert(e, VehicleInput::default());
+        start.apply(&mut self.session.app.world, e);
+        self.session.note_reset();
         self.input = VehicleInput::default();
         self.aids = DriverAids::default();
         self.chase.snap();

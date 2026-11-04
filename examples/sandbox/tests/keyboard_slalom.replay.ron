@@ -1,0 +1,29 @@
+// Recorded by `wp replay record` / `wp run --record`; check it with `wp replay <file>`.
+(
+  setup: (
+    scenario: Some("keyboard_slalom"),
+    scene: None,
+    spawn: None,
+    vehicle: None,
+    trailer: None,
+    mission: None,
+    quality: None,
+    seed: 1,
+  ),
+  hash_every: 60,
+  ticks: 540,
+  inputs: [],
+  resets: [],
+  hashes: [
+    (tick: 60, hash: "1d43638bf0c6a897"),
+    (tick: 120, hash: "950b123a20f1dc2c"),
+    (tick: 180, hash: "546f5214a7ab3137"),
+    (tick: 240, hash: "41b9ab9369bedee2"),
+    (tick: 300, hash: "41937bb6408e809c"),
+    (tick: 360, hash: "e0247e19bc9a24f3"),
+    (tick: 420, hash: "98b6f27ef44ca799"),
+    (tick: 480, hash: "12b82e3002082de3"),
+    (tick: 540, hash: "e6c4d566b7452132"),
+  ],
+  final_hash: "e6c4d566b7452132",
+)

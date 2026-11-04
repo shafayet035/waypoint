@@ -100,6 +100,67 @@ pub struct ScenarioReport {
     pub final_hash: String,
     /// Real time the run took, ms. Informational only; never asserted on.
     pub wall_ms: u128,
+    /// World hash after every simulated second (for golden replays).
+    #[serde(skip)]
+    pub trace: Vec<String>,
+    /// Ticks simulated.
+    #[serde(skip)]
+    pub ticks: u64,
+}
+
+impl ScenarioReport {
+    /// Compare the run with a golden replay of the same scenario (recorded
+    /// with `wp replay record`) and add the result as an assertion.
+    pub fn check_golden(&mut self, golden: &wp_vehicle::replay::Replay, path: &str, tick_hz: u64) {
+        let mut last_good = 0u64;
+        let mut failure = None;
+        for c in &golden.hashes {
+            if c.tick == 0 || !c.tick.is_multiple_of(tick_hz) {
+                continue;
+            }
+            let i = (c.tick / tick_hz - 1) as usize;
+            match self.trace.get(i) {
+                Some(h) if *h == c.hash => last_good = c.tick,
+                Some(_) => {
+                    failure = Some(c.tick);
+                    break;
+                }
+                None => break,
+            }
+        }
+        let secs = |t: u64| t as f64 / tick_hz as f64;
+        let (passed, detail) = match failure {
+            Some(t) => (
+                false,
+                format!(
+                    "diverged from {path} by t = {} s (last match at {} s); if the change is intended, run `wp replay record --scenario {}`",
+                    secs(t),
+                    secs(last_good),
+                    self.name
+                ),
+            ),
+            None if golden.ticks != self.ticks => (
+                false,
+                format!(
+                    "{path} has {} ticks but the run has {}; re-record it",
+                    golden.ticks, self.ticks
+                ),
+            ),
+            None if golden.final_hash != self.final_hash => {
+                (false, format!("final state differs from {path}"))
+            }
+            None => (
+                true,
+                format!("{} checkpoints identical", golden.hashes.len() + 1),
+            ),
+        };
+        self.passed &= passed;
+        self.assertions.push(AssertionResult {
+            assertion: "MatchesGoldenReplay".into(),
+            passed,
+            detail,
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -116,6 +177,7 @@ struct Sample {
 }
 
 struct Run {
+    ticks: u64,
     samples: Vec<Sample>,
     /// Largest |offset| from the route centre while following it, whether it
     /// finished, and why no route was found (if so).
@@ -166,6 +228,8 @@ pub fn run_scenario(
         metrics: run.metrics,
         event_log: run.event_log,
         final_hash: run.final_hash,
+        ticks: run.ticks,
+        trace: run.trace,
         wall_ms: start.elapsed().as_millis(),
     })
 }
@@ -417,6 +481,7 @@ fn simulate(input: &ScenarioInput, make_app: &dyn Fn() -> App) -> Result<Run, Di
         trailer_heading_deg: rig.map(|g| g.trailer_heading.to_degrees()),
     };
     Ok(Run {
+        ticks,
         samples,
         route: route_worst.map(|w| (w, route_finished, route_error)),
         docks: input.scene.docks.clone(),

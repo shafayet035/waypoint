@@ -8,6 +8,7 @@ mod import;
 mod info;
 mod new;
 mod project;
+mod replay;
 mod test;
 
 pub use asset::{asset_info, asset_list, credits};
@@ -18,6 +19,7 @@ pub use import::{import_opendrive, import_osm};
 pub use info::{plugins, systems};
 pub use new::new;
 pub use project::{check, schema};
+pub use replay::{replay_record, replay_verify};
 pub use test::{test, vehicle_test};
 
 use crate::{CmdResult, Ctx, catalog};

@@ -27,7 +27,10 @@ pub fn test(ctx: &Ctx, filter: Option<&str>) -> CmdResult {
         let input = project.scenario_input(name).ok_or_else(|| {
             cli_error(format!("scenario `{name}` is incomplete"), "run `wp check`")
         })?;
-        let report = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
+        let mut report = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
+        if let Some(golden) = project.golden_replay(name) {
+            report.check_golden(&golden.value, &golden.path, 60);
+        }
         if !ctx.json {
             print_report(&report, &sc.path);
         }

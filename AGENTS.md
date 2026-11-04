@@ -79,7 +79,8 @@ for the maths with thin systems around them, and data files with schemas for con
 - **Data first.** A new vehicle, scene or test should need a file, not code. New data fields get
   doc comments (they become schema descriptions) and units in their names.
 - **Refactors** must keep every scenario's `final_hash` identical (`wp test --json`): that proves
-  behaviour did not change. Rendering refactors: compare `wp shot` PNGs byte for byte.
+  behaviour did not change. Scenarios with a golden replay (`tests/<name>.replay.ron`) check this on
+  every `wp test`; after an intended change, re-record with `wp replay record --scenario <name>`. Rendering refactors: compare `wp shot` PNGs byte for byte.
 - **Physics changes** must keep `examples/sandbox` scenarios passing and `wp vehicle test` plausible.
   Hatchback: about 8.5 s to 100 km/h, about 41 m to stop from 100 km/h (ABS), 0.74 g on the skidpad,
   11 m turning circle. City bus: about 11 s to 50 km/h, 22 m from 60 km/h, 21 m turning circle.
@@ -169,5 +170,8 @@ camera-relative (floating origin: `Camera::view_proj_relative`). `wp shot` stays
 Sun shadows: one shadow-map cascade centred on the camera's target, texel-snapped, 3×3 filtered and faded
 at its edge (Low 1024 px over ±30 m, Mid 2048 over ±45 m, Flagship 4096 over ±60 m; `wp shot` uses 2048 over
 ±45 m). Blob shadows remain as soft contact shading. `WindowOptions.quality` sets resolution, streaming and shadows.
+Replays (`wp_vehicle::replay`): `.replay.ron` = setup + input changes + resets + a world hash every N ticks.
+`wp run --record`, `replay.start`/`replay.stop` (control protocol), `wp replay <file>` (exit 1 + WP-Y002 at the
+first differing checkpoint), `wp replay record --scenario` (goldens; 8 in the sandbox).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-traction control and ESC; event subscriptions (`events.subscribe`) and golden replays.
+traction control and ESC; event subscriptions (`events.subscribe`).

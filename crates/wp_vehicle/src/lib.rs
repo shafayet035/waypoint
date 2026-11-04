@@ -12,6 +12,7 @@ pub mod collision;
 pub mod def;
 pub mod dynamics;
 pub mod parts;
+pub mod replay;
 pub mod trailer;
 
 use glam::Vec2;

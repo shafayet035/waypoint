@@ -68,6 +68,31 @@ enum Cmd {
     Asset(AssetCmd),
     /// Print the credits screen: asset credits and map attributions.
     Credits,
+    /// Check a recorded replay still plays back identically, or record a golden one.
+    Replay(ReplayArgs),
+}
+
+#[derive(clap::Args)]
+#[command(args_conflicts_with_subcommands = true)]
+struct ReplayArgs {
+    #[command(subcommand)]
+    cmd: Option<ReplayCmd>,
+    /// A .replay.ron to play back and compare (exit 1 if it diverges).
+    file: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum ReplayCmd {
+    /// Record a scenario's golden replay (default: next to the scenario, so `wp test` checks it).
+    Record {
+        #[arg(long)]
+        scenario: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Ticks between world hashes.
+        #[arg(long, default_value_t = 60)]
+        hash_every: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +165,25 @@ fn main() {
         Cmd::Asset(AssetCmd::Info { file }) => commands::asset_info(&ctx, &file),
         Cmd::Asset(AssetCmd::List) => commands::asset_list(&ctx),
         Cmd::Credits => commands::credits(&ctx),
+        Cmd::Replay(ReplayArgs {
+            cmd:
+                Some(ReplayCmd::Record {
+                    scenario,
+                    out,
+                    hash_every,
+                }),
+            ..
+        }) => commands::replay_record(&ctx, &scenario, out.as_deref(), hash_every),
+        Cmd::Replay(ReplayArgs {
+            file: Some(file), ..
+        }) => commands::replay_verify(&ctx, &file),
+        Cmd::Replay(_) => Err(vec![
+            waypoint::core::Diagnostic::error(
+                "WP-C001",
+                "give a .replay.ron to check, or `record`",
+            )
+            .help("wp replay tests/skidpad.replay.ron, or wp replay record --scenario skidpad"),
+        ]),
         Cmd::Schema { kind } => commands::schema(&ctx, &kind),
         Cmd::Docs { topic } => commands::docs(&ctx, topic.as_deref()),
         Cmd::Run(args) => commands::run(&ctx, &args),

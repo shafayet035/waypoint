@@ -89,6 +89,16 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "{camera?: chase|top|side|showcase, width?, height?, path?}",
         "Render the current frame. Writes a PNG to path, or returns png_base64.",
     ),
+    (
+        "replay.start",
+        "{hash_every?: ticks}",
+        "Record player inputs and a world hash every N ticks (default 60) from now.",
+    ),
+    (
+        "replay.stop",
+        "{}",
+        "Stop recording. Returns {replay}: save it as a .replay.ron and check it with `wp replay`.",
+    ),
 ];
 
 /// A JSON-RPC error. Engine errors use code -32000 with a diagnostic in `data`.

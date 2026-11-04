@@ -65,6 +65,12 @@ pub struct RunArgs {
     /// Accept control-protocol requests on 127.0.0.1:<port> while the window runs (0 = any free port).
     #[arg(long)]
     control: Option<u16>,
+    /// Record the drive to this .replay.ron (inputs, resets, world hashes); check it with `wp replay`.
+    #[arg(long)]
+    record: Option<std::path::PathBuf>,
+    /// Ticks between world hashes in a recording.
+    #[arg(long, default_value_t = 60)]
+    hash_every: u64,
     #[command(flatten)]
     drive: DriveArgs,
 }
@@ -95,7 +101,7 @@ pub struct ShotArgs {
 }
 
 impl DriveArgs {
-    fn spec(&self) -> waypoint::drive::DriveSpec {
+    pub(crate) fn spec(&self) -> waypoint::drive::DriveSpec {
         waypoint::drive::DriveSpec {
             scenario: self.scenario.clone(),
             scene: self.scene.clone(),
@@ -164,7 +170,13 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
             }
             None => None,
         };
-        let session = wp_control::Session::new(app, Some(player), vehicle_map(&project));
+        let mut session = wp_control::Session::new(app, Some(player), vehicle_map(&project));
+        session.setup = args
+            .drive
+            .replay_setup(Some(super::replay::tier_name(tier)));
+        if args.record.is_some() {
+            session.start_recording(args.hash_every);
+        }
         let summary = wp_platform::run_windowed(
             session,
             wp_platform::WindowOptions {
@@ -178,6 +190,12 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
             },
         )
         .map_err(|d| vec![d])?;
+        if let (Some(path), Some(replay)) = (&args.record, &summary.replay) {
+            super::replay::write_replay(path, replay)?;
+            if !ctx.json {
+                println!("recorded {} ticks to {}", replay.ticks, path.display());
+            }
+        }
         if ctx.json {
             print_json(&json!({ "ok": true, "window": summary }));
         } else {
@@ -192,8 +210,22 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
     let time = app.time();
     let ticks = args.ticks.unwrap_or_else(|| time.ticks_for(args.seconds));
     let mut trace = Vec::new();
+    let mut recorder = args.record.as_ref().map(|_| {
+        waypoint::vehicle::replay::Recorder::new(args.drive.replay_setup(None), args.hash_every)
+    });
     for tick in 1..=ticks {
+        if let Some(r) = &mut recorder {
+            let input = app
+                .world
+                .get::<VehicleInput>(player)
+                .map(|i| *i)
+                .unwrap_or_default();
+            r.before_tick(input);
+        }
         app.tick();
+        if let Some(r) = &mut recorder {
+            r.after_tick(&app.world);
+        }
         if args.trace && tick % time.tick_hz as u64 == 0 {
             let tel = waypoint::vehicle::telemetry(&app.world, player).unwrap();
             if !ctx.json {
@@ -210,6 +242,9 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
             }
             trace.push(json!({ "t": app.time().seconds(), "telemetry": tel }));
         }
+    }
+    if let (Some(path), Some(r)) = (&args.record, recorder) {
+        super::replay::write_replay(path, &r.finish(&app.world))?;
     }
     let tel = waypoint::vehicle::telemetry(&app.world, player).unwrap();
     let hash = app.world.state_hash();

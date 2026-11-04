@@ -73,6 +73,9 @@ pub struct Project {
     pub assets: BTreeMap<String, Loaded<wp_asset::AssetMeta>>,
     /// Every model in the project that loaded, by path.
     pub models: std::sync::Arc<wp_asset::ModelLibrary>,
+    /// Recorded replays (`wp replay`), by path. `tests/<name>.replay.ron` is
+    /// the golden replay `wp test` compares scenario `<name>` with.
+    pub replays: BTreeMap<String, Loaded<wp_vehicle::replay::Replay>>,
     /// Files that exist but failed to parse, so references to them can say so.
     pub failed: Vec<String>,
 }
@@ -83,6 +86,7 @@ pub const SCENARIO_EXT: &str = ".scenario.ron";
 pub const TRAILER_EXT: &str = ".trailer.ron";
 pub const ROAD_EXT: &str = ".road.ron";
 pub const MISSION_EXT: &str = ".mission.ron";
+pub const REPLAY_EXT: &str = ".replay.ron";
 
 fn stem<'a>(path: &'a str, ext: &str) -> &'a str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -263,7 +267,18 @@ impl Project {
             }
         }
 
+        let mut replays = BTreeMap::new();
+        for path in find_files(root, REPLAY_EXT) {
+            match load_ron::<wp_vehicle::replay::Replay>(root, &path) {
+                Ok(r) => {
+                    replays.insert(path, r);
+                }
+                Err(d) => diags.push(d),
+            }
+        }
+
         let project = Project {
+            replays,
             assets,
             models: std::sync::Arc::new(wp_asset::ModelLibrary::new(models)),
             missions,
@@ -278,6 +293,7 @@ impl Project {
         };
         diags.extend(project.check_references());
         diags.extend(project.check_models());
+        diags.extend(project.check_replays());
         (Some(project), diags)
     }
 
@@ -402,6 +418,57 @@ impl Project {
             }
         }
         out
+    }
+
+    /// Replays must refer to things that exist.
+    fn check_replays(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for r in self.replays.values() {
+            let s = &r.value.setup;
+            let missing = |what: &str, name: &Option<String>, ok: bool| {
+                name.as_ref().filter(|_| !ok).map(|n| {
+                    r.error_at("WP-Y001", what, format!("{what} `{n}` does not exist"))
+                        .help("re-record the replay, or restore what it refers to")
+                })
+            };
+            out.extend(missing(
+                "scenario",
+                &s.scenario,
+                s.scenario
+                    .as_ref()
+                    .is_none_or(|n| self.scenarios.contains_key(n)),
+            ));
+            out.extend(missing(
+                "scene",
+                &s.scene,
+                s.scene.as_ref().is_none_or(|n| self.scenes.contains_key(n)),
+            ));
+            out.extend(missing(
+                "vehicle",
+                &s.vehicle,
+                s.vehicle
+                    .as_ref()
+                    .is_none_or(|n| self.vehicles.contains_key(n)),
+            ));
+            out.extend(missing(
+                "mission",
+                &s.mission,
+                s.mission
+                    .as_ref()
+                    .is_none_or(|n| self.missions.contains_key(n)),
+            ));
+        }
+        out
+    }
+
+    /// The golden replay for a scenario: next to its file, `.replay.ron`.
+    pub fn golden_replay(&self, scenario: &str) -> Option<&Loaded<wp_vehicle::replay::Replay>> {
+        let path = self
+            .scenarios
+            .get(scenario)?
+            .path
+            .replace(SCENARIO_EXT, REPLAY_EXT);
+        self.replays.get(&path)
     }
 
     /// Credits for the assets in use: (asset path, line). CC0 and own work

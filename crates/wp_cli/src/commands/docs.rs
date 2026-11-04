@@ -19,7 +19,10 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp shot --at 12.5s [opts]    render one frame to PNG, headless: --camera chase|top|side|showcase --out f.png
   wp serve [drive opts]        control protocol (JSON-RPC 2.0) on stdin/stdout, one request per line
   wp mcp                       Model Context Protocol server on stdin/stdout (tools, resources, screenshots)
-  wp test [filter]             run scenario tests; exit 1 if any fail
+  wp test [filter]             run scenario tests; exit 1 if any fail (golden replays included)
+  wp replay <file.replay.ron>  play a recording back headless; exit 1 at the first checkpoint that differs
+  wp replay record --scenario N  golden replay next to the scenario (tests/N.replay.ron); `wp test N` checks it
+  wp run --record f.replay.ron record a drive (window or --headless): inputs, R resets, a world hash per second
   wp vehicle test <name> [--manoeuvre accel_0_100|brake_100_0|skidpad|all]
   wp import osm <file.osm> --name N [--drive-side right|left] [--lang en] [--force]
                                OpenStreetMap → roads/N.road.ron + scenes/N.scene.ron (spawn \"start\");
@@ -40,7 +43,7 @@ and look at the image → fix. For live work, `wp serve` or `wp mcp`, then call 
 
 Control protocol methods: rpc.methods, sim.status, sim.step, sim.pause, sim.resume, sim.snapshot,
 sim.restore, world.entities, world.get, world.set, world.find, world.spawn, world.despawn,
-world.resources, input.set, vehicle.telemetry, events.poll, render.screenshot.
+world.resources, input.set, vehicle.telemetry, events.poll, render.screenshot, replay.start, replay.stop.
 ";
 
 const DOCS_SCENARIO: &str = "\
@@ -91,6 +94,9 @@ Regulation limits used in the sandbox: UN ECE R13 Type-0 braking — buses (M3) 
 MFDD ≥ 6.43 m/s². EU turning circle for buses: within 25 m.
 
 Runs are headless at 60 Hz gameplay / 480 Hz physics, and bit-identical for the same build and seed.
+Golden replays: tests/<name>.replay.ron (from `wp replay record --scenario <name>`) holds a world hash per
+second; `wp test` adds MatchesGoldenReplay and names the second the run first differed. Re-record after an
+intended behaviour change.
 ";
 
 const DOCS_VEHICLE: &str = "\

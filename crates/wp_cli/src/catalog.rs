@@ -169,6 +169,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Check its components with world.get.",
     },
     ErrorDoc {
+        code: "WP-K008",
+        title: "replay.stop was called with no recording in progress",
+        fix: "Call replay.start first; recording covers the ticks between the two calls.",
+    },
+    ErrorDoc {
         code: "WP-I001",
         title: "Map data could not be imported",
         fix: "Give an OSM XML file (.osm) containing highway=* ways and the nodes they use; export a small area from openstreetmap.org or the Overpass API.",
@@ -537,6 +542,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: "WP-W004",
         title: "Scene has no spawn points (warning)",
         fix: "Add at least one entry to `spawns`.",
+    },
+    ErrorDoc {
+        code: "WP-Y001",
+        title: "A replay refers to a scenario, scene, vehicle or mission that does not exist",
+        fix: "Re-record it (`wp replay record --scenario <name>` or `wp run --record`), or restore what it refers to.",
+    },
+    ErrorDoc {
+        code: "WP-Y002",
+        title: "A replay no longer plays back identically",
+        fix: "Something changed the simulation. The divergence tick says when; look with `wp shot --at <t>`. If the change is intended, re-record the replay.",
     },
 ];
 

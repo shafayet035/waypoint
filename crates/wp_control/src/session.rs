@@ -25,6 +25,10 @@ pub struct Session {
     /// Events dropped because nobody polled (the buffer keeps the newest).
     pub(crate) events_dropped: u64,
     pub(crate) gpu: Option<wp_rhi::Gpu>,
+    /// How the session was set up, for replays it records.
+    pub setup: wp_vehicle::replay::ReplaySetup,
+    /// Recording in progress (`wp run --record`, `replay.start`).
+    pub(crate) recorder: Option<wp_vehicle::replay::Recorder>,
 }
 
 /// Most events kept between polls.
@@ -44,13 +48,51 @@ impl Session {
             events: std::collections::VecDeque::new(),
             events_dropped: 0,
             gpu: None,
+            setup: Default::default(),
+            recorder: None,
+        }
+    }
+
+    /// Record from the next tick: player inputs, resets, and a world hash
+    /// every `hash_every` ticks. Replaces any recording in progress.
+    pub fn start_recording(&mut self, hash_every: u64) {
+        self.recorder = Some(wp_vehicle::replay::Recorder::new(
+            self.setup.clone(),
+            hash_every,
+        ));
+    }
+
+    /// Stop recording and return the replay, if one was running.
+    pub fn stop_recording(&mut self) -> Option<wp_vehicle::replay::Replay> {
+        self.recorder.take().map(|r| r.finish(&self.app.world))
+    }
+
+    /// The player was put back at the start (a window's R key).
+    pub fn note_reset(&mut self) {
+        if let Some(r) = &mut self.recorder {
+            r.reset();
         }
     }
 
     /// Advance one tick and collect its events. Every front end should tick
     /// through this so `events.poll` sees everything.
     pub fn tick(&mut self) {
+        if let Some(r) = &mut self.recorder {
+            let input = self
+                .player
+                .and_then(|p| {
+                    self.app
+                        .world
+                        .get::<wp_vehicle::VehicleInput>(p)
+                        .map(|i| *i)
+                })
+                .unwrap_or_default();
+            r.before_tick(input);
+        }
         self.app.tick();
+        if let Some(r) = &mut self.recorder {
+            r.after_tick(&self.app.world);
+        }
         let time = self.app.time();
         if let Some(evs) = self
             .app
@@ -154,6 +196,24 @@ impl Session {
                 Ok(serde_json::to_value(t).unwrap())
             }
             "render.screenshot" => self.screenshot(params),
+            "replay.start" => {
+                let every = params
+                    .get("hash_every")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(60);
+                self.start_recording(every);
+                Ok(
+                    json!({ "recording": true, "from_tick": self.app.time().tick, "hash_every": every }),
+                )
+            }
+            "replay.stop" => match self.stop_recording() {
+                Some(r) => Ok(json!({ "replay": r })),
+                None => Err(k(
+                    "WP-K008",
+                    "no recording in progress; call replay.start first".into(),
+                )
+                .into()),
+            },
             "events.poll" => {
                 let kind = params.get("kind").and_then(Value::as_str);
                 let all: Vec<Value> = self.events.drain(..).collect();

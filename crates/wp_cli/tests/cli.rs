@@ -547,3 +547,57 @@ fn assets_need_licences_and_matching_models() {
     assert_eq!(v["diagnostics"][0]["code"], "WP-F005", "{v}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn golden_replays_catch_behaviour_changes() {
+    let dir = temp_dir("replay");
+    wp(&dir, &["new", "g"]);
+    let game = dir.join("g");
+    let (code, v) = json(&game, &["replay", "record", "--scenario", "skidpad"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(game.join("tests/skidpad.replay.ron").is_file());
+    let (code, v) = json(&game, &["replay", "tests/skidpad.replay.ron"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["ok"], true);
+
+    // A heavier car behaves differently: the replay and the test both say so.
+    let car = game.join("vehicles/hatchback.vehicle.ron");
+    let src = std::fs::read_to_string(&car)
+        .unwrap()
+        .replace("mass_kg: 1250.0", "mass_kg: 1300.0");
+    std::fs::write(&car, src).unwrap();
+    let (code, v) = json(&game, &["replay", "tests/skidpad.replay.ron"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-Y002", "{v}");
+    let (code, v) = json(&game, &["test", "skidpad"]);
+    assert_eq!(code, 1);
+    let golden = v["reports"][0]["report"]["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["assertion"] == "MatchesGoldenReplay")
+        .cloned()
+        .unwrap();
+    assert_eq!(golden["passed"], false, "{golden}");
+
+    // A recorded free drive plays back too.
+    let (code, v) = json(
+        &game,
+        &[
+            "run",
+            "--headless",
+            "--seconds",
+            "3",
+            "--throttle",
+            "0.6",
+            "--steer",
+            "0.3",
+            "--record",
+            "drive.replay.ron",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = json(&game, &["replay", "drive.replay.ron"]);
+    assert_eq!(code, 0, "{v}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

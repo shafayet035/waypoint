@@ -73,6 +73,27 @@ mod tests {
     }
 
     #[test]
+    fn replay_start_and_stop_record_inputs_and_hashes() {
+        let mut s = session();
+        call(&mut s, "replay.start", json!({ "hash_every": 30 }));
+        call(&mut s, "input.set", json!({ "throttle": 1.0 }));
+        call(&mut s, "sim.step", json!({ "ticks": 60 }));
+        call(
+            &mut s,
+            "input.set",
+            json!({ "throttle": 0.0, "brake": 1.0 }),
+        );
+        call(&mut s, "sim.step", json!({ "ticks": 30 }));
+        let r = call(&mut s, "replay.stop", json!({}));
+        let replay = &r["replay"];
+        assert_eq!(replay["ticks"], 90);
+        assert_eq!(replay["hashes"].as_array().unwrap().len(), 3);
+        assert_eq!(replay["inputs"].as_array().unwrap().len(), 2, "{replay}");
+        let again = s.handle(&json!({ "jsonrpc": "2.0", "id": 1, "method": "replay.stop" }));
+        assert!(again.unwrap()["error"].is_object());
+    }
+
+    #[test]
     fn drive_snapshot_restore() {
         let mut s = session();
         call(&mut s, "input.set", json!({ "throttle": 1.0 }));
