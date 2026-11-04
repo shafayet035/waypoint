@@ -48,6 +48,16 @@ pub struct Material {
     pub metallic: f32,
     /// Brightest emissive channel × `KHR_materials_emissive_strength`.
     pub emissive: f32,
+    /// Base colour texture (sRGB), multiplied by `base_color`.
+    pub base_color_texture: Option<std::sync::Arc<Texture>>,
+}
+
+/// A decoded image: RGBA8, sRGB, rows top to bottom.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Texture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 impl Default for Material {
@@ -59,6 +69,7 @@ impl Default for Material {
             roughness: 1.0,
             metallic: 1.0,
             emissive: 0.0,
+            base_color_texture: None,
         }
     }
 }
@@ -69,6 +80,8 @@ pub struct Part {
     pub material: Material,
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    /// Texture coordinates (0,0 when the file has none).
+    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 }
 
@@ -84,7 +97,7 @@ pub struct Model {
     pub min: Vec3,
     pub max: Vec3,
     pub triangles: u32,
-    /// Textures in the file (not drawn yet: materials use their factors).
+    /// Textures in the file (base colour textures are drawn).
     pub textures: u32,
     /// Primitives skipped because they are not triangles (lines, points).
     pub skipped: u32,
@@ -154,7 +167,10 @@ pub fn parse_model(bytes: &[u8], rel: &str, dir: Option<&Path>) -> Result<Model,
         buffers.push(data);
     }
 
-    let mut builder = Builder::default();
+    let mut builder = Builder {
+        dir: dir.map(|d| d.to_path_buf()),
+        ..Default::default()
+    };
     let scene = doc.default_scene().or_else(|| doc.scenes().next());
     match scene {
         Some(s) => {
@@ -201,6 +217,10 @@ struct Builder {
     /// Parts by material index (`None`: the default material), in index order.
     parts: BTreeMap<Option<usize>, Part>,
     skipped: u32,
+    /// Decoded images by glTF image index.
+    images: BTreeMap<usize, std::sync::Arc<Texture>>,
+    /// Folder of the file, for images stored beside it.
+    dir: Option<std::path::PathBuf>,
 }
 
 impl Builder {
@@ -255,19 +275,67 @@ impl Builder {
         }
         let normals = normals.unwrap_or_else(|| smooth_normals(&positions, &indices));
 
+        let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
+            Some(t) => t.into_f32().collect(),
+            None => vec![[0.0, 0.0]; positions.len()],
+        };
         let mat = prim.material();
         let key = mat.index();
-        let part = self.parts.entry(key).or_insert_with(|| Part {
-            material: material(&mat),
-            positions: Vec::new(),
-            normals: Vec::new(),
-            indices: Vec::new(),
-        });
+        if !self.parts.contains_key(&key) {
+            let mut m = material(&mat);
+            m.base_color_texture = mat
+                .pbr_metallic_roughness()
+                .base_color_texture()
+                .and_then(|info| self.image(&info.texture().source(), buffers));
+            self.parts.insert(
+                key,
+                Part {
+                    material: m,
+                    positions: Vec::new(),
+                    normals: Vec::new(),
+                    uvs: Vec::new(),
+                    indices: Vec::new(),
+                },
+            );
+        }
+        let part = self.parts.get_mut(&key).expect("inserted above");
         let base = part.positions.len() as u32;
         part.positions
             .extend(positions.iter().map(|p| p.to_array()));
         part.normals.extend(normals.iter().map(|n| n.to_array()));
+        part.uvs.extend(uvs.iter().take(positions.len()));
+        part.uvs.resize(part.positions.len(), [0.0, 0.0]);
         part.indices.extend(indices.iter().map(|i| i + base));
+    }
+}
+
+impl Builder {
+    /// Decode a glTF image once (from the GLB's binary chunk or a file
+    /// beside the model). Unreadable images are skipped: the material keeps
+    /// its colour.
+    fn image(&mut self, img: &gltf::Image, buffers: &[Vec<u8>]) -> Option<std::sync::Arc<Texture>> {
+        if let Some(t) = self.images.get(&img.index()) {
+            return Some(t.clone());
+        }
+        let bytes: Vec<u8> = match img.source() {
+            gltf::image::Source::View { view, .. } => {
+                let data = buffers.get(view.buffer().index())?;
+                data.get(view.offset()..view.offset() + view.length())?
+                    .to_vec()
+            }
+            gltf::image::Source::Uri { uri, .. } if !uri.starts_with("data:") => {
+                std::fs::read(self.dir.as_ref()?.join(uri)).ok()?
+            }
+            gltf::image::Source::Uri { .. } => return None,
+        };
+        let decoded = image::load_from_memory(&bytes).ok()?.to_rgba8();
+        let t = std::sync::Arc::new(Texture {
+            width: decoded.width(),
+            height: decoded.height(),
+            rgba: decoded.into_raw(),
+        });
+        self.images.insert(img.index(), t.clone());
+        Some(t)
     }
 }
 
@@ -286,6 +354,7 @@ fn material(mat: &gltf::Material) -> Material {
         roughness: pbr.roughness_factor(),
         metallic: pbr.metallic_factor(),
         emissive: e[0].max(e[1]).max(e[2]) * mat.emissive_strength().unwrap_or(1.0),
+        base_color_texture: None,
     }
 }
 
@@ -384,5 +453,70 @@ mod tests {
         assert_eq!(Role::from_name("tail_lamp"), Role::BrakeLight);
         assert_eq!(Role::from_name("headlight"), Role::HeadLight);
         assert_eq!(Role::from_name("rubber"), Role::Plain);
+    }
+
+    /// A 2×2 checker PNG (red, blue / blue, red).
+    fn checker_png() -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&[
+                255, 0, 0, 255, 0, 0, 255, 255, //
+                0, 0, 255, 255, 255, 0, 0, 255,
+            ])
+            .unwrap();
+        }
+        out
+    }
+
+    /// One textured triangle with texture coordinates, PNG in the binary chunk.
+    pub(crate) fn textured_triangle() -> Vec<u8> {
+        let pts: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]];
+        let uvs: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let mut bin: Vec<u8> = pts.iter().flatten().flat_map(|f| f.to_le_bytes()).collect();
+        bin.extend(uvs.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let png = checker_png();
+        let png_at = bin.len();
+        bin.extend(&png);
+        let json = format!(
+            r#"{{
+          "asset": {{"version": "2.0"}},
+          "scenes": [{{"nodes": [0]}}], "scene": 0,
+          "nodes": [{{"mesh": 0}}],
+          "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "TEXCOORD_0": 1}}, "material": 0}}]}}],
+          "materials": [{{"name": "livery", "pbrMetallicRoughness": {{"baseColorTexture": {{"index": 0}}}}}}],
+          "textures": [{{"source": 0}}],
+          "images": [{{"bufferView": 2, "mimeType": "image/png"}}],
+          "accessors": [
+            {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,1]}},
+            {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"}}
+          ],
+          "bufferViews": [
+            {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+            {{"buffer": 0, "byteOffset": 36, "byteLength": 24}},
+            {{"buffer": 0, "byteOffset": {png_at}, "byteLength": {}}}
+          ],
+          "buffers": [{{"byteLength": {}}}]
+        }}"#,
+            png.len(),
+            bin.len()
+        );
+        glb(&json, &bin)
+    }
+
+    #[test]
+    fn textures_and_coordinates_load() {
+        let m = parse_model(&textured_triangle(), "t.glb", None).unwrap();
+        let p = &m.parts[0];
+        assert_eq!(p.uvs, vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let t = p.material.base_color_texture.as_ref().expect("texture");
+        assert_eq!((t.width, t.height), (2, 2));
+        assert_eq!(&t.rgba[0..4], &[255, 0, 0, 255]);
+        assert_eq!(m.textures, 1);
+        // Levels of detail keep the coordinates.
+        assert_eq!(m.lods[0][0].uvs.len(), m.lods[0][0].positions.len());
     }
 }

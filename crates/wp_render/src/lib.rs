@@ -133,6 +133,193 @@ struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// Base colour texture; `None` draws with the plain white one.
+    material: Option<std::sync::Arc<wgpu::BindGroup>>,
+}
+
+/// Base colour textures: one bind group per image (shared by every part
+/// that uses it), and a 1×1 white one for untextured meshes.
+struct Textures {
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    white: wgpu::BindGroup,
+    cache: Vec<(
+        std::sync::Arc<wp_asset::Texture>,
+        std::sync::Arc<wgpu::BindGroup>,
+    )>,
+}
+
+impl Textures {
+    fn new(gpu: &Gpu) -> Textures {
+        let layout = gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("material"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 8,
+            ..Default::default()
+        });
+        let white_tex = wp_asset::Texture {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        };
+        let white = Self::bind_group(gpu, &layout, &sampler, &white_tex);
+        Textures {
+            layout,
+            sampler,
+            white,
+            cache: Vec::new(),
+        }
+    }
+
+    fn bind_group(
+        gpu: &Gpu,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        t: &wp_asset::Texture,
+    ) -> wgpu::BindGroup {
+        // A full mip chain, box-filtered on the CPU.
+        let mut levels = vec![(t.width.max(1), t.height.max(1), t.rgba.clone())];
+        while let Some((w, h, px)) = levels.last().cloned()
+            && (w > 1 || h > 1)
+        {
+            let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+            let mut out = vec![0u8; (nw * nh * 4) as usize];
+            for y in 0..nh {
+                for x in 0..nw {
+                    for c in 0..4 {
+                        let mut sum = 0u32;
+                        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            let sx = (x * 2 + dx).min(w - 1);
+                            let sy = (y * 2 + dy).min(h - 1);
+                            sum += px[((sy * w + sx) * 4 + c) as usize] as u32;
+                        }
+                        out[((y * nw + x) * 4 + c) as usize] = (sum / 4) as u8;
+                    }
+                }
+            }
+            levels.push((nw, nh, out));
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("base colour"),
+            size: wgpu::Extent3d {
+                width: t.width.max(1),
+                height: t.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (level, (w, h, px)) in levels.iter().enumerate() {
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                px,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(*h),
+                },
+                wgpu::Extent3d {
+                    width: *w,
+                    height: *h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    /// The bind group for an image, uploading it the first time.
+    fn get(
+        &mut self,
+        gpu: &Gpu,
+        t: &std::sync::Arc<wp_asset::Texture>,
+    ) -> std::sync::Arc<wgpu::BindGroup> {
+        if let Some((_, g)) = self
+            .cache
+            .iter()
+            .find(|(k, _)| std::sync::Arc::ptr_eq(k, t))
+        {
+            return g.clone();
+        }
+        let g = std::sync::Arc::new(Self::bind_group(gpu, &self.layout, &self.sampler, t));
+        self.cache.push((t.clone(), g.clone()));
+        g
+    }
+
+    /// A model part as a GPU mesh with its texture.
+    fn part_mesh(&mut self, gpu: &Gpu, p: &wp_asset::Part, label: &str) -> GpuMesh {
+        let data = mesh::MeshData {
+            vertices: p
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(i, pos)| mesh::Vertex {
+                    position: *pos,
+                    normal: p.normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]),
+                    tint: 0.0,
+                    uv: p.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                })
+                .collect(),
+            indices: p.indices.clone(),
+        };
+        let mut m = GpuMesh::new(gpu, &data, label);
+        m.material = p
+            .material
+            .base_color_texture
+            .as_ref()
+            .map(|t| self.get(gpu, t));
+        m
+    }
 }
 
 impl GpuMesh {
@@ -153,6 +340,7 @@ impl GpuMesh {
             vertices,
             indices,
             index_count: data.indices.len() as u32,
+            material: None,
         }
     }
 }
@@ -201,6 +389,7 @@ pub struct Renderer {
     /// them in the background; `None` keeps the whole map resident.
     stream_range: Option<f32>,
     models: Option<ModelCache>,
+    textures: Textures,
     /// GPU meshes of crash-damaged models by key, and this frame's slots.
     deformed: std::collections::BTreeMap<u64, Vec<GpuMesh>>,
     deformed_slots: Vec<u64>,
@@ -293,9 +482,10 @@ impl Renderer {
         let shadow_view = Self::shadow_texture(gpu, shadow.map_or(1, |s| s.size));
         let bind_group =
             Self::main_bind_group(gpu, &main_layout, &globals, &shadow_view, &shadow_sampler);
+        let textures = Textures::new(gpu);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("waypoint"),
-            bind_group_layouts: &[Some(&main_layout)],
+            bind_group_layouts: &[Some(&main_layout), Some(&textures.layout)],
             immediate_size: 0,
         });
         let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -350,7 +540,8 @@ impl Renderer {
             })
         };
 
-        let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
+        let vertex_attrs =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 12 => Float32x2];
         let vertex_layout = || wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -452,6 +643,7 @@ impl Renderer {
             road_instance_capacity,
             stream_range: None,
             models: None,
+            textures,
             deformed: Default::default(),
             deformed_slots: Vec::new(),
             stats: RenderStats::default(),
@@ -863,6 +1055,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(1, &self.textures.white, &[]);
             pass.set_pipeline(&self.sky);
             pass.draw(0..3, 0..1);
             pass.set_pipeline(&self.ground);
@@ -905,6 +1098,11 @@ impl Renderer {
                     1,
                     self.instances
                         .slice(first * stride..(first + count) * stride),
+                );
+                pass.set_bind_group(
+                    1,
+                    mesh.material.as_deref().unwrap_or(&self.textures.white),
+                    &[],
                 );
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..count as u32);
@@ -968,27 +1166,14 @@ impl Renderer {
     fn update_deformed(&mut self, gpu: &Gpu, frame: &FrameView) {
         self.deformed_slots = frame.deformed.iter().map(|d| d.key).collect();
         for d in &frame.deformed {
-            self.deformed.entry(d.key).or_insert_with(|| {
-                d.parts
+            if !self.deformed.contains_key(&d.key) {
+                let meshes = d
+                    .parts
                     .iter()
-                    .map(|p| {
-                        let data = mesh::MeshData {
-                            vertices: p
-                                .positions
-                                .iter()
-                                .zip(&p.normals)
-                                .map(|(pos, n)| mesh::Vertex {
-                                    position: *pos,
-                                    normal: *n,
-                                    tint: 0.0,
-                                })
-                                .collect(),
-                            indices: p.indices.clone(),
-                        };
-                        GpuMesh::new(gpu, &data, "damaged model")
-                    })
-                    .collect()
-            });
+                    .map(|p| self.textures.part_mesh(gpu, p, "damaged model"))
+                    .collect();
+                self.deformed.insert(d.key, meshes);
+            }
         }
         let keep: std::collections::BTreeSet<u64> = self.deformed_slots.iter().copied().collect();
         self.deformed.retain(|k, _| keep.contains(k));
@@ -1004,33 +1189,18 @@ impl Renderer {
         if self.models.as_ref().is_some_and(|c| c.library == id) {
             return;
         }
-        let upload = |path: &str, parts: &[wp_asset::Part]| -> Vec<GpuMesh> {
-            parts
-                .iter()
-                .map(|p| {
-                    let data = mesh::MeshData {
-                        vertices: p
-                            .positions
-                            .iter()
-                            .zip(&p.normals)
-                            .map(|(pos, n)| mesh::Vertex {
-                                position: *pos,
-                                normal: *n,
-                                tint: 0.0,
-                            })
-                            .collect(),
-                        indices: p.indices.clone(),
-                    };
-                    GpuMesh::new(gpu, &data, path)
-                })
-                .collect()
-        };
+        let textures = &mut self.textures;
         let meshes = lib
             .iter()
             .map(|(path, model)| {
                 std::iter::once(&model.parts)
                     .chain(&model.lods)
-                    .map(|parts| upload(path, parts))
+                    .map(|parts| {
+                        parts
+                            .iter()
+                            .map(|p| textures.part_mesh(gpu, p, path))
+                            .collect()
+                    })
                     .collect()
             })
             .collect();
@@ -1093,6 +1263,7 @@ impl Renderer {
                             position: *p,
                             normal: *n,
                             tint: 0.0,
+                            uv: [0.0, 0.0],
                         })
                         .collect(),
                     indices: l.indices,

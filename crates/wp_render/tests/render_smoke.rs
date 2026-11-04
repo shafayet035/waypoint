@@ -337,3 +337,99 @@ fn distant_models_use_fewer_triangles() {
     let (n, f) = (triangles(&near), triangles(&far));
     assert!(f < n, "far {f} vs near {n} triangles");
 }
+
+/// A model's base colour texture is drawn: a red/blue checker on a quad.
+#[test]
+fn textured_models_show_their_texture() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    // 16×16: red top-left and bottom-right quadrants, blue the others.
+    let rgba = (0..16 * 16)
+        .flat_map(|i| {
+            let (x, y) = (i % 16, i / 16);
+            if (x < 8) == (y < 8) {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        })
+        .collect();
+    let checker = std::sync::Arc::new(wp_asset::Texture {
+        width: 16,
+        height: 16,
+        rgba,
+    });
+    // A 4 m upright quad facing −X (towards the camera, which sees +Y on
+    // its left): bottom-left, top-left, top-right, bottom-right on screen.
+    let corners = [
+        [0.0, 2.0, 0.0],
+        [0.0, 2.0, 4.0],
+        [0.0, -2.0, 4.0],
+        [0.0, -2.0, 0.0],
+    ];
+    let uvs = [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+    let part = wp_asset::Part {
+        material: wp_asset::Material {
+            base_color: [1.0, 1.0, 1.0],
+            roughness: 1.0,
+            metallic: 0.0,
+            emissive: 1.0,
+            base_color_texture: Some(checker),
+            ..Default::default()
+        },
+        positions: corners.to_vec(),
+        normals: vec![[-1.0, 0.0, 0.0]; 4],
+        uvs: uvs.to_vec(),
+        indices: vec![0, 3, 2, 0, 2, 1],
+    };
+    let model = wp_asset::Model {
+        lods: vec![vec![part.clone()], vec![part.clone()]],
+        parts: vec![part],
+        min: glam::Vec3::new(0.0, -2.0, 0.0),
+        max: glam::Vec3::new(0.0, 2.0, 4.0),
+        triangles: 2,
+        textures: 1,
+        skipped: 0,
+    };
+    let app = world_with_car();
+    let mut frame = extract(&app.world, CameraMode::Chase);
+    frame.items.clear();
+    frame.shadows.clear();
+    frame.models = Some(std::sync::Arc::new(wp_asset::ModelLibrary::new([(
+        "quad.glb".to_string(),
+        std::sync::Arc::new(model),
+    )])));
+    frame.items.push(wp_render::DrawItem {
+        mesh: wp_render::MeshId::Model {
+            model: 0,
+            part: 0,
+            lod: 0,
+        },
+        transform: glam::Mat4::IDENTITY,
+        color: glam::Vec3::ONE,
+        roughness: 1.0,
+        metallic: 0.0,
+        emissive: 1.0,
+    });
+    frame.camera = wp_render::Camera {
+        eye: glam::Vec3::new(-5.0, 0.0, 2.0),
+        target: glam::Vec3::new(0.0, 0.0, 2.0),
+        up: glam::Vec3::Z,
+        fov_y_deg: 55.0,
+    };
+    let (w, h) = (200, 200);
+    let px = render_rgba(&gpu, &frame, w, h).unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        (px[i], px[i + 1], px[i + 2])
+    };
+    // Quad corners on screen: top-left texel red, top-right blue.
+    let (tl, tr) = (at(70, 70), at(130, 70));
+    assert!(tl.0 > 150 && tl.2 < 80, "top left should be red: {tl:?}");
+    assert!(tr.2 > 150 && tr.0 < 80, "top right should be blue: {tr:?}");
+}

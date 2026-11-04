@@ -10,6 +10,8 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// 0 = instance colour, 1 = hub metal. Used for wheel spokes.
     pub tint: f32,
+    /// Texture coordinates (0,0 for untextured meshes).
+    pub uv: [f32; 2],
 }
 
 pub struct MeshData {
@@ -41,6 +43,7 @@ pub fn cube() -> MeshData {
                 position: p,
                 normal: n,
                 tint: 0.0,
+                uv: [0.0, 0.0],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -66,6 +69,7 @@ pub fn wheel() -> MeshData {
                 position: [s, y, c],
                 normal: [s, 0.0, c],
                 tint: 0.0,
+                uv: [0.0, 0.0],
             });
         }
     }
@@ -95,6 +99,7 @@ pub fn wheel() -> MeshData {
                     position: p,
                     normal: n,
                     tint: 0.0,
+                    uv: [0.0, 0.0],
                 });
             }
             let centre = vertices.len() as u32;
@@ -102,16 +107,19 @@ pub fn wheel() -> MeshData {
                 position: [0.0, side, 0.0],
                 normal: n,
                 tint: hub_tint,
+                uv: [0.0, 0.0],
             });
             vertices.push(Vertex {
                 position: ring[0],
                 normal: n,
                 tint: hub_tint,
+                uv: [0.0, 0.0],
             });
             vertices.push(Vertex {
                 position: ring[1],
                 normal: n,
                 tint: hub_tint,
+                uv: [0.0, 0.0],
             });
             if side > 0.0 {
                 indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);

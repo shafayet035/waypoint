@@ -47,6 +47,9 @@ fn styled_light(x: f32) -> f32 {
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
+// The mesh's base colour texture (white when it has none).
+@group(1) @binding(0) var base_tex: texture_2d<f32>;
+@group(1) @binding(1) var base_sampler: sampler;
 
 // Sun visibility from the shadow map, 0 (shadowed) to 1 (lit), with a 3×3
 // filter for soft edges. Outside the map, everything is lit; shadows fade
@@ -252,6 +255,7 @@ struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) tint: f32,
+    @location(12) uv: vec2<f32>,
 };
 
 struct InstanceIn {
@@ -274,6 +278,7 @@ struct MeshOut {
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
     @location(3) material: vec4<f32>,
+    @location(4) uv: vec2<f32>,
 };
 
 @vertex
@@ -292,11 +297,14 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     m.x = mix(m.x, 0.3, v.tint);
     m.y = mix(m.y, 1.0, v.tint);
     out.material = m;
+    out.uv = v.uv;
     return out;
 }
 
 @fragment
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+    // Sampled first, in uniform control flow.
+    let albedo = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
     let n = normalize(in.normal);
     let l = g.sun_dir.xyz;
     let v = normalize(-in.rel);
@@ -312,17 +320,17 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
         spec = step(8.0, spec) * 4.0;
     }
     spec = spec * (1.0 - g.style.w);
-    let f0 = mix(vec3<f32>(0.04), in.color, metal);
+    let f0 = mix(vec3<f32>(0.04), albedo, metal);
     let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
 
     let sun = g.sun_color.rgb * g.sun_dir.w;
-    let diffuse = in.color * (1.0 - metal) * (sun * ndl + ambient(n));
+    let diffuse = albedo * (1.0 - metal) * (sun * ndl + ambient(n));
     // Rough surfaces scatter the sky reflection away: fade it with roughness².
     let gloss = (1.0 - rough) * (1.0 - rough) * (1.0 - g.style.w) * select(1.0, 0.4, g.style.x > 0.5);
     let env = sky_color(reflect(-v, n)) * fresnel * gloss;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
-    col += local_lights(in.rel, n, v, in.color * (1.0 - metal), rough);
-    col += in.color * in.material.z;
+    col += local_lights(in.rel, n, v, albedo * (1.0 - metal), rough);
+    col += albedo * in.material.z;
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }

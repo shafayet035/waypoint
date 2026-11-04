@@ -166,7 +166,9 @@ brake…/head… get roles). `wp check`: WP-F001–F010 (licence, size, origin, 
 `tools/models/vehicles.py` (our own, CC0). Levels of detail: models load with two simpler copies (vertex
 clustering to ~50 % and ~25 % of the triangles, `wp_asset::simplify`); the renderer picks one per item from
 size ÷ distance × the tier's `lod_bias` (Low 0.6, Mid 1, Flagship 1.6). `wp asset build` checks every model
-and reports its levels against the tier budgets. Textures are not drawn yet; KTX2 packing is later.
+and reports its levels against the tier budgets. Base colour textures (glTF PNG/JPEG, TEXCOORD_0) are drawn with
+CPU-built mipmaps, one bind group per image (group 1; white for untextured meshes). Not yet: normal,
+roughness and emissive maps; KTX2 packing.
 Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
 Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn

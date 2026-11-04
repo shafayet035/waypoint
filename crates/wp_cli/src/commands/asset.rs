@@ -77,7 +77,7 @@ pub fn asset_info(ctx: &Ctx, file: &str) -> CmdResult {
     println!("  distance levels: {} triangles", lods.join(", "));
     if model.textures > 0 {
         println!(
-            "  {} textures (not drawn yet; materials use their colour factors)",
+            "  {} textures (base colour textures are drawn; others are not used yet)",
             model.textures
         );
     }
