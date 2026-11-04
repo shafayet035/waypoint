@@ -1,0 +1,21 @@
+[package]
+name = "wp_traffic"
+description = "AI traffic: NPC vehicles that route on the lane graph, follow lanes, keep their distance (IDM) and take turns at junctions, driving the real vehicle model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_physics.workspace = true
+wp_road.workspace = true
+wp_world.workspace = true
+wp_vehicle.workspace = true
+glam.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true

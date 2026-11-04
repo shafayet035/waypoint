@@ -2971,6 +2971,23 @@ dependencies = [
  "wp_ecs",
  "wp_physics",
  "wp_road",
+ "wp_traffic",
+ "wp_vehicle",
+ "wp_world",
+]
+
+[[package]]
+name = "wp_traffic"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "schemars",
+ "serde",
+ "wp_app",
+ "wp_core",
+ "wp_ecs",
+ "wp_physics",
+ "wp_road",
  "wp_vehicle",
  "wp_world",
 ]

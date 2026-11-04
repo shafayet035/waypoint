@@ -9,7 +9,13 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
     let foundation = vec!["wp_core", "wp_ecs", "wp_app", "wp_data"];
     let simulation = [
         foundation.clone(),
-        vec!["wp_physics", "wp_road", "wp_world", "wp_vehicle"],
+        vec![
+            "wp_physics",
+            "wp_road",
+            "wp_world",
+            "wp_vehicle",
+            "wp_traffic",
+        ],
     ]
     .concat();
     let verification = [simulation.clone(), vec!["wp_test"]].concat();
@@ -37,6 +43,14 @@ fn allowed() -> BTreeMap<&'static str, Vec<&'static str>> {
             "wp_vehicle",
             [foundation.clone(), vec!["wp_physics"]].concat(),
         ),
+        (
+            "wp_traffic",
+            [
+                foundation.clone(),
+                vec!["wp_physics", "wp_road", "wp_world", "wp_vehicle"],
+            ]
+            .concat(),
+        ),
         ("wp_test", verification),
         ("wp_rhi", vec!["wp_core"]),
         ("wp_render", presentation),
@@ -59,6 +73,7 @@ const SIMULATION_LAYERS: &[&str] = &[
     "wp_road",
     "wp_world",
     "wp_vehicle",
+    "wp_traffic",
     "wp_test",
 ];
 
