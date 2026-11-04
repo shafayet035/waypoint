@@ -326,7 +326,9 @@ impl Handler {
         let Some(rx) = &self.control else { return };
         while let Ok(p) = rx.try_recv() {
             self.requests += 1;
-            let _ = p.reply.send(self.session.handle_line(&p.line));
+            let _ = p
+                .reply
+                .send(self.session.handle_line_with(&p.line, &p.push));
         }
     }
 

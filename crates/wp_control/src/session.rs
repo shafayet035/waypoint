@@ -29,6 +29,32 @@ pub struct Session {
     pub setup: wp_vehicle::replay::ReplaySetup,
     /// Recording in progress (`wp run --record`, `replay.start`).
     pub(crate) recorder: Option<wp_vehicle::replay::Recorder>,
+    /// `events.subscribe` subscriptions: events pushed as notifications.
+    pub(crate) subscriptions: Vec<Subscription>,
+    next_subscription: u64,
+    /// Where the request being handled can receive pushed lines, if its
+    /// transport supports that (set by [`Session::handle_line_with`]).
+    sink: Option<std::sync::mpsc::Sender<String>>,
+}
+
+/// An `events.subscribe` subscription.
+pub(crate) struct Subscription {
+    id: u64,
+    kinds: Option<Vec<String>>,
+    entity: Option<String>,
+    sink: std::sync::mpsc::Sender<String>,
+}
+
+impl Subscription {
+    fn wants(&self, event: &Value) -> bool {
+        self.kinds
+            .as_ref()
+            .is_none_or(|k| k.iter().any(|k| event["kind"] == k.as_str()))
+            && self
+                .entity
+                .as_ref()
+                .is_none_or(|e| event["entity"] == e.as_str())
+    }
 }
 
 /// Most events kept between polls.
@@ -50,7 +76,23 @@ impl Session {
             gpu: None,
             setup: Default::default(),
             recorder: None,
+            subscriptions: Vec::new(),
+            next_subscription: 0,
+            sink: None,
         }
+    }
+
+    /// Handle a request line from a transport that can push lines back
+    /// (`events.subscribe` notifications go to `sink`).
+    pub fn handle_line_with(
+        &mut self,
+        line: &str,
+        sink: &std::sync::mpsc::Sender<String>,
+    ) -> Option<String> {
+        self.sink = Some(sink.clone());
+        let out = self.handle_line(line);
+        self.sink = None;
+        out
     }
 
     /// Record from the next tick: player inputs, resets, and a world hash
@@ -103,6 +145,20 @@ impl Session {
                 let mut v = serde_json::to_value(e).unwrap();
                 v["tick"] = json!(time.tick);
                 v["t"] = json!(time.seconds());
+                // Subscribers get it now; a closed connection unsubscribes.
+                self.subscriptions.retain(|s| {
+                    !s.wants(&v)
+                        || s.sink
+                            .send(
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "events.event",
+                                    "params": { "subscription": s.id, "event": v },
+                                })
+                                .to_string(),
+                            )
+                            .is_ok()
+                });
                 self.events.push_back(v);
             }
         }
@@ -196,6 +252,40 @@ impl Session {
                 Ok(serde_json::to_value(t).unwrap())
             }
             "render.screenshot" => self.screenshot(params),
+            "events.subscribe" => {
+                let Some(sink) = self.sink.clone() else {
+                    return Err(k(
+                        "WP-K009",
+                        "this transport cannot push events; use events.poll".into(),
+                    )
+                    .into());
+                };
+                let kinds = params.get("kinds").and_then(Value::as_array).map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                });
+                let entity = params
+                    .get("entity")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                self.next_subscription += 1;
+                let id = self.next_subscription;
+                self.subscriptions.push(Subscription {
+                    id,
+                    kinds,
+                    entity,
+                    sink,
+                });
+                Ok(json!({ "subscription": id }))
+            }
+            "events.unsubscribe" => {
+                let id = params.get("subscription").and_then(Value::as_u64);
+                let before = self.subscriptions.len();
+                self.subscriptions.retain(|s| Some(s.id) != id);
+                Ok(json!({ "unsubscribed": before != self.subscriptions.len() }))
+            }
             "replay.start" => {
                 let every = params
                     .get("hash_every")

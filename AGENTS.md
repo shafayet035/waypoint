@@ -173,8 +173,10 @@ at its edge (Low 1024 px over ±30 m, Mid 2048 over ±45 m, Flagship 4096 over �
 Replays (`wp_vehicle::replay`): `.replay.ron` = setup + input changes + resets + a world hash every N ticks.
 `wp run --record`, `replay.start`/`replay.stop` (control protocol), `wp replay <file>` (exit 1 + WP-Y002 at the
 first differing checkpoint), `wp replay record --scenario` (goldens; 8 in the sandbox).
-Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-event subscriptions (`events.subscribe`).
+Event subscriptions: `events.subscribe {kinds?, entity?}` pushes `events.event` notifications as they happen
+over `wp serve` (written before the step's response) and `wp run --control` (a writer thread per connection);
+MCP keeps `events.poll` (WP-K009 if subscribing there).
+Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back

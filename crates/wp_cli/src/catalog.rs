@@ -174,6 +174,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Call replay.start first; recording covers the ticks between the two calls.",
     },
     ErrorDoc {
+        code: "WP-K009",
+        title: "events.subscribe needs a transport that can push lines",
+        fix: "Subscribe over `wp serve` or `wp run --control`; through MCP, call events.poll instead.",
+    },
+    ErrorDoc {
         code: "WP-I001",
         title: "Map data could not be imported",
         fix: "Give an OSM XML file (.osm) containing highway=* ways and the nodes they use; export a small area from openstreetmap.org or the Overpass API.",

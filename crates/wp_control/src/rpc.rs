@@ -90,6 +90,16 @@ pub const METHODS: &[(&str, &str, &str)] = &[
         "Render the current frame. Writes a PNG to path, or returns png_base64.",
     ),
     (
+        "events.subscribe",
+        "{kinds?: [string], entity?: string}",
+        "Push matching vehicle events as they happen: notifications {method: \"events.event\", params: {subscription, event}} (wp serve and --control only).",
+    ),
+    (
+        "events.unsubscribe",
+        "{subscription: int}",
+        "Stop a subscription.",
+    ),
+    (
         "replay.start",
         "{hash_every?: ticks}",
         "Record player inputs and a world hash every N ticks (default 60) from now.",

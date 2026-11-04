@@ -8,10 +8,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use wp_core::Diagnostic;
 
 /// One request line waiting for the game loop. Send the response line (or
-/// `None` for a notification) on `reply`.
+/// `None` for a notification) on `reply`; lines pushed later (event
+/// notifications) go to `push`.
 pub struct Pending {
     pub line: String,
     pub reply: Sender<Option<String>>,
+    pub push: Sender<String>,
 }
 
 /// Start listening on `127.0.0.1:port` (0 picks a free port). Requests arrive
@@ -32,6 +34,15 @@ pub fn listen(port: u16) -> Result<(Receiver<Pending>, SocketAddr), Diagnostic> 
                 let Ok(mut writer) = stream.try_clone() else {
                     return;
                 };
+                // One writer per connection: responses and pushed events in order.
+                let (out_tx, out_rx) = channel::<String>();
+                std::thread::spawn(move || {
+                    for line in out_rx {
+                        if writeln!(writer, "{line}").is_err() {
+                            return;
+                        }
+                    }
+                });
                 for line in BufReader::new(stream).lines() {
                     let Ok(line) = line else { break };
                     if line.trim().is_empty() {
@@ -42,6 +53,7 @@ pub fn listen(port: u16) -> Result<(Receiver<Pending>, SocketAddr), Diagnostic> 
                         .send(Pending {
                             line,
                             reply: reply_tx,
+                            push: out_tx.clone(),
                         })
                         .is_err()
                     {
@@ -49,7 +61,7 @@ pub fn listen(port: u16) -> Result<(Receiver<Pending>, SocketAddr), Diagnostic> 
                     }
                     match reply_rx.recv() {
                         Ok(Some(resp)) => {
-                            if writeln!(writer, "{resp}").is_err() {
+                            if out_tx.send(resp).is_err() {
                                 return;
                             }
                         }

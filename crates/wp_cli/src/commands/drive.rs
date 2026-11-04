@@ -303,15 +303,22 @@ pub fn serve(ctx: &Ctx, args: &ServeArgs) -> CmdResult {
     let mut session = make_session(ctx, &args.drive)?;
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
+    // Pushed event notifications are written before the response of the
+    // request (usually sim.step) during which they happened.
+    let (push_tx, push_rx) = std::sync::mpsc::channel::<String>();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(resp) = session.handle_line(&line)
-            && writeln!(stdout, "{resp}")
-                .and_then(|_| stdout.flush())
-                .is_err()
+        let resp = session.handle_line_with(&line, &push_tx);
+        let mut out: Vec<String> = push_rx.try_iter().collect();
+        out.extend(resp);
+        if out
+            .iter()
+            .try_for_each(|l| writeln!(stdout, "{l}"))
+            .and_then(|_| stdout.flush())
+            .is_err()
         {
             break;
         }

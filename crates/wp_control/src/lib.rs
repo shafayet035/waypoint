@@ -73,6 +73,41 @@ mod tests {
     }
 
     #[test]
+    fn subscriptions_push_matching_events() {
+        let mut s = session();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let line = |m: &str, p: Value| {
+            json!({ "jsonrpc": "2.0", "id": 1, "method": m, "params": p }).to_string()
+        };
+        let r = s.handle_line_with(
+            &line("events.subscribe", json!({ "kinds": ["GearShift"] })),
+            &tx,
+        );
+        assert!(r.unwrap().contains("\"subscription\":1"));
+        s.handle_line(&line("input.set", json!({ "throttle": 1.0 })));
+        s.handle_line(&line("sim.step", json!({ "seconds": 6.0 })));
+        let pushed: Vec<Value> = rx
+            .try_iter()
+            .map(|l| serde_json::from_str(&l).unwrap())
+            .collect();
+        assert!(!pushed.is_empty(), "no gear shifts pushed");
+        assert!(
+            pushed
+                .iter()
+                .all(|p| p["method"] == "events.event"
+                    && p["params"]["event"]["kind"] == "GearShift")
+        );
+        // Without a push channel, subscribing is a coded error.
+        let r: Value =
+            serde_json::from_str(&s.handle_line(&line("events.subscribe", json!({}))).unwrap())
+                .unwrap();
+        assert!(r["error"].is_object(), "{r}");
+        s.handle_line(&line("events.unsubscribe", json!({ "subscription": 1 })));
+        s.handle_line(&line("sim.step", json!({ "seconds": 6.0 })));
+        assert_eq!(rx.try_iter().count(), 0);
+    }
+
+    #[test]
     fn replay_start_and_stop_record_inputs_and_hashes() {
         let mut s = session();
         call(&mut s, "replay.start", json!({ "hash_every": 30 }));

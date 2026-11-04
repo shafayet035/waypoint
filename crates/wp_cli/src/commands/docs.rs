@@ -43,7 +43,9 @@ and look at the image → fix. For live work, `wp serve` or `wp mcp`, then call 
 
 Control protocol methods: rpc.methods, sim.status, sim.step, sim.pause, sim.resume, sim.snapshot,
 sim.restore, world.entities, world.get, world.set, world.find, world.spawn, world.despawn,
-world.resources, input.set, vehicle.telemetry, events.poll, render.screenshot, replay.start, replay.stop.
+world.resources, input.set, vehicle.telemetry, events.poll, events.subscribe, events.unsubscribe,
+render.screenshot, replay.start, replay.stop. events.subscribe {kinds?, entity?} pushes notifications
+{\"method\": \"events.event\", \"params\": {subscription, event}} as events happen (serve and --control).
 ";
 
 const DOCS_SCENARIO: &str = "\
