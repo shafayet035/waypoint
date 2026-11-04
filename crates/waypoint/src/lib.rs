@@ -35,6 +35,7 @@ impl PluginGroup for DefaultPlugins {
             Box::new(wp_vehicle::TrailerPlugin),
             Box::new(wp_traffic::TrafficPlugin),
             Box::new(wp_mission::MissionPlugin),
+            Box::new(wp_wasm::WasmPlugin),
         ]
     }
 }

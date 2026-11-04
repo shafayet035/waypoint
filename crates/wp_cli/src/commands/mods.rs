@@ -12,8 +12,12 @@ pub fn mod_list(ctx: &Ctx) -> CmdResult {
         .mods
         .iter()
         .map(|m| {
-            let (replaces, adds): (Vec<&String>, Vec<&String>) =
-                m.files.iter().partition(|f| project.vfs.in_base(f));
+            let code = &m.manifest.value.code;
+            let (replaces, adds): (Vec<&String>, Vec<&String>) = m
+                .files
+                .iter()
+                .filter(|f| !code.contains(f))
+                .partition(|f| project.vfs.in_base(f));
             json!({
                 "id": m.id,
                 "name": m.manifest.value.name,
@@ -23,6 +27,8 @@ pub fn mod_list(ctx: &Ctx) -> CmdResult {
                 "active": m.active,
                 "adds": adds,
                 "replaces": replaces,
+                "code": code,
+                "capabilities": m.manifest.value.capabilities,
             })
         })
         .collect();
@@ -46,7 +52,7 @@ pub fn mod_list(ctx: &Ctx) -> CmdResult {
                 " — disabled"
             }
         );
-        for (what, key) in [("adds", "adds"), ("replaces", "replaces")] {
+        for (what, key) in [("adds", "adds"), ("replaces", "replaces"), ("runs", "code")] {
             for f in m[key].as_array().into_iter().flatten() {
                 println!("    {what} {}", f.as_str().unwrap_or(""));
             }

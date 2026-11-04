@@ -238,6 +238,8 @@ pub fn vehicle_test(ctx: &Ctx, name: &str, which: &str) -> CmdResult {
             traffic: Vec::new(),
             mission: None,
             mission_script: None,
+            // Standard manoeuvres measure the vehicle alone, without mod code.
+            wasm: &[],
         };
         let r = run_scenario(&input, &make_app).map_err(|d| vec![d])?;
         all_ok &= r.passed;

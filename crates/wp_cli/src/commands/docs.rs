@@ -163,7 +163,13 @@ Vehicles, trailers, roads, scenes, scenarios, missions and their Lua scripts, mo
 and replays all layer. Mods load by priority, then folder name; later wins. Every check runs on the
 result, and errors point at the file inside the mod. Switch one off with game.toml [mods] disabled = [\"night_bus\"]
 or enabled = false in its mod.toml. `wp mod list` shows what each mod adds and replaces.
-Not yet: WASM modules and per-mod capability permissions.
+Code: `code = [\"code/limit.wat\"]` runs WebAssembly modules (.wasm, or .wat text) every tick, after the AI
+drivers; `capabilities = [\"log\", \"read_vehicles\", \"drive_vehicles\"]` says what they may do. A module
+exports on_tick(dt: f32) and imports from \"waypoint\": time_s, log(ptr, len) [log]; vehicle_count, player,
+vehicle_x/_y/_heading/_speed_kmh(i), input_throttle/_brake/_steer(i) [read_vehicles]; set_input(i, throttle,
+brake, steer) [drive_vehicles]. Each tick has a fuel budget; a trap, running out of fuel or a call without its
+capability stops the module (world.resources → WasmMods shows why). wp check compiles modules (WP-X003)
+and checks capabilities (WP-X004). Example: examples/harbour_shuttle/mods/old_town_limit.
 ";
 
 const DOCS_SCRIPTING: &str = "\

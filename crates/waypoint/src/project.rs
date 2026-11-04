@@ -74,6 +74,8 @@ pub struct Project {
     pub mods: Vec<crate::mods::Mod>,
     /// The game's files seen through its active mods.
     pub vfs: crate::mods::Vfs,
+    /// Active mods' WebAssembly modules, compiled.
+    pub wasm_modules: Vec<wp_wasm::ModuleDef>,
     pub game: Loaded<GameConfig>,
     /// By vehicle name.
     pub vehicles: BTreeMap<String, Loaded<VehicleDef>>,
@@ -133,6 +135,8 @@ impl Project {
 
         let (vfs, mods, mod_diags) = crate::mods::Vfs::open(root, &game.value.mods.disabled);
         diags.extend(mod_diags);
+        let (wasm_modules, wasm_diags) = crate::mods::Vfs::wasm_modules(root, &mods);
+        diags.extend(wasm_diags);
         let mut failed = Vec::new();
         let mut vehicles = BTreeMap::new();
         for (path, real) in vfs.files(VEHICLE_EXT) {
@@ -298,6 +302,7 @@ impl Project {
         }
 
         let project = Project {
+            wasm_modules,
             mods,
             vfs,
             replays,
@@ -836,6 +841,7 @@ impl Project {
             scene,
             vehicle: &self.vehicles.get(&s.player.vehicle)?.value,
             trailer,
+            wasm: &self.wasm_modules,
         })
     }
 

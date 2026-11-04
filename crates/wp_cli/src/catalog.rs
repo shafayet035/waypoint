@@ -573,6 +573,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         title: "Traffic cannot drive into and out of a road joined at both ends",
         fix: "A junction could not connect it: give it a gentler angle where it meets the next road, or move `through` points away from its ends; check with a FollowRoute scenario.",
     },
+    ErrorDoc {
+        code: "WP-X003",
+        title: "A mod's code cannot be used",
+        fix: "Check the path in `code` (relative to the mod's folder); modules must compile to WebAssembly (.wasm or .wat) and export on_tick(dt: f32).",
+    },
+    ErrorDoc {
+        code: "WP-X004",
+        title: "A mod asks for an unknown capability",
+        fix: "Capabilities: log, read_vehicles, drive_vehicles.",
+    },
 ];
 
 pub fn find(code: &str) -> Option<&'static ErrorDoc> {

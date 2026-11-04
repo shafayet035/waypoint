@@ -90,7 +90,7 @@ tap the top edge to change camera. The simulator needs an iOS runtime
   Each game picks its art style in game.toml `[look]`: realistic, toon or flat, with colour overrides.
 
 A second game, [`examples/harbour_shuttle`](examples/harbour_shuttle), was built from data files alone:
-a night minibus route in the rain with a toon look and an electric-shuttle mod.
+a night minibus route in the rain with a toon look, an electric-shuttle mod and a WebAssembly code mod.
 
 See [`AGENTS.md`](AGENTS.md) for the crate map and rules.
 

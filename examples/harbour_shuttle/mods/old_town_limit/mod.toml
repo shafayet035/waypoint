@@ -1,0 +1,11 @@
+# A code mod (WebAssembly): in the old town (north of y = 60 m) the player's
+# minibus is held to 25 km/h, and the mod logs when it takes over.
+# Shipped switched off; set enabled = true to try it.
+name = "Old Town 25"
+version = "1.0.0"
+author = "Waypoint contributors"
+description = "Holds the player to 25 km/h in the old town's narrow streets."
+priority = 10
+enabled = false
+code = ["code/limit.wat"]
+capabilities = ["log", "read_vehicles", "drive_vehicles"]

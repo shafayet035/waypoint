@@ -88,12 +88,7 @@ type Clustered = (Vec<Vec3>, Vec<(usize, [u32; 3])>);
 
 /// Merge vertices per grid cell; keep triangles that still have area, with
 /// the index of the triangle each came from.
-fn cluster(
-    points: &[Vec3],
-    tris: &[[u32; 3]],
-    min: Vec3,
-    cell: f32,
-) -> Clustered {
+fn cluster(points: &[Vec3], tris: &[[u32; 3]], min: Vec3, cell: f32) -> Clustered {
     let mut cells: BTreeMap<[i32; 3], (u32, Vec3, u32)> = BTreeMap::new();
     let mut of = Vec::with_capacity(points.len());
     for p in points {

@@ -1,0 +1,24 @@
+[package]
+name = "wp_wasm"
+description = "WebAssembly mod modules: a sandboxed, fuel-limited interpreter (wasmi) with capability-checked host functions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wp_core.workspace = true
+wp_ecs.workspace = true
+wp_app.workspace = true
+wp_physics.workspace = true
+wp_vehicle.workspace = true
+wp_world.workspace = true
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "portable-dispatch"] }
+wat = "1"
+serde.workspace = true
+schemars.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+wp_data.workspace = true

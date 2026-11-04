@@ -698,3 +698,71 @@ fn minimal_template_is_small_and_passes() {
     assert_eq!(v["total"], 2);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn code_mods_compile_and_run_with_capabilities() {
+    let dir = temp_dir("wasm");
+    wp(&dir, &["new", "g", "--template", "minimal"]);
+    let game = dir.join("g");
+    wp(&game, &["mod", "new", "limit"]);
+    let m = game.join("mods/limit");
+    std::fs::create_dir_all(m.join("code")).unwrap();
+    std::fs::write(
+        m.join("code/limit.wat"),
+        r#"(module
+          (import "waypoint" "player" (func $p (result i32)))
+          (import "waypoint" "vehicle_speed_kmh" (func $v (param i32) (result f32)))
+          (import "waypoint" "set_input" (func $set (param i32 f32 f32 f32)))
+          (func (export "on_tick") (param f32)
+            (if (f32.gt (call $v (call $p)) (f32.const 40))
+              (then (call $set (call $p) (f32.const 0) (f32.const 0) (f32.const 0)))
+              (else (call $set (call $p) (f32.const 1) (f32.const 0) (f32.const 0))))))"#,
+    )
+    .unwrap();
+    let manifest = m.join("mod.toml");
+    let base = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{base}code = [\"code/limit.wat\"]\ncapabilities = [\"read_vehicles\", \"fly\"]\n"),
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-X004", "{v}");
+    std::fs::write(
+        &manifest,
+        format!("{base}code = [\"code/limit.wat\"]\ncapabilities = [\"read_vehicles\", \"drive_vehicles\"]\n"),
+    )
+    .unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = json(
+        &game,
+        &[
+            "run",
+            "--headless",
+            "--seconds",
+            "20",
+            "--throttle",
+            "1",
+            "--vehicle",
+            "hatchback",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    let kmh = v["telemetry"]["speed_kmh"].as_f64().unwrap();
+    assert!(
+        (30.0..48.0).contains(&kmh),
+        "the mod holds about 40 km/h: {kmh}"
+    );
+    // Broken code is a coded error at the mod's manifest.
+    std::fs::write(m.join("code/limit.wat"), "(module (func").unwrap();
+    let (code, v) = json(&game, &["check"]);
+    assert_eq!(code, 1);
+    assert_eq!(v["diagnostics"][0]["code"], "WP-X003", "{v}");
+    assert_eq!(
+        v["diagnostics"][0]["location"]["file"],
+        "mods/limit/mod.toml"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

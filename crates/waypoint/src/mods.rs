@@ -34,6 +34,13 @@ pub struct ModManifest {
     /// Off: the mod is ignored (as is a mod listed in game.toml [mods] disabled).
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// WebAssembly modules that run every tick (`.wasm`, or `.wat` text),
+    /// relative to the mod's folder.
+    #[serde(default)]
+    pub code: Vec<String>,
+    /// What the code may do: log, read_vehicles, drive_vehicles.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -167,6 +174,48 @@ impl Vfs {
             .rev()
             .map(|prefix| format!("{prefix}{path}"))
             .find(|p| self.root.join(p).is_file())
+    }
+
+    /// Compile the active mods' code. Problems point at the mod's `mod.toml`.
+    pub fn wasm_modules(root: &Path, mods: &[Mod]) -> (Vec<wp_wasm::ModuleDef>, Vec<Diagnostic>) {
+        let mut out = Vec::new();
+        let mut diags = Vec::new();
+        for m in mods.iter().filter(|m| m.active) {
+            let mut caps = Vec::new();
+            for c in &m.manifest.value.capabilities {
+                match wp_wasm::Capability::parse(c) {
+                    Some(cap) => caps.push(cap),
+                    None => diags.push(
+                        m.manifest
+                            .error_at(
+                                "WP-X004",
+                                "capabilities",
+                                format!("unknown capability `{c}`"),
+                            )
+                            .help("capabilities: log, read_vehicles, drive_vehicles"),
+                    ),
+                }
+            }
+            for path in &m.manifest.value.code {
+                let file = format!("{MODS_DIR}/{}/{path}", m.id);
+                let compiled = std::fs::read(root.join(&file))
+                    .map_err(|e| format!("cannot read {file}: {e}"))
+                    .and_then(|bytes| wp_wasm::compile(&bytes, path.ends_with(".wat")));
+                match compiled {
+                    Ok(wasm) => out.push(wp_wasm::ModuleDef {
+                        name: format!("{}/{path}", m.id),
+                        wasm,
+                        capabilities: caps.clone(),
+                    }),
+                    Err(e) => diags.push(
+                        m.manifest
+                            .error_at("WP-X003", "code", format!("`{path}` cannot be used: {e}"))
+                            .help("modules must compile to WebAssembly and export on_tick(dt: f32); `wp docs mods`"),
+                    ),
+                }
+            }
+        }
+        (out, diags)
     }
 
     /// Read project path `path` through the layers.

@@ -26,6 +26,8 @@ pub struct ScenarioInput<'a> {
     pub mission: Option<&'a wp_mission::MissionDef>,
     /// Its script: (path, source).
     pub mission_script: Option<(String, String)>,
+    /// Active mods' WebAssembly modules.
+    pub wasm: &'a [wp_wasm::ModuleDef],
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -251,6 +253,9 @@ pub fn prepare(
     let mut app = make_app();
     app.world
         .insert_reflected_resource("SimRng", SimRng::new(s.seed));
+    if !input.wasm.is_empty() {
+        wp_wasm::load(&mut app.world, input.wasm);
+    }
     wp_world::apply_scene(&mut app.world, input.scene, input.roads);
     wp_traffic::setup(&mut app.world, input.scene, &input.traffic);
     let (pos, heading) = wp_world::spawn_transform(spawn);

@@ -211,8 +211,10 @@ Cab camera (`CameraMode::Cab`, `--camera cab`, C in windows): the driver's eye f
 the right for left-hand traffic, moving with roll and pitch; the cab shows a dashboard with gauges (lit at
 night), a steering wheel that turns with the wheels, pillars and the roof edge. Look around: Q/E glance
 left/right, mouse drag to look anywhere; the view swings back when released (`ViewOptions.look`).
-Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-WASM mod modules and per-mod capability permissions.
+WASM mods (`wp_wasm`, gameplay layer): mod.toml `code = [".wat"/".wasm"]` + `capabilities`; wasmi interpreter
+(portable dispatch, no JIT: iOS-safe), 2M fuel per tick, host imports in module "waypoint" checked per capability;
+`WasmPlugin` runs `on_tick` in the Agents stage after traffic (scenario drivers run later and win). Status in
+the reflected `WasmMods` resource. Example: harbour_shuttle `mods/old_town_limit` (25 km/h in the old town).
 Traffic sound: `wp_audio::Mixer` mixes a voice per source to stereo (constant-power pan, fade in/out);
 `wp_platform::audio::sound_sources` gives the player's vehicle plus the 5 nearest within 60 m, quieter with
 distance and panned by direction (windows play it; `wp audio` mixes it to mono).
@@ -222,3 +224,4 @@ Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the ha
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back
 to 0 within 1 s with (FMVSS 126). Events `EscEngaged`/`EscReleased`; telemetry `tc_active`, `esc_active`.
+Not yet: testing on physical phones; running on an iOS simulator; normal/roughness maps and KTX2 packing.
