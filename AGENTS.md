@@ -186,8 +186,13 @@ Mods (`waypoint::mods`): `mods/<id>/mod.toml` (name, version, priority, enabled)
 layout and are read through a layered `Vfs` (base, then mods by priority/id): same path replaces, new path
 adds. Diagnostics point at the real file in the mod; game.toml `[mods] disabled`. `wp mod new|list`,
 `wp docs mods`, WP-X001/X002.
+Crash damage: the contact solver records the closing speed at first contact (`contact::Impacts`); each new
+collision adds a `Dent` (body frame, depth from speed and mass share: 0 below 5 km/h, about 18 cm at 30 km/h
+between equal cars, at most 70 cm) to a `Damage` component (added on first hit, so crash-free runs hash as
+before) and lowers `health_pct`. `Collision` events carry `impact_kmh`; telemetry has `health_pct`. The renderer
+bends the vehicle's model around its dents (`extract::vehicle::deform`, uploaded once per change).
 Not yet: testing on physical phones; running on an iOS simulator; textures, LODs and `wp asset build`;
-WASM mod modules and per-mod capability permissions.
+WASM mod modules and per-mod capability permissions; damage effects on driving.
 Traction control and ESC (`brakes.traction_control`, `brakes.esc`; on for the hatchback): TC cuts engine torque
 above 12 % driven-wheel slip; ESC compares yaw rate (and sideslip) with a capped bicycle-model target and brakes
 the outer front (slide) or inner rear (plough). Sine-with-dwell at 80 km/h: 90° spin without, 11° and yaw back

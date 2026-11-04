@@ -5,9 +5,42 @@
 
 use crate::{VehicleDef, VehicleEvent};
 use glam::Vec2;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use wp_ecs::{Entity, Events, World};
-use wp_physics::{Collider, PinJoint, Pose};
+use wp_ecs::{Component, Entity, Events, World};
+use wp_physics::{Collider, PinJoint, Pose, RigidBody, Velocity};
+
+/// Crash damage, added to a body the first time it is hit.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Damage {
+    /// Dents, most recent last (at most [`MAX_DENTS`]).
+    pub dents: Vec<Dent>,
+    /// 100 = as new, 0 = written off.
+    pub health_pct: f32,
+}
+
+impl Component for Damage {
+    const NAME: &'static str = "Damage";
+}
+
+/// A dent: where the body was pushed in, in the body's frame (x forward
+/// from its pose, y left), and how far, m.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Dent {
+    pub x: f32,
+    pub y: f32,
+    pub depth_m: f32,
+}
+
+/// Dents kept per body; older ones merge into the record of health only.
+pub const MAX_DENTS: usize = 12;
+
+/// Dent depth for an impact at `kmh` (closing speed along the contact
+/// normal) taking share `share` (0–1) of the crush: nothing below 5 km/h,
+/// about 18 cm between equal cars at 30 km/h, capped at 70 cm.
+pub fn dent_depth_m(kmh: f32, share: f32) -> f32 {
+    ((kmh - 5.0).max(0.0) * 0.007 * share * 2.0).min(0.7)
+}
 
 /// A body's extent along its heading from its pose (front positive), and width, m.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,18 +145,70 @@ pub fn detect_collisions(world: &mut World) {
         .unwrap_or_default();
     let new: Vec<(Entity, Entity)> = now.difference(&before).copied().collect();
     world.insert_resource(Contacts(now));
+    let impacts = wp_physics::contact::take_impacts(world);
     if new.is_empty() {
         return;
     }
-    if let Some(mut events) = world.get_resource_mut::<Events<VehicleEvent>>() {
-        for (a, b) in new {
-            // One event per vehicle, so each side can see it was hit.
-            for (e, other) in [(a, b), (b, a)] {
-                events.send(VehicleEvent::Collision {
-                    entity: e.to_string(),
-                    other: other.to_string(),
-                });
+    let corners = |e: Entity| bodies.iter().find(|b| b.0 == e).map(|b| b.1);
+    let mut hits = Vec::new();
+    for &(a, b) in &new {
+        let (Some(ca), Some(cb)) = (corners(a), corners(b)) else {
+            continue;
+        };
+        let contact = wp_physics::contact::box_contact(&ca, &cb);
+        let solved = impacts.0.get(&(a, b)).copied();
+        let point = solved.map(|(_, p)| p).or(contact.map(|c| c.point));
+        // Closing speed at first contact (from the solver), else now.
+        let kmh = match (solved, contact) {
+            (Some((closing, _)), _) => closing.max(0.0) * 3.6,
+            (None, Some(c)) => {
+                let at = |e: Entity| {
+                    let p = world.get::<Pose>(e).map(|p| p.position).unwrap_or_default();
+                    let v = world.get::<Velocity>(e).map(|v| *v).unwrap_or_default();
+                    let r = c.point - p;
+                    v.linear + Vec2::new(-v.angular * r.y, v.angular * r.x)
+                };
+                (at(a) - at(b)).dot(c.normal).abs() * 3.6
             }
+            (None, None) => 0.0,
+        };
+        let mass = |e: Entity| world.get::<RigidBody>(e).map_or(1000.0, |b| b.mass);
+        let (ma, mb) = (mass(a), mass(b));
+        hits.push((a, b, kmh, point, mb / (ma + mb)));
+        hits.push((b, a, kmh, point, ma / (ma + mb)));
+    }
+    for &(e, _, kmh, point, share) in &hits {
+        let depth = dent_depth_m(kmh, share);
+        let (Some(point), Some(pose)) = (point, world.get::<Pose>(e).map(|p| *p)) else {
+            continue;
+        };
+        if depth <= 0.0 {
+            continue;
+        }
+        let local = pose.to_local(point - pose.position);
+        let mut damage = world.get::<Damage>(e).map(|d| d.clone()).unwrap_or(Damage {
+            dents: Vec::new(),
+            health_pct: 100.0,
+        });
+        damage.dents.push(Dent {
+            x: local.x,
+            y: local.y,
+            depth_m: depth,
+        });
+        if damage.dents.len() > MAX_DENTS {
+            damage.dents.remove(0);
+        }
+        damage.health_pct = (damage.health_pct - depth * 130.0).max(0.0);
+        world.insert(e, damage);
+    }
+    if let Some(mut events) = world.get_resource_mut::<Events<VehicleEvent>>() {
+        // One event per vehicle, so each side can see it was hit.
+        for (e, other, kmh, _, _) in hits {
+            events.send(VehicleEvent::Collision {
+                entity: e.to_string(),
+                other: other.to_string(),
+                impact_kmh: kmh,
+            });
         }
     }
 }
@@ -167,6 +252,62 @@ mod tests {
         assert!(
             overlap(&rect(0.0, 0.0, 90.0), &rect(1.0, 1.0, 0.0)),
             "a T-bone"
+        );
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::*;
+    use crate::{VehicleInput, spawn_vehicle};
+
+    fn car() -> VehicleDef {
+        wp_data::parse_ron(
+            "hatchback.vehicle.ron",
+            include_str!("../../../examples/sandbox/vehicles/hatchback.vehicle.ron"),
+        )
+        .unwrap()
+    }
+
+    /// Two cars driving at each other at `kmh` each: their health after.
+    fn head_on(kmh: f32) -> (f32, f32, usize) {
+        let mut app = wp_app::App::new();
+        app.add_plugin(wp_physics::PhysicsPlugin)
+            .add_plugin(crate::VehiclePlugin);
+        app.finish().unwrap();
+        let def = car();
+        let a = spawn_vehicle(&mut app.world, &def, Vec2::new(-12.0, 0.0), 0.0);
+        let b = spawn_vehicle(
+            &mut app.world,
+            &def,
+            Vec2::new(12.0, 0.0),
+            std::f32::consts::PI,
+        );
+        for e in [a, b] {
+            crate::set_rolling_speed(&mut app.world, e, kmh / 3.6);
+            *app.world.get_mut::<VehicleInput>(e).unwrap() = VehicleInput {
+                throttle: 0.2,
+                ..Default::default()
+            };
+        }
+        app.run_ticks(180);
+        let health = |e| app.world.get::<Damage>(e).map_or(100.0, |d| d.health_pct);
+        let dents = app.world.get::<Damage>(a).map_or(0, |d| d.dents.len());
+        (health(a), health(b), dents)
+    }
+
+    #[test]
+    fn crashes_dent_both_cars_by_speed() {
+        let (a, b, dents) = head_on(30.0);
+        assert!(dents >= 1);
+        assert!((a - b).abs() < 1.0, "equal cars, equal damage: {a} vs {b}");
+        assert!(a < 75.0 && a > 0.0, "a 60 km/h closing crash hurts: {a}");
+        let (slow, _, _) = head_on(2.0);
+        assert_eq!(slow, 100.0, "a bump at walking pace leaves no dent");
+        assert!(dent_depth_m(80.0, 0.5) > dent_depth_m(40.0, 0.5));
+        assert!(
+            dent_depth_m(40.0, 0.9) > dent_depth_m(40.0, 0.1),
+            "the lighter body takes more"
         );
     }
 }

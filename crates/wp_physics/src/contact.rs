@@ -122,6 +122,20 @@ struct Body {
 }
 
 /// Push touching bodies apart (velocity impulses, then a little position).
+/// Hardest closing speed (m/s) and where, per touching pair since the last
+/// [`take_impacts`]: the contact solver stops bodies within a substep, so
+/// this is the only place the impact speed is still known.
+#[derive(Clone, Debug, Default)]
+pub struct Impacts(pub std::collections::BTreeMap<(Entity, Entity), (f32, Vec2)>);
+
+/// The impacts recorded since the last call, emptied.
+pub fn take_impacts(world: &mut World) -> Impacts {
+    world
+        .get_resource_mut::<Impacts>()
+        .map(|mut i| std::mem::take(&mut *i))
+        .unwrap_or_default()
+}
+
 pub fn solve_contacts(world: &mut World) {
     let mut bodies: Vec<Body> = Vec::new();
     world
@@ -147,6 +161,7 @@ pub fn solve_contacts(world: &mut World) {
         .filter_map(|e| world.get::<PinJoint>(e).map(|j| ordered(e, j.other)))
         .collect();
     let mut contacts: Vec<(usize, usize, Contact, f32, f32, f32)> = Vec::new();
+    let mut impacts = Vec::new();
     for i in 0..bodies.len() {
         for j in i + 1..bodies.len() {
             let (a, b) = (&bodies[i], &bodies[j]);
@@ -163,12 +178,25 @@ pub fn solve_contacts(world: &mut World) {
                     - cross_sv(a.vel.angular, ra);
                 let vn = vrel.dot(c.normal);
                 let bounce = if vn < -0.5 { -RESTITUTION * vn } else { 0.0 };
+                impacts.push((ordered(a.entity, b.entity), -vn, c.point));
                 contacts.push((i, j, c, bounce, 0.0, 0.0));
             }
         }
     }
     if contacts.is_empty() {
         return;
+    }
+    if !world.has_resource::<Impacts>() {
+        world.insert_resource(Impacts::default());
+    }
+    {
+        let mut rec = world.resource_mut::<Impacts>();
+        for (pair, closing, point) in impacts {
+            let e = rec.0.entry(pair).or_insert((0.0, point));
+            if closing > e.0 {
+                *e = (closing, point);
+            }
+        }
     }
     for _ in 0..ITERATIONS {
         for contact in contacts.iter_mut() {

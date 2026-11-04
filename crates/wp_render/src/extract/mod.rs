@@ -39,6 +39,19 @@ pub enum MeshId {
         model: u32,
         part: u32,
     },
+    /// Part `part` of [`FrameView::deformed`]`[slot]` (a crash-damaged model).
+    Deformed {
+        slot: u32,
+        part: u32,
+    },
+}
+
+/// A model bent by crash damage, for one vehicle. `key` changes whenever
+/// the damage does, so the renderer uploads it once per change.
+#[derive(Clone, Debug)]
+pub struct DeformedModel {
+    pub key: u64,
+    pub parts: Vec<wp_asset::Part>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +104,8 @@ pub struct FrameView {
     pub models: Option<std::sync::Arc<wp_asset::ModelLibrary>>,
     /// Local lights; the renderer uses the nearest ones its tier allows.
     pub lights: Vec<PointLight>,
+    /// Crash-damaged models that [`MeshId::Deformed`] items refer to.
+    pub deformed: Vec<DeformedModel>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -115,6 +130,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
     let mut items = Vec::new();
     let mut shadows = Vec::new();
     let mut lights = Vec::new();
+    let mut deformed: Vec<DeformedModel> = Vec::new();
     let weather = world
         .get_resource::<wp_world::Weather>()
         .map(|w| *w)
@@ -151,6 +167,16 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
                 .as_ref()
                 .and_then(|p| models.as_ref()?.find(p))
                 .map(|(i, m)| (i, m.as_ref()));
+            let damage = world.get::<wp_vehicle::Damage>(e).map(|d| d.clone());
+            let dented = match (model, damage) {
+                (Some((index, m)), Some(d)) if !d.dents.is_empty() => {
+                    let shift = (def.cg_to_front_axle_m - def.rear_axle_from_cg()) * 0.5;
+                    let slot = deformed.len() as u32;
+                    deformed.push(vehicle::deform(e.index(), index, m, &d.dents, shift));
+                    Some(slot)
+                }
+                _ => None,
+            };
             vehicle_items(
                 &mut items,
                 &mut shadows,
@@ -160,6 +186,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
                 paint,
                 braking,
                 model,
+                dented,
                 headlights.then_some(&mut lights),
             );
         });
@@ -249,6 +276,7 @@ pub fn extract_with(world: &World, mode: CameraMode, chase_heading: Option<f32>)
         wetness: weather.wetness,
         models,
         lights,
+        deformed,
     }
 }
 

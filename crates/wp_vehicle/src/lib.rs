@@ -23,7 +23,9 @@ use wp_ecs::{Component, Entity, Stage, World};
 use wp_physics::{Gravity, Pose, RigidBody, Velocity};
 
 pub use assist::{Controls, DriverAids, steer_limit};
-pub use collision::{Contacts, Footprint, detect_collisions, vehicle_footprint};
+pub use collision::{
+    Contacts, Damage, Dent, Footprint, dent_depth_m, detect_collisions, vehicle_footprint,
+};
 pub use def::{AirBrakeDef, BodyDef, BodyStyle, Drive, HitchDef, SuspensionDef, VehicleDef};
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
@@ -241,6 +243,9 @@ pub enum VehicleEvent {
     Collision {
         entity: String,
         other: String,
+        /// Closing speed at the contact point, km/h.
+        #[serde(default)]
+        impact_kmh: f32,
     },
     /// This vehicle entered a junction while its light was red.
     RanRedLight {
@@ -323,6 +328,7 @@ impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
         app.world.register::<Vehicle>();
         app.world.register::<VehicleInput>();
+        app.world.register::<Damage>();
         if !app.world.has_resource::<VehicleLibrary>() {
             app.world.insert_resource(VehicleLibrary::default());
         }
@@ -435,6 +441,8 @@ pub struct Telemetry {
     pub tc_active: bool,
     /// Stability control is braking a wheel.
     pub esc_active: bool,
+    /// Crash damage: 100 = as new, 0 = written off.
+    pub health_pct: f32,
     /// Reverse gear engaged.
     pub reverse: bool,
     /// Air reservoir pressure, bar (air brakes only).
@@ -480,6 +488,7 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         abs_active: veh.abs_active,
         tc_active: veh.tc_active,
         esc_active: veh.esc_active,
+        health_pct: world.get::<Damage>(e).map_or(100.0, |d| d.health_pct),
         reverse: veh.reverse,
         air_reservoir_bar: veh.air.map(|a| a.reservoir_bar),
         wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),

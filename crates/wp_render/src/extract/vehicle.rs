@@ -48,6 +48,7 @@ pub(super) fn vehicle_items(
     paint: Vec3,
     braking: bool,
     model: Option<(u32, &wp_asset::Model)>,
+    dented: Option<u32>,
     lights: Option<&mut Vec<PointLight>>,
 ) {
     let night = lights.is_some();
@@ -123,9 +124,15 @@ pub(super) fn vehicle_items(
                 _ => (Vec3::from(m.base_color), m.emissive),
             };
             items.push(DrawItem {
-                mesh: MeshId::Model {
-                    model: index,
-                    part: k as u32,
+                mesh: match dented {
+                    Some(slot) => MeshId::Deformed {
+                        slot,
+                        part: k as u32,
+                    },
+                    None => MeshId::Model {
+                        model: index,
+                        part: k as u32,
+                    },
                 },
                 transform: at,
                 color,
@@ -359,4 +366,81 @@ pub(super) fn vehicle_items(
         strength: 0.88,
         softness: 0.35,
     });
+}
+
+/// Bend a model around crash dents. Dents are in the vehicle's pose frame;
+/// `shift` is how far the model's origin (axle midpoint) is ahead of it.
+/// Each dent pushes the body in, away from the face it hit, with a smooth
+/// falloff that widens with depth; normals are rebuilt so the crumple shows.
+pub(super) fn deform(
+    entity: u32,
+    model_index: u32,
+    model: &wp_asset::Model,
+    dents: &[wp_vehicle::Dent],
+    shift: f32,
+) -> DeformedModel {
+    let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |x: u32| {
+        key ^= x as u64;
+        key = key.wrapping_mul(0x0100_0000_01b3);
+    };
+    mix(entity);
+    mix(model_index);
+    let cx = (model.min.x + model.max.x) * 0.5;
+    let half_len = ((model.max.x - model.min.x) * 0.5).max(0.1);
+    let half_w = ((model.max.y - model.min.y) * 0.5).max(0.1);
+    let pushes: Vec<(Vec2, Vec2, f32, f32)> = dents
+        .iter()
+        .map(|d| {
+            mix(d.x.to_bits());
+            mix(d.y.to_bits());
+            mix(d.depth_m.to_bits());
+            let at = Vec2::new(d.x - shift, d.y);
+            // Hit on a side or an end?
+            let inward = if (at.y / half_w).abs() > ((at.x - cx) / half_len).abs() {
+                Vec2::new(0.0, -at.y.signum())
+            } else {
+                Vec2::new(-(at.x - cx).signum(), 0.0)
+            };
+            (at, inward, d.depth_m, 0.45 + d.depth_m * 1.8)
+        })
+        .collect();
+    let parts = model
+        .parts
+        .iter()
+        .map(|p| {
+            let mut part = p.clone();
+            for v in &mut part.positions {
+                let mut xy = Vec2::new(v[0], v[1]);
+                let start = xy;
+                for (at, inward, depth, radius) in &pushes {
+                    let d = (start - *at).length();
+                    if d < *radius {
+                        let k = 1.0 - (d / radius) * (d / radius);
+                        xy += *inward * depth * k * k;
+                    }
+                }
+                v[0] = xy.x;
+                v[1] = xy.y;
+            }
+            rebuild_normals(&mut part);
+            part
+        })
+        .collect();
+    DeformedModel { key, parts }
+}
+
+/// Flat normals for unshared triangles, area-weighted ones for shared vertices.
+fn rebuild_normals(part: &mut wp_asset::Part) {
+    let p = |i: u32| Vec3::from(part.positions[i as usize]);
+    let mut normals = vec![Vec3::ZERO; part.positions.len()];
+    for t in part.indices.chunks(3) {
+        let face = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
+        for &i in t {
+            normals[i as usize] += face;
+        }
+    }
+    for (out, n) in part.normals.iter_mut().zip(normals) {
+        *out = n.normalize_or(Vec3::from(*out)).to_array();
+    }
 }

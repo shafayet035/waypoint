@@ -13,8 +13,8 @@ pub mod extract;
 pub mod mesh;
 
 pub use extract::{
-    BlobShadow, Camera, CameraMode, ChaseSmoothing, DrawItem, Environment, FrameView, MeshId,
-    PointLight, extract, extract_with,
+    BlobShadow, Camera, CameraMode, ChaseSmoothing, DeformedModel, DrawItem, Environment,
+    FrameView, MeshId, PointLight, extract, extract_with,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -193,6 +193,9 @@ pub struct Renderer {
     /// them in the background; `None` keeps the whole map resident.
     stream_range: Option<f32>,
     models: Option<ModelCache>,
+    /// GPU meshes of crash-damaged models by key, and this frame's slots.
+    deformed: std::collections::BTreeMap<u64, Vec<GpuMesh>>,
+    deformed_slots: Vec<u64>,
     stats: RenderStats,
     msaa: wgpu::TextureView,
     depth: wgpu::TextureView,
@@ -440,6 +443,8 @@ impl Renderer {
             road_instance_capacity,
             stream_range: None,
             models: None,
+            deformed: Default::default(),
+            deformed_slots: Vec::new(),
             stats: RenderStats::default(),
             msaa,
             depth,
@@ -707,6 +712,7 @@ impl Renderer {
             material: [d.roughness, d.metallic, d.emissive, 0.0],
         };
         self.update_models(gpu, frame);
+        self.update_deformed(gpu, frame);
         let mut groups: std::collections::BTreeMap<MeshId, Vec<InstanceRaw>> =
             std::collections::BTreeMap::new();
         for d in &frame.items {
@@ -898,7 +904,41 @@ impl Renderer {
                 .meshes
                 .get(model as usize)?
                 .get(part as usize),
+            MeshId::Deformed { slot, part } => self
+                .deformed
+                .get(self.deformed_slots.get(slot as usize)?)?
+                .get(part as usize),
         }
+    }
+
+    /// Upload crash-damaged models that changed; forget ones no longer drawn.
+    fn update_deformed(&mut self, gpu: &Gpu, frame: &FrameView) {
+        self.deformed_slots = frame.deformed.iter().map(|d| d.key).collect();
+        for d in &frame.deformed {
+            self.deformed.entry(d.key).or_insert_with(|| {
+                d.parts
+                    .iter()
+                    .map(|p| {
+                        let data = mesh::MeshData {
+                            vertices: p
+                                .positions
+                                .iter()
+                                .zip(&p.normals)
+                                .map(|(pos, n)| mesh::Vertex {
+                                    position: *pos,
+                                    normal: *n,
+                                    tint: 0.0,
+                                })
+                                .collect(),
+                            indices: p.indices.clone(),
+                        };
+                        GpuMesh::new(gpu, &data, "damaged model")
+                    })
+                    .collect()
+            });
+        }
+        let keep: std::collections::BTreeSet<u64> = self.deformed_slots.iter().copied().collect();
+        self.deformed.retain(|k, _| keep.contains(k));
     }
 
     /// Upload the frame's model library if it changed.
