@@ -17,6 +17,7 @@ fn model_json(path: &str, m: &Model, project: Option<&Project>) -> serde_json::V
     json!({
         "path": path,
         "triangles": m.triangles,
+        "lod_triangles": m.lods.iter().map(|l| l.iter().map(|p| p.indices.len() / 3).sum::<usize>()).collect::<Vec<_>>(),
         "size_m": m.size().to_array(),
         "min": m.min.to_array(),
         "max": m.max.to_array(),
@@ -63,6 +64,17 @@ pub fn asset_info(ctx: &Ctx, file: &str) -> CmdResult {
         "{rel}: {} triangles, {:.2} × {:.2} × {:.2} m (length × width × height), lowest point {:.2} m",
         model.triangles, s.x, s.y, s.z, model.min.z
     );
+    let lods: Vec<String> = model
+        .lods
+        .iter()
+        .map(|l| {
+            l.iter()
+                .map(|p| p.indices.len() / 3)
+                .sum::<usize>()
+                .to_string()
+        })
+        .collect();
+    println!("  distance levels: {} triangles", lods.join(", "));
     if model.textures > 0 {
         println!(
             "  {} textures (not drawn yet; materials use their colour factors)",
@@ -159,4 +171,73 @@ pub fn credits(ctx: &Ctx) -> CmdResult {
         }
     }
     Ok(0)
+}
+
+/// `wp asset build`: check every model and report its levels of detail
+/// against each quality tier's triangle budget. Exit 1 on any error.
+pub fn asset_build(ctx: &Ctx) -> CmdResult {
+    let (project, diags) = Project::load(&ctx.project);
+    let Some(project) = project else {
+        return Err(diags.0);
+    };
+    let asset_diags: Vec<_> = diags
+        .iter()
+        .filter(|d| d.code.starts_with("WP-F"))
+        .cloned()
+        .collect();
+    let tiers = ["low", "mid", "flagship"];
+    let rows: Vec<_> = project
+        .models
+        .iter()
+        .map(|(path, m)| {
+            let levels: Vec<usize> = std::iter::once(m.triangles as usize)
+                .chain(m.lods.iter().map(|l| l.iter().map(|p| p.indices.len() / 3).sum()))
+                .collect();
+            let fits: Vec<bool> = waypoint::asset::PLAYER_TRIANGLES
+                .iter()
+                .map(|b| m.triangles <= *b)
+                .collect();
+            json!({ "path": path, "levels": levels, "fits_player_budget": tiers.iter().zip(&fits).map(|(t, f)| (t.to_string(), json!(f))).collect::<serde_json::Map<_, _>>() })
+        })
+        .collect();
+    let errors = asset_diags
+        .iter()
+        .any(|d| d.severity == waypoint::core::Severity::Error);
+    if ctx.json {
+        print_json(&json!({ "ok": !errors, "assets": rows, "diagnostics": asset_diags }));
+    } else {
+        for d in &asset_diags {
+            print!("{}", d.render());
+        }
+        println!(
+            "{:<40} {:>8} {:>8} {:>8}   budget (low/mid/flagship)",
+            "model", "full", "lod 1", "lod 2"
+        );
+        for r in &rows {
+            let l: Vec<u64> = r["levels"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+                .unwrap_or_default();
+            let at = |i: usize| l.get(i).copied().unwrap_or(0);
+            let fit = |t: &str| {
+                if r["fits_player_budget"][t] == true {
+                    "ok"
+                } else {
+                    "OVER"
+                }
+            };
+            println!(
+                "{:<40} {:>8} {:>8} {:>8}   {}/{}/{}",
+                r["path"].as_str().unwrap_or(""),
+                at(0),
+                at(1),
+                at(2),
+                fit("low"),
+                fit("mid"),
+                fit("flagship")
+            );
+        }
+        println!("levels are built when the game loads; textures and KTX2 packing come later");
+    }
+    Ok(if errors { 1 } else { 0 })
 }

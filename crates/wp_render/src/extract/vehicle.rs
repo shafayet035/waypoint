@@ -132,6 +132,7 @@ pub(super) fn vehicle_items(
                     None => MeshId::Model {
                         model: index,
                         part: k as u32,
+                        lod: 0,
                     },
                 },
                 transform: at,

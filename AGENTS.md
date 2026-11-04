@@ -163,7 +163,10 @@ Own/Cc0/CcBy3/CcBy4/Purchased, credit). A vehicle's `model: Some("assets/vehicle
 (origin on the ground midway between the axles; wheels stay procedural; materials named paint…/glass…/
 brake…/head… get roles). `wp check`: WP-F001–F010 (licence, size, origin, tier triangle budgets).
 `wp asset info|list`, `wp credits`, `wp docs assets`. The sandbox's hatchback and city bus models come from
-`tools/models/vehicles.py` (our own, CC0). Textures are not drawn yet; `wp asset build` (LODs, KTX2) is M4.
+`tools/models/vehicles.py` (our own, CC0). Levels of detail: models load with two simpler copies (vertex
+clustering to ~50 % and ~25 % of the triangles, `wp_asset::simplify`); the renderer picks one per item from
+size ÷ distance × the tier's `lod_bias` (Low 0.6, Mid 1, Flagship 1.6). `wp asset build` checks every model
+and reports its levels against the tier budgets. Textures are not drawn yet; KTX2 packing is later.
 Streaming: road meshes are cut into 400 m tiles (`wp_road::build_tiles`, positions relative to each tile).
 Windows build them on a worker thread and keep only tiles within the tier's view distance (700/1000/1500 m)
 on the GPU, uploading 4 per frame nearest first; tiles outside the view are culled. Everything is drawn

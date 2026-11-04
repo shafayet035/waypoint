@@ -34,10 +34,12 @@ use wp_world::Player;
 pub enum MeshId {
     Cube,
     Wheel,
-    /// Part `part` of model `model` in [`FrameView::models`].
+    /// Part `part` of model `model` in [`FrameView::models`], at level of
+    /// detail `lod` (0 = full; the renderer picks it from screen size).
     Model {
         model: u32,
         part: u32,
+        lod: u8,
     },
     /// Part `part` of [`FrameView::deformed`]`[slot]` (a crash-damaged model).
     Deformed {

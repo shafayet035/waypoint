@@ -12,7 +12,7 @@ mod project;
 mod replay;
 mod test;
 
-pub use asset::{asset_info, asset_list, credits};
+pub use asset::{asset_build, asset_info, asset_list, credits};
 pub use docs::docs;
 pub(crate) use drive::make_session;
 pub use drive::{AudioArgs, DriveArgs, RunArgs, ServeArgs, ShotArgs, audio, run, serve, shot};

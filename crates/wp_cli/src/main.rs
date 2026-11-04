@@ -114,6 +114,8 @@ enum AssetCmd {
     Info { file: String },
     /// Every model in the project with its licence and the vehicles using it.
     List,
+    /// Check every model and report its levels of detail against the tier budgets.
+    Build,
 }
 
 #[derive(Subcommand)]
@@ -177,6 +179,7 @@ fn main() {
         Cmd::Check => commands::check(&ctx),
         Cmd::Asset(AssetCmd::Info { file }) => commands::asset_info(&ctx, &file),
         Cmd::Asset(AssetCmd::List) => commands::asset_list(&ctx),
+        Cmd::Asset(AssetCmd::Build) => commands::asset_build(&ctx),
         Cmd::Credits => commands::credits(&ctx),
         Cmd::Mod(ModCmd::List) => commands::mod_list(&ctx),
         Cmd::Mod(ModCmd::New { name }) => commands::mod_new(&ctx, &name),

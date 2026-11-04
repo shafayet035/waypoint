@@ -302,3 +302,38 @@ fn cab_view_looks_around() {
     let frame = extract(&app.world, CameraMode::Cab);
     assert!(frame.items.len() > 20, "the cab adds a dashboard and wheel");
 }
+
+/// Distant models draw a simpler level of detail.
+#[test]
+fn distant_models_use_fewer_triangles() {
+    let gpu = match wp_rhi::Gpu::headless() {
+        Ok(g) => g,
+        Err(d) => {
+            eprintln!("skipping render test: {}", d.render());
+            return;
+        }
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sandbox");
+    let path = "assets/vehicles/hatchback.glb";
+    let model = wp_asset::load_model(&root, path).unwrap();
+    assert_eq!(model.lods.len(), 2);
+    let mut app = world_with_car();
+    app.world
+        .insert_resource(wp_asset::Models(std::sync::Arc::new(
+            wp_asset::ModelLibrary::new([(path.to_string(), std::sync::Arc::new(model))]),
+        )));
+    let near = extract(&app.world, CameraMode::Showcase);
+    let mut far = near.clone();
+    let back = (far.camera.eye - far.camera.target).normalize() * 150.0;
+    far.camera.eye += back;
+    let (w, h) = (320, 180);
+    let target = wp_rhi::OffscreenTarget::new(&gpu, w, h);
+    let triangles = |f: &wp_render::FrameView| {
+        let mut r = wp_render::Renderer::new(&gpu, wp_rhi::OFFSCREEN_FORMAT, w, h);
+        r.set_shadows(&gpu, None);
+        r.render(&gpu, f, &target.view);
+        r.stats().triangles
+    };
+    let (n, f) = (triangles(&near), triangles(&far));
+    assert!(f < n, "far {f} vs near {n} triangles");
+}

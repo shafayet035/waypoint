@@ -115,7 +115,10 @@ const TILE_UPLOADS_PER_FRAME: usize = 4;
 /// GPU meshes for a model library: one per part of each model.
 struct ModelCache {
     library: usize,
-    meshes: Vec<Vec<GpuMesh>>,
+    /// By model, then level of detail, then part.
+    meshes: Vec<Vec<Vec<GpuMesh>>>,
+    /// Each model's size (bounding-box diagonal), m, for picking a level.
+    sizes: Vec<f32>,
 }
 
 /// Materials of the road layers, in `wp_road::RoadMeshes` order (colours
@@ -180,6 +183,8 @@ pub struct Renderer {
     shadow: Option<ShadowSettings>,
     /// Nearest local lights used per frame (quality tier).
     max_lights: usize,
+    /// Above 1 keeps full detail further away; below 1 simplifies sooner.
+    lod_bias: f32,
     sky: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
@@ -434,6 +439,7 @@ impl Renderer {
             shadow_view,
             shadow,
             max_lights: 32,
+            lod_bias: 1.0,
             sky,
             ground,
             meshes_pipeline,
@@ -463,6 +469,11 @@ impl Renderer {
     pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
         self.max_height = max_height;
         self.apply_size(gpu);
+    }
+
+    /// How far models keep their detail (quality tier): 1 is the default.
+    pub fn set_lod_bias(&mut self, bias: f32) {
+        self.lod_bias = bias.max(0.05);
     }
 
     /// Use at most `n` local lights per frame, nearest first (quality tier).
@@ -732,8 +743,9 @@ impl Renderer {
         let mut groups: std::collections::BTreeMap<MeshId, Vec<InstanceRaw>> =
             std::collections::BTreeMap::new();
         for d in &frame.items {
-            if self.mesh(d.mesh).is_some() {
-                groups.entry(d.mesh).or_default().push(raw(d));
+            let id = self.level_of_detail(d, eye);
+            if self.mesh(id).is_some() {
+                groups.entry(id).or_default().push(raw(d));
             }
         }
         let total: usize = groups.values().map(Vec::len).sum();
@@ -914,17 +926,42 @@ impl Renderer {
         match id {
             MeshId::Cube => Some(&self.cube),
             MeshId::Wheel => Some(&self.wheel),
-            MeshId::Model { model, part } => self
+            MeshId::Model { model, part, lod } => self
                 .models
                 .as_ref()?
                 .meshes
                 .get(model as usize)?
+                .get(lod as usize)?
                 .get(part as usize),
             MeshId::Deformed { slot, part } => self
                 .deformed
                 .get(self.deformed_slots.get(slot as usize)?)?
                 .get(part as usize),
         }
+    }
+
+    /// Draw distant models simpler: the level follows how big the model looks
+    /// (its size over its distance), scaled by the tier's bias.
+    fn level_of_detail(&self, d: &DrawItem, eye: glam::Vec3) -> MeshId {
+        let MeshId::Model { model, part, .. } = d.mesh else {
+            return d.mesh;
+        };
+        let Some(cache) = &self.models else {
+            return d.mesh;
+        };
+        let size = cache.sizes.get(model as usize).copied().unwrap_or(1.0);
+        let levels = cache.meshes.get(model as usize).map_or(1, Vec::len);
+        let distance = (d.transform.w_axis.truncate() - eye).length().max(0.1);
+        let apparent = size / distance * self.lod_bias;
+        let lod = if apparent > 0.1 {
+            0
+        } else if apparent > 0.04 {
+            1
+        } else {
+            2
+        }
+        .min(levels.saturating_sub(1)) as u8;
+        MeshId::Model { model, part, lod }
     }
 
     /// Upload crash-damaged models that changed; forget ones no longer drawn.
@@ -967,34 +1004,41 @@ impl Renderer {
         if self.models.as_ref().is_some_and(|c| c.library == id) {
             return;
         }
+        let upload = |path: &str, parts: &[wp_asset::Part]| -> Vec<GpuMesh> {
+            parts
+                .iter()
+                .map(|p| {
+                    let data = mesh::MeshData {
+                        vertices: p
+                            .positions
+                            .iter()
+                            .zip(&p.normals)
+                            .map(|(pos, n)| mesh::Vertex {
+                                position: *pos,
+                                normal: *n,
+                                tint: 0.0,
+                            })
+                            .collect(),
+                        indices: p.indices.clone(),
+                    };
+                    GpuMesh::new(gpu, &data, path)
+                })
+                .collect()
+        };
         let meshes = lib
             .iter()
             .map(|(path, model)| {
-                model
-                    .parts
-                    .iter()
-                    .map(|p| {
-                        let data = mesh::MeshData {
-                            vertices: p
-                                .positions
-                                .iter()
-                                .zip(&p.normals)
-                                .map(|(pos, n)| mesh::Vertex {
-                                    position: *pos,
-                                    normal: *n,
-                                    tint: 0.0,
-                                })
-                                .collect(),
-                            indices: p.indices.clone(),
-                        };
-                        GpuMesh::new(gpu, &data, path)
-                    })
+                std::iter::once(&model.parts)
+                    .chain(&model.lods)
+                    .map(|parts| upload(path, parts))
                     .collect()
             })
             .collect();
+        let sizes = lib.iter().map(|(_, m)| m.size().length()).collect();
         self.models = Some(ModelCache {
             library: id,
             meshes,
+            sizes,
         });
     }
 

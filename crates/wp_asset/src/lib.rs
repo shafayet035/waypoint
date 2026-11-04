@@ -10,9 +10,11 @@
 //! [`Role`]: `paint…` takes the vehicle's colour, `brake…`/`tail…` light up
 //! when braking, `head…` are headlamps, `glass…` is glass.
 
+mod lod;
 mod meta;
 mod model;
 
+pub use lod::{LOD_RATIOS, simplify};
 pub use meta::{AssetMeta, Licence, meta_path};
 pub use model::{Material, Model, Part, Role, load_model, parse_model};
 

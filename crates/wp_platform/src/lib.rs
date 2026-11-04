@@ -276,6 +276,7 @@ impl Handler {
             let (size, extent_m) = q.shadow_map();
             renderer.set_shadows(&gpu, Some(wp_render::ShadowSettings { size, extent_m }));
             renderer.set_max_lights(q.max_lights());
+            renderer.set_lod_bias(q.lod_bias());
         }
         Ok(Gfx {
             window,

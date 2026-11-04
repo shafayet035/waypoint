@@ -88,6 +88,14 @@ impl QualityTier {
             Self::Flagship => 900,
         }
     }
+    /// How far models keep full detail (multiplies the level-of-detail distances).
+    pub fn lod_bias(self) -> f32 {
+        match self {
+            Self::Low => 0.6,
+            Self::Mid => 1.0,
+            Self::Flagship => 1.6,
+        }
+    }
     /// Local lights (headlamps, street lamps) shaded per frame, nearest first.
     pub fn max_lights(self) -> usize {
         match self {

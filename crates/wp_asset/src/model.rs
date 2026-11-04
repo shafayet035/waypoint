@@ -78,6 +78,9 @@ pub struct Part {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub parts: Vec<Part>,
+    /// Simpler copies for distance (see [`crate::LOD_RATIOS`]), each with
+    /// the same parts in the same order.
+    pub lods: Vec<Vec<Part>>,
     pub min: Vec3,
     pub max: Vec3,
     pub triangles: u32,
@@ -178,7 +181,12 @@ pub fn parse_model(bytes: &[u8], rel: &str, dir: Option<&Path>) -> Result<Model,
         max = Vec3::ZERO;
     }
     let triangles = parts.iter().map(|p| p.indices.len() as u32 / 3).sum();
+    let lods = crate::LOD_RATIOS
+        .iter()
+        .map(|r| parts.iter().map(|p| crate::simplify(p, *r)).collect())
+        .collect();
     Ok(Model {
+        lods,
         parts,
         min,
         max,
