@@ -1,0 +1,32 @@
+// Tilt steering at its limits: flicking the phone 40° each way at 100 km/h
+// (past full steering) must not spin the car, as with the keyboard
+// (`keyboard_slalom`): the driver aids cap the lock to what the tyres can use.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "start",
+    initial_kmh: 100.0,
+    driver: Tilt([
+      (at_s: 0.0, turn_deg: 0.0, throttle: 0.5),
+      (at_s: 1.0, turn_deg: 0.0, throttle: 0.5),
+      (at_s: 1.2, turn_deg: 40.0, throttle: 0.5),
+      (at_s: 2.2, turn_deg: 40.0, throttle: 0.5),
+      (at_s: 2.4, turn_deg: -40.0, throttle: 0.5),
+      (at_s: 3.4, turn_deg: -40.0, throttle: 0.5),
+      (at_s: 3.6, turn_deg: 40.0, throttle: 0.5),
+      (at_s: 4.6, turn_deg: 40.0, throttle: 0.5),
+      (at_s: 4.8, turn_deg: -40.0, throttle: 0.5),
+      (at_s: 5.8, turn_deg: -40.0, throttle: 0.5),
+      (at_s: 6.0, turn_deg: 0.0, throttle: 0.5),
+    ]),
+  ),
+  duration_s: 9.0,
+  assert: [
+    MaxSideslipDeg(9.0),
+    NoEvent("WheelLift"),
+    NoNaN,
+    Deterministic,
+  ],
+)

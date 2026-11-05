@@ -13,6 +13,7 @@ pub mod def;
 pub mod dynamics;
 pub mod parts;
 pub mod replay;
+pub mod tilt;
 pub mod trailer;
 
 use glam::Vec2;
@@ -31,6 +32,7 @@ pub use def::{
 };
 pub use dynamics::vehicle_dynamics;
 pub use parts::AirState;
+pub use tilt::{TiltSettings, TiltSteering};
 pub use trailer::{
     Trailer, TrailerDef, TrailerLibrary, TrailerPlugin, spawn_trailer, trailer_dynamics,
 };
@@ -262,10 +264,12 @@ pub enum VehicleEvent {
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 11] = [
+    pub const KINDS: [&'static str; 13] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
+        "EscEngaged",
+        "EscReleased",
         "WheelLift",
         "WheelLanded",
         "LowAirPressure",

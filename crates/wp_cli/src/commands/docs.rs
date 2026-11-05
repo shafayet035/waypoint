@@ -17,6 +17,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp run --quality low         quality tier: low|mid|flagship|auto (default game.toml [quality] tier)
   wp run --thermal serious     pretend the device is hot: the governor lowers resolution, effects, then frame rate
                                (it also does this by itself when frames run late; --no-governor turns it off)
+  wp run --tilt-deg 15         tilt steering with a pretend sensor (straight for 1 s, then turned 15° left);
+                               --steering tilt uses the device's motion sensor (phones; falls back to touch)
   wp bench                     measure this device (renderer benchmark + memory) and print the tier it gets
                                art style: game.toml [look] style = \"realistic\"|\"toon\"|\"flat\", plus colour
                                overrides (sky_top, ground, asphalt... as [r, g, b] 0–255); see `wp schema game`
@@ -74,6 +76,8 @@ Scenario files: tests/<name>.scenario.ron  (full schema: wp schema scenario)
 Drivers
   Script([(at_s: 0.0, throttle: 1.0), (at_s: 9.0, brake: 1.0, steer: 0.0)])   keys hold until the next
   Keyboard([(at_s: 1.0, steer: 1.0), (at_s: 2.0, brake: 1.0)])   key presses through the player's driver aids
+  Tilt([(at_s: 1.0, turn_deg: 0.0, throttle: 0.4), (at_s: 1.5, turn_deg: 7.0)])  phone turned like a wheel
+                                (eased between keys) through the app's tilt steering and driver aids
   Autopilot                     the traffic AI drives the scenario's `mission` (set mission: Some(\"route_1\"))
   Cruise(kmh: 40.0, steer: 0.25)                                              speed controller + fixed steer
   FollowRoute(to_road: \"east_curve\", kmh: 50.0)  plans a lane route on the scene's road network and drives it

@@ -3,7 +3,7 @@
 //! The player keeps it in its data folder (one per game). Today it holds the
 //! quality tier: measured once with the renderer benchmark on first launch
 //! (`wp_render::bench`), then reused. Edit `tier` to override it; delete the
-//! file to measure again.
+//! file to measure again. It also keeps how the player steers (touch or tilt).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,49 @@ use wp_world::QualityTier;
 pub struct Settings {
     #[serde(default)]
     pub quality: Option<DeviceQuality>,
+    #[serde(default)]
+    pub controls: Option<ControlSettings>,
+}
+
+/// How the player drives on this device.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ControlSettings {
+    pub steering: Steering,
+}
+
+/// What steers on a touch screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Steering {
+    /// The left thumb drags sideways; the right thumb works the pedals.
+    #[default]
+    Touch,
+    /// Turn the phone like a wheel; left thumb brakes, right thumb accelerates.
+    Tilt,
+}
+
+impl Steering {
+    pub fn parse(s: &str) -> Option<Steering> {
+        match s {
+            "touch" => Some(Self::Touch),
+            "tilt" => Some(Self::Tilt),
+            _ => None,
+        }
+    }
+
+    pub fn other(self) -> Steering {
+        match self {
+            Self::Touch => Self::Tilt,
+            Self::Tilt => Self::Touch,
+        }
+    }
+}
+
+/// Remember `steering` in the settings at `path`, keeping everything else.
+pub fn save_steering(path: &Path, steering: Steering) -> Result<(), String> {
+    let mut s = load(path)?;
+    s.controls = Some(ControlSettings { steering });
+    save(path, &s)
 }
 
 /// The tier this device plays at, and why.
@@ -35,7 +78,8 @@ pub struct DeviceQuality {
 }
 
 const HEADER: &str = "# Waypoint device settings. `tier` was measured on first launch;\n\
-# change it to low, mid or flagship to override, or delete this file to measure again.\n\n";
+# change it to low, mid or flagship to override, or delete this file to measure again.\n\
+# `steering` is touch or tilt (tap the top right corner while driving to switch).\n\n";
 
 /// Read `path`; a missing file is empty settings.
 pub fn load(path: &Path) -> Result<Settings, String> {
@@ -195,6 +239,7 @@ mod tests {
                 bench_ms: Some(14.5),
                 memory_gb: Some(3.7),
             }),
+            controls: None,
         };
         save(&path, &s).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
@@ -204,6 +249,16 @@ mod tests {
         let (tier, how) = device_tier(Some(&path), QualityTier::Flagship);
         assert_eq!(tier, QualityTier::Low);
         assert!(matches!(how, TierChoice::Saved(_)));
+        // Switching steering keeps the tier.
+        save_steering(&path, Steering::Tilt).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.quality, s.quality);
+        assert_eq!(back.controls.unwrap().steering, Steering::Tilt);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("steering = \"tilt\"")
+        );
         // A hand-edited file with only a tier works too.
         std::fs::write(&path, "[quality]\ntier = \"flagship\"\n").unwrap();
         assert_eq!(

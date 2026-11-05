@@ -6,6 +6,9 @@ reads the device's tier from `<data_dir>/<game>/settings.toml`, or measures it (
 second on first launch) and saves it there; the log says which (`quality flagship (benchmark 3.0 ms ...)`).
 The window runs the render governor (lower resolution, effects, then 30 fps when frames run late or the
 OS reports heat); step changes are logged (`render step 3 (Serious heat ...)`).
+settings.toml also keeps `[controls] steering` (touch or tilt); tapping the top right corner while driving
+switches and saves it. Tilt reads the motion sensor (`wp_platform::motion`: Android NDK gravity sensor on its
+own thread, iOS CoreMotion gravity), stopped while the app is in the background.
 Data folders: Android app storage; iOS/macOS `~/Library/Application Support/Waypoint`; Linux XDG data home.
 
 - Desktop/iOS: the `waypoint-player` binary (`main.rs`). Project lookup: a folder argument,

@@ -282,4 +282,13 @@ up by probing after 20 s calm (a probe that slips within 5 s is undone and the w
 change. Heat floors: Fair 1, Serious 3, Critical 5. The simulation is never touched (same ticks at any step). `Renderer::
 set_render_scale`/`apply_step`; `wp run --thermal serious|critical` simulates heat, `--no-governor` turns it off; the window
 summary reports the final step. Critical on the M4: ~29 fps drawn, ticks unchanged.
+Tilt steering (`wp_vehicle::tilt`, pure): the phone is the wheel. "Up" from the motion sensor (device frame) → the angle
+of turn about the screen's normal, so how far the phone leans back does not matter; the screen's top edge is the device
+axis nearest up (kept until 70° past it), so either landscape works without asking the OS; straight ahead is how the phone
+was held when tilt started or after a reset; 1.5° dead zone, full steering at 25°, curve ^1.5 (calm on motorways), fades to
+centre as the phone nears flat. It feeds `DriverAids` as an analogue stick. `wp_platform::motion` reads the sensor (Android
+NDK gravity/accelerometer on a looper thread; iOS CoreMotion gravity); touch layout with tilt: left half brakes, right half
+accelerates; top right corner switches touch/tilt and saves it in settings.toml (`[controls] steering`). `wp run --steering
+tilt`, `--tilt-deg <deg>` (fake sensor). Scenario driver `Tilt([(at_s, turn_deg, throttle, brake)])`; gates
+`tilt_lane_change` (7° at 80 km/h: one lane, 0.25 g, no ESC) and `tilt_slalom` (±40° at 100 km/h: no spin).
 Not yet: testing on physical phones; running on an iOS simulator.

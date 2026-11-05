@@ -10,6 +10,6 @@ pub mod drivers;
 mod runner;
 pub mod shot;
 
-pub use def::{Assertion, Driver, InputKey, PlayerDef, ScenarioDef};
+pub use def::{Assertion, Driver, InputKey, PlayerDef, ScenarioDef, TiltKey};
 pub use runner::{AssertionResult, Metrics, ScenarioInput, ScenarioReport, prepare, run_scenario};
 pub use shot::{ShotCamera, ShotDef, Tolerance};

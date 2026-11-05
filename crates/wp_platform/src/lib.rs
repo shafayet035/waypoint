@@ -5,10 +5,14 @@
 //! Controls: W/↑ throttle, S/↓ brake (hold at a standstill to reverse), A/← and D/→ steer, C camera,
 //! Q/E or a mouse drag to look around in the cab,
 //! R reset, P pause, Esc quit. On touch screens: left thumb drags to steer,
-//! right thumb high for throttle, low for brake, tap the top edge for camera. A control client (`wp run --control <port>`)
-//! can query and drive the same session while it runs.
+//! right thumb high for throttle, low for brake, tap the top edge for camera.
+//! With tilt steering (`WindowOptions::steering`) the phone is the wheel: left
+//! thumb brakes, right thumb accelerates. Tapping the top right corner switches
+//! between the two (and remembers it in settings.toml). A control client
+//! (`wp run --control <port>`) can query and drive the same session while it runs.
 
 pub mod audio;
+pub mod motion;
 pub mod settings;
 pub mod thermal;
 use serde::Serialize;
@@ -27,7 +31,7 @@ use wp_ecs::Entity;
 use wp_physics::Pose;
 use wp_render::{CameraMode, ChaseSmoothing, Renderer, ViewOptions, extract_view};
 use wp_rhi::{Gpu, GpuInfo, wgpu};
-use wp_vehicle::{Controls, DriverAids, Vehicle, VehicleInput, VehicleLibrary};
+use wp_vehicle::{Controls, DriverAids, TiltSteering, Vehicle, VehicleInput, VehicleLibrary};
 
 pub struct WindowOptions {
     pub title: String,
@@ -47,6 +51,14 @@ pub struct WindowOptions {
     pub governor: bool,
     /// Pretend the device is this hot (testing the governor); `None` asks the OS.
     pub thermal: Option<thermal::Thermal>,
+    /// Touch-screen steering: thumb or tilt. Tilt falls back to touch on
+    /// devices without a motion sensor (unless `fake_tilt_deg` is set).
+    pub steering: settings::Steering,
+    /// Pretend the phone is held straight for a second, then turned this far,
+    /// degrees, left positive (testing tilt on desktops).
+    pub fake_tilt_deg: Option<f32>,
+    /// Where to remember the player's steering choice (settings.toml).
+    pub settings: Option<std::path::PathBuf>,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -63,6 +75,8 @@ pub struct WindowSummary {
     pub render: Option<wp_render::RenderStats>,
     /// Where the governor ended up, if it ran.
     pub governor: Option<GovernorSummary>,
+    /// How the player was steering at the end.
+    pub steering: settings::Steering,
     /// The session's recording, if it was recording when the window closed.
     #[serde(skip)]
     pub replay: Option<wp_vehicle::replay::Replay>,
@@ -128,6 +142,7 @@ fn run_with_event_loop(
     let reset = session.player.and_then(|p| snapshot(&session, p));
     let mut handler = Handler {
         control: opts.control.take(),
+        steering: opts.steering,
         camera: opts.camera,
         session,
         requests: 0,
@@ -138,6 +153,8 @@ fn run_with_event_loop(
         error: None,
         keys: Keys::default(),
         touch: Touches::default(),
+        motion: None,
+        tilt: TiltSteering::default(),
         input: VehicleInput::default(),
         aids: DriverAids::default(),
         chase: ChaseSmoothing::default(),
@@ -190,6 +207,7 @@ fn run_with_event_loop(
             frame_ms: g.smoothed_ms(),
             target_fps: g.target_fps,
         }),
+        steering: handler.steering,
         replay: handler.session.stop_recording(),
     })
 }
@@ -237,7 +255,10 @@ type TouchPoint = ((f64, f64), (f64, f64));
 /// Two-thumb touch layout for phones and tablets:
 /// - left half: drag sideways from where the thumb landed to steer;
 /// - right half: upper part is throttle, lower part is brake;
-/// - a tap in the top strip cycles the camera.
+/// - a tap in the top strip cycles the camera (top right corner: switch
+///   between thumb and tilt steering).
+///
+/// With tilt steering the left half brakes and the right half accelerates.
 #[derive(Default)]
 struct Touches {
     /// Touch id → where the thumb landed and where it is now.
@@ -251,11 +272,17 @@ impl Touches {
     }
 
     /// (throttle, brake, steer) targets from the current touches.
-    fn targets(&self) -> (f32, f32, Option<f32>) {
+    fn targets(&self, tilt: bool) -> (f32, f32, Option<f32>) {
         let (w, h) = (self.size.0.max(1.0), self.size.1.max(1.0));
         let (mut throttle, mut brake, mut steer) = (0.0, 0.0, None);
         for (start, pos) in self.active.values() {
-            if start.0 < w / 2.0 {
+            if tilt {
+                if start.0 < w / 2.0 {
+                    brake = 1.0;
+                } else {
+                    throttle = 1.0;
+                }
+            } else if start.0 < w / 2.0 {
                 let dx = (pos.0 - start.0) / (w * 0.12);
                 steer = Some((-dx as f32).clamp(-1.0, 1.0));
             } else if pos.1 < h * 0.6 {
@@ -287,6 +314,10 @@ struct Handler {
     error: Option<Diagnostic>,
     keys: Keys,
     touch: Touches,
+    steering: settings::Steering,
+    /// The motion sensor, while tilt steering is on and the app is in front.
+    motion: Option<motion::MotionSensor>,
+    tilt: TiltSteering,
     input: VehicleInput,
     /// Progressive brakes, speed-sensitive steering, counter-steer.
     aids: DriverAids,
@@ -379,13 +410,51 @@ impl Handler {
         self.session.note_reset();
         self.input = VehicleInput::default();
         self.aids = DriverAids::default();
+        self.tilt.recentre();
         self.chase.snap();
+    }
+
+    /// Start (or stop) the motion sensor to match the steering mode; the way
+    /// the phone is held when tilt starts is straight ahead.
+    fn sync_motion(&mut self) {
+        if self.steering != settings::Steering::Tilt {
+            self.motion = None;
+            return;
+        }
+        if self.motion.is_none() {
+            self.motion = match self.opts.fake_tilt_deg {
+                Some(deg) => Some(motion::MotionSensor::fake(deg, 1.0)),
+                None => motion::MotionSensor::open(),
+            };
+            self.tilt = TiltSteering::default();
+            if self.motion.is_none() {
+                log_line("no motion sensor: steering by touch");
+                self.steering = settings::Steering::Touch;
+            }
+        }
+    }
+
+    /// Switch between thumb and tilt steering, and remember the choice.
+    fn toggle_steering(&mut self) {
+        self.steering = self.steering.other();
+        self.motion = None;
+        self.sync_motion();
+        log_line(&format!("steering: {:?}", self.steering).to_lowercase());
+        if let Some(path) = &self.opts.settings
+            && let Err(e) = settings::save_steering(path, self.steering)
+        {
+            log_line(&format!("steering not saved: {e}"));
+        }
     }
 
     /// Smooth digital keys into analogue controls, like a pad trigger.
     fn update_input(&mut self, dt: f32) {
         let k = &self.keys;
-        let (touch_throttle, touch_brake, touch_steer) = self.touch.targets();
+        let tilting = self.motion.is_some();
+        let (touch_throttle, touch_brake, mut touch_steer) = self.touch.targets(tilting);
+        if let Some(up) = self.motion.as_ref().and_then(|m| m.up()) {
+            touch_steer = Some(self.tilt.update(up, dt));
+        }
         let key_steer = match (k.left, k.right) {
             (true, false) => Some(1.0),
             (false, true) => Some(-1.0),
@@ -432,8 +501,10 @@ impl Handler {
             while self.accumulator >= tick_dt && steps < 8 {
                 self.update_input(tick_dt as f32);
                 // The keyboard drives only while it is in use, so a control client can drive too.
-                let keyboard_active =
-                    self.keys.any() || self.touch.any() || self.input != VehicleInput::default();
+                let keyboard_active = self.keys.any()
+                    || self.touch.any()
+                    || self.motion.is_some()
+                    || self.input != VehicleInput::default();
                 if keyboard_active
                     && let Some(e) = self.session.player
                     && let Some(mut i) = self.session.app.world.get_mut::<VehicleInput>(e)
@@ -577,6 +648,7 @@ impl ApplicationHandler for Handler {
                 g.window.request_redraw();
                 self.gfx = Some(g);
                 self.last = Instant::now();
+                self.sync_motion();
                 if self.paused_by_suspend {
                     self.session.paused = false;
                     self.paused_by_suspend = false;
@@ -593,6 +665,8 @@ impl ApplicationHandler for Handler {
     /// (rebuilt in `resumed`) and stop the clock so no time is skipped.
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
         self.gfx = None;
+        // No sensor in the background (battery); it restarts on resume.
+        self.motion = None;
         if !self.session.paused {
             self.session.paused = true;
             self.paused_by_suspend = true;
@@ -642,7 +716,11 @@ impl ApplicationHandler for Handler {
                 let p = (t.location.x, t.location.y);
                 match t.phase {
                     TouchPhase::Started if p.1 < self.touch.size.1 * 0.12 => {
-                        self.camera = self.camera.next()
+                        if p.0 > self.touch.size.0 * 0.85 {
+                            self.toggle_steering();
+                        } else {
+                            self.camera = self.camera.next()
+                        }
                     }
                     TouchPhase::Started => {
                         self.touch.active.insert(t.id, (p, p));

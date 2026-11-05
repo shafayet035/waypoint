@@ -10,7 +10,8 @@ use wp_platform::{WindowOptions, WindowSummary};
 
 /// Load the project at `root` and play it with `run` (the platform's window loop).
 /// `data_dir` is the app's private storage (phones); `None` uses the user's
-/// data folder. Device settings (the measured quality tier) live there.
+/// data folder. Device settings (the measured quality tier, touch or tilt
+/// steering) live there.
 pub fn play(
     root: &Path,
     data_dir: Option<&Path>,
@@ -24,14 +25,21 @@ pub fn play(
         _ => return Err(diags.0),
     };
     let quality = &project.game.value.quality;
+    let path = wp_platform::settings::settings_path(data_dir, &project.game.value.name);
     let tier = if quality.auto {
-        let path = wp_platform::settings::settings_path(data_dir, &project.game.value.name);
         let (tier, how) = wp_platform::settings::device_tier(path.as_deref(), quality.tier);
         log(&how.describe(tier));
         tier
     } else {
         quality.tier
     };
+    // The player's steering choice (touch or tilt), from the last session.
+    let steering = path
+        .as_deref()
+        .and_then(|p| wp_platform::settings::load(p).ok())
+        .and_then(|s| s.controls)
+        .map(|c| c.steering)
+        .unwrap_or_default();
     let (app, player) = waypoint::start_at(&project, scenario, 0, tier).map_err(|d| vec![d])?;
     let vehicles = project
         .vehicles
@@ -60,6 +68,9 @@ pub fn play(
             audio: true,
             governor: true,
             thermal: None,
+            steering,
+            fake_tilt_deg: None,
+            settings: path,
         },
     )
     .map_err(|d| vec![d])

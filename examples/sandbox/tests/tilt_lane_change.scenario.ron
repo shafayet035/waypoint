@@ -1,0 +1,32 @@
+// Tilt steering: a lane change at 80 km/h by turning the phone 7° left,
+// then right, then back, as a player would. The turns go through the same
+// tilt steering and driver aids as the player app. The car must move one
+// lane (about 3.5 m) left and straighten, calmly enough that stability
+// control never steps in.
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "start",
+    initial_kmh: 80.0,
+    driver: Tilt([
+      (at_s: 0.0, turn_deg: 0.0, throttle: 0.35),
+      (at_s: 1.0, turn_deg: 0.0, throttle: 0.35),
+      (at_s: 1.5, turn_deg: 7.0, throttle: 0.35),
+      (at_s: 2.0, turn_deg: 7.0, throttle: 0.35),
+      (at_s: 3.0, turn_deg: -7.0, throttle: 0.35),
+      (at_s: 3.5, turn_deg: -7.0, throttle: 0.35),
+      (at_s: 4.0, turn_deg: 0.0, throttle: 0.35),
+    ]),
+  ),
+  duration_s: 7.0,
+  assert: [
+    FinalPositionWithin(min: (150.0, 2.5), max: (190.0, 4.5)),
+    MaxLateralG(0.3),
+    MaxSideslipDeg(2.0),
+    NoEvent("EscEngaged"),
+    NoNaN,
+    Deterministic,
+  ],
+)

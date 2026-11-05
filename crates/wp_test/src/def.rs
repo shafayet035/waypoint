@@ -46,6 +46,11 @@ pub enum Driver {
     /// keyboard (progressive brakes, speed-sensitive steering, brake to
     /// reverse). Use it to test how the game feels; `reverse` is ignored.
     Keyboard(Vec<InputKey>),
+    /// A phone turned like a steering wheel: timed turns (eased linearly
+    /// between keys, as a hand moves) go through the same tilt steering and
+    /// driver aids as the player app, and the pedals hold until the next key.
+    /// The phone starts straight ahead as held at the first key.
+    Tilt(Vec<TiltKey>),
     /// Let the traffic AI drive the scenario's mission: lanes, distance
     /// keeping, lights and junctions, stopping at each stop until the
     /// passengers are aboard.
@@ -89,6 +94,22 @@ pub struct InputKey {
     /// Select reverse gear (engages below 2 km/h).
     #[serde(default)]
     pub reverse: bool,
+}
+
+/// One moment of a [`Driver::Tilt`] run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TiltKey {
+    pub at_s: f32,
+    /// How far the phone is turned, degrees; + anticlockwise (left).
+    #[serde(default)]
+    pub turn_deg: f32,
+    /// 0 to 1.
+    #[serde(default)]
+    pub throttle: f32,
+    /// 0 to 1.
+    #[serde(default)]
+    pub brake: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -280,6 +301,29 @@ impl ScenarioDef {
                         s.player.initial_kmh
                     )),
             );
+        }
+        if let Driver::Tilt(keys) = &s.player.driver {
+            if keys.windows(2).any(|w| w[1].at_s < w[0].at_s) {
+                out.push(
+                    file.error_at("WP-S014", "at_s", "tilt keys must be in time order")
+                        .help("sort the keys by at_s"),
+                );
+            }
+            for k in keys {
+                if !(0.0..=1.0).contains(&k.throttle)
+                    || !(0.0..=1.0).contains(&k.brake)
+                    || !(-90.0..=90.0).contains(&k.turn_deg)
+                {
+                    out.push(
+                        file.error_at(
+                            "WP-S016",
+                            "at_s",
+                            format!("input at {} s is out of range", k.at_s),
+                        )
+                        .expected("throttle and brake in 0..1, turn_deg in -90..90"),
+                    );
+                }
+            }
         }
         if let Driver::Cruise { kmh, steer } = &s.player.driver
             && (!(*kmh >= 0.0) || !(-1.0..=1.0).contains(steer))

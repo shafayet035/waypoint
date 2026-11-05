@@ -69,6 +69,13 @@ pub struct RunArgs {
     /// Pretend the device is this hot (nominal, fair, serious, critical) to test the governor.
     #[arg(long)]
     thermal: Option<String>,
+    /// Touch-screen steering: touch (thumb) or tilt (turn the device like a wheel).
+    #[arg(long, default_value = "touch")]
+    steering: String,
+    /// Pretend the device is held straight for a second, then turned this far, degrees, left
+    /// positive (tests tilt steering without a motion sensor; implies --steering tilt).
+    #[arg(long, allow_hyphen_values = true)]
+    tilt_deg: Option<f32>,
     /// Accept control-protocol requests on 127.0.0.1:<port> while the window runs (0 = any free port).
     #[arg(long)]
     control: Option<u16>,
@@ -206,6 +213,15 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 )
             })?),
         };
+        let steering = match args.tilt_deg {
+            Some(_) => wp_platform::settings::Steering::Tilt,
+            None => wp_platform::settings::Steering::parse(&args.steering).ok_or_else(|| {
+                cli_error(
+                    format!("unknown steering `{}`", args.steering),
+                    "steering: touch, tilt",
+                )
+            })?,
+        };
         let summary = wp_platform::run_windowed(
             session,
             wp_platform::WindowOptions {
@@ -219,6 +235,9 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 audio: !args.mute,
                 governor: !args.no_governor,
                 thermal,
+                steering,
+                fake_tilt_deg: args.tilt_deg,
+                settings: None,
             },
         )
         .map_err(|d| vec![d])?;

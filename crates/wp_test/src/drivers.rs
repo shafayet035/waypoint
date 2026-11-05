@@ -39,8 +39,9 @@ pub struct DriverState {
     phase: DockPhase,
     pull_ups: u32,
     route: Option<RouteProgress>,
-    /// Driver aids for `Keyboard`.
+    /// Driver aids for `Keyboard` and `Tilt`.
     aids: wp_vehicle::DriverAids,
+    tilt: wp_vehicle::TiltSteering,
 }
 
 /// The docking manoeuvre's state.
@@ -70,6 +71,7 @@ impl DriverState {
             pull_ups: 0,
             route: None,
             aids: wp_vehicle::DriverAids::default(),
+            tilt: wp_vehicle::TiltSteering::default(),
         }
     }
 
@@ -88,15 +90,29 @@ impl DriverState {
                         analog_steer: false,
                     })
                     .unwrap_or_default();
-                let def = world.get::<Vehicle>(player).and_then(|v| {
-                    world
-                        .get_resource::<VehicleLibrary>()
-                        .and_then(|l| l.0.get(&v.model).cloned())
-                });
-                match (def, wp_vehicle::telemetry(world, player)) {
-                    (Some(def), Some(motion)) => self.aids.update(controls, &motion, &def, dt),
-                    _ => VehicleInput::default(),
-                }
+                self.aided(controls, dt, world, player)
+            }
+            Driver::Tilt(keys) => {
+                let i = keys.iter().rposition(|k| k.at_s <= t);
+                let turn = match i.map(|i| (&keys[i], keys.get(i + 1))) {
+                    Some((a, Some(b))) if b.at_s > a.at_s => {
+                        let f = ((t - a.at_s) / (b.at_s - a.at_s)).clamp(0.0, 1.0);
+                        a.turn_deg + (b.turn_deg - a.turn_deg) * f
+                    }
+                    Some((a, _)) => a.turn_deg,
+                    None => keys.first().map_or(0.0, |k| k.turn_deg),
+                };
+                let pedals = i.map(|i| (keys[i].throttle, keys[i].brake));
+                let (accelerate, brake) = pedals.unwrap_or((0.0, 0.0));
+                // A phone held in landscape, leaning back like a player's.
+                let up = wp_vehicle::tilt::held_landscape(turn, 40.0);
+                let controls = wp_vehicle::Controls {
+                    accelerate,
+                    brake,
+                    steer: self.tilt.update(up, dt),
+                    analog_steer: true,
+                };
+                self.aided(controls, dt, world, player)
             }
             // The traffic AI drives the vehicle itself (see the runner).
             Driver::Autopilot => VehicleInput::default(),
@@ -126,6 +142,25 @@ impl DriverState {
             Driver::FollowRoute { to_road, kmh } => {
                 self.follow_route(&to_road, kmh, forward_kmh, dt, world, player)
             }
+        }
+    }
+
+    /// Controls through the player's driver aids.
+    fn aided(
+        &mut self,
+        controls: wp_vehicle::Controls,
+        dt: f32,
+        world: &World,
+        player: Entity,
+    ) -> VehicleInput {
+        let def = world.get::<Vehicle>(player).and_then(|v| {
+            world
+                .get_resource::<VehicleLibrary>()
+                .and_then(|l| l.0.get(&v.model).cloned())
+        });
+        match (def, wp_vehicle::telemetry(world, player)) {
+            (Some(def), Some(motion)) => self.aids.update(controls, &motion, &def, dt),
+            _ => VehicleInput::default(),
         }
     }
 
