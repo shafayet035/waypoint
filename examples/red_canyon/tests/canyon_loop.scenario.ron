@@ -1,0 +1,20 @@
+// Round the canyon loop from the trailhead to the Overlook Climb: four
+// junctions where the road bends on, between solid boulders and mesas. The
+// route follower must stay on its lane and never touch the scenery.
+(
+  scene: "scenes/canyon.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "offroader",
+    spawn: "trailhead",
+    driver: FollowRoute(to_road: "overlook_climb", kmh: 60.0),
+  ),
+  duration_s: 150.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.8),
+    NoEvent("Collision"),
+    MaxSideslipDeg(8.0),   // a heavy 4x4 on sandy grip (friction 0.85)
+    NoNaN,
+    Deterministic,
+  ],
+)

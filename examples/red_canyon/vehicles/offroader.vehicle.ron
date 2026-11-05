@@ -1,0 +1,45 @@
+// A boxy four-wheel-drive off-roader: 3 L diesel, big tyres, roof rack.
+// Units are in the field names. `wp schema vehicle` prints every field.
+(
+  name: "offroader",
+  mass_kg: 2150.0,
+  yaw_inertia_kgm2: 3900.0,
+  cg_height_m: 0.78,
+  wheelbase_m: 2.7,
+  cg_to_front_axle_m: 1.3,
+  track_width_m: 1.62,
+  drive: All,
+  wheel: (radius_m: 0.4, inertia_kgm2: 2.2),
+  tyre: (
+    friction: 1.0,
+    stiffness_per_load: 16.0,
+    relaxation_length_m: 0.35,
+    rolling_resistance: 0.012,
+    sliding_friction_ratio: 0.85,
+  ),
+  engine: (
+    idle_rpm: 750.0,
+    redline_rpm: 4200.0,
+    torque_curve: [(1000.0, 260.0), (1600.0, 380.0), (2400.0, 400.0), (3200.0, 360.0), (4000.0, 280.0)],
+    engine_brake_nm: 60.0,
+  ),
+  gearbox: (
+    ratios: [3.6, 2.1, 1.4, 1.05, 0.85],
+    final_drive: 3.9,
+    efficiency: 0.9,
+    shift_up_rpm: 3800.0,
+    shift_down_rpm: 1500.0,
+  ),
+  brakes: (max_torque_nm: 6500.0, front_bias: 0.68, abs: true, traction_control: true, esc: true),
+  steering: (max_angle_deg: 35.0, rate_deg_per_s: 180.0),
+  aero: (drag_area_m2: 1.25),
+  suspension: (
+    roll_gradient_deg_per_g: 6.5,
+    pitch_gradient_deg_per_g: 2.5,
+    damping_ratio: 0.6,
+    roll_center_height_m: 0.3,
+    front_roll_share: 0.6,
+  ),
+  body: Some((length_m: 4.95, width_m: 2.0, height_m: 2.45, front_overhang_m: 1.07, style: Car)),
+  model: Some("assets/vehicles/offroader.glb"),
+)

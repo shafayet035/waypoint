@@ -1,0 +1,2 @@
+// The off-roader up close: roof rack and load, bull bar, snorkel, spare wheel.
+(scene: Some("scenes/canyon.scene.ron"), spawn: Some("trailhead"), vehicle: Some("offroader"), at_s: 0.5, camera: Showcase)

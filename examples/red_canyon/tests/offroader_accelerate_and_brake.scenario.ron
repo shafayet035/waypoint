@@ -1,0 +1,22 @@
+// The off-roader is a heavy diesel 4x4: about 10.5 s to 100 km/h, and about
+// 49 m to stop from 100 km/h on its big all-terrain tyres (ABS).
+(
+  scene: "scenes/flat.scene.ron",
+  seed: 7,
+  player: (
+    vehicle: "offroader",
+    spawn: "start",
+    driver: Script([
+      (at_s: 0.0, throttle: 1.0),
+      (at_s: 12.0, brake: 1.0),
+    ]),
+  ),
+  duration_s: 19.0,
+  assert: [
+    ReachSpeed(kmh: 100.0, within_s: 12.0, not_before_s: 8.0),
+    BrakingDistance(max_m: 60.0),
+    StoppedBy(s: 17.0),
+    NoNaN,
+    Deterministic,
+  ],
+)

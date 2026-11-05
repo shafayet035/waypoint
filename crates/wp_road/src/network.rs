@@ -53,6 +53,8 @@ pub const KERB_RADIUS_M: f32 = 6.0;
 /// Junction paths tighter than this are not offered, m (a hatchback turns in
 /// about 5.5 m).
 const MIN_TURN_RADIUS_M: f32 = 5.0;
+/// Lanes bend through a node where a road continues at this radius, m.
+const BEND_RADIUS_M: f32 = 15.0;
 
 /// Shortest lane on which a lane change is planned, m.
 pub const MIN_LANE_CHANGE_M: f32 = 30.0;
@@ -1084,6 +1086,15 @@ fn junction_clearance(ends: &[(usize, bool, Vec2)], half_width: impl Fn(usize) -
             theta += std::f32::consts::TAU;
         }
         if theta > 160f32.to_radians() {
+            // Nearly in line (a road bending on at a node): no kerb to
+            // round, but the lanes need room to bend through, or their
+            // connector has no length and reads as an impossibly tight turn.
+            let bend = std::f32::consts::PI - theta.min(std::f32::consts::PI);
+            if bend > 1f32.to_radians() {
+                let room = BEND_RADIUS_M * (bend / 2.0).tan();
+                need[i] = need[i].max(room);
+                need[j] = need[j].max(room);
+            }
             continue;
         }
         let (wi, wj) = (half_width(ends[i].0), half_width(ends[j].0));

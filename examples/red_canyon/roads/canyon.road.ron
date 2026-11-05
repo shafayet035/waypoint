@@ -1,0 +1,26 @@
+// A desert loop through Red Canyon: one lane each way, no sidewalks. It
+// winds between the mesas, crosses the dry wash in the middle and comes
+// back past the palm oasis. Right-hand traffic.
+(
+  name: "canyon",
+  drive_side: Right,
+  nodes: [
+    (id: "trailhead", position: (0.0, 0.0)),
+    (id: "wash", position: (260.0, 90.0)),
+    (id: "narrows", position: (470.0, -40.0)),
+    (id: "oasis", position: (300.0, -260.0)),
+    (id: "overlook", position: (40.0, -200.0)),
+  ],
+  roads: [
+    (id: "wash_run", name: Some("Wash Run"), from: "trailhead", to: "wash",
+     shape: Curve(through: [(120.0, 80.0)]), speed_limit_kmh: 60.0),
+    (id: "the_narrows", name: Some("The Narrows"), from: "wash", to: "narrows",
+     shape: Curve(through: [(390.0, 70.0)]), speed_limit_kmh: 50.0),
+    (id: "oasis_bend", name: Some("Oasis Bend"), from: "narrows", to: "oasis",
+     shape: Curve(through: [(470.0, -190.0)]), speed_limit_kmh: 60.0),
+    (id: "long_flat", name: Some("Long Flat"), from: "oasis", to: "overlook",
+     shape: Curve(through: [(170.0, -280.0)]), speed_limit_kmh: 70.0),
+    (id: "overlook_climb", name: Some("Overlook Climb"), from: "overlook", to: "trailhead",
+     shape: Curve(through: [(-40.0, -90.0)]), speed_limit_kmh: 50.0),
+  ],
+)

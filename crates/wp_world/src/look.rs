@@ -207,9 +207,9 @@ impl LookDef {
                 look.asphalt = srgb([92, 88, 92]);
                 look.markings = srgb([245, 236, 214]);
                 look.sidewalk = srgb([214, 196, 176]);
-                look.saturation = 1.12;
+                look.saturation = 1.25;
                 look.fog = 0.5;
-                look.exposure = 0.9;
+                look.exposure = 0.78;
                 look.wrap = 0.4;
                 look.haze = 1.0;
                 look.bloom = 0.6;

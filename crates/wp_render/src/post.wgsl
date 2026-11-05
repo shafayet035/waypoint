@@ -112,7 +112,7 @@ fn fs_composite(in: VsOut) -> @location(0) vec4<f32> {
     let light_tint = p.highlights.rgb / max(dot(p.highlights.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-3);
     col = col * mix(vec3<f32>(1.0), shade_tint, 0.35 * shade_w);
     col = col * mix(vec3<f32>(1.0), light_tint, 0.5 * light_w);
-    col = mix(col, col * col * (3.0 - 2.0 * col), 0.35);
+    col = mix(col, col * col * (3.0 - 2.0 * col), 0.55);
     // Vignette.
     let d = (in.uv - 0.5) * vec2<f32>(1.0, 0.8);
     col = col * (1.0 - p.b.x * smoothstep(0.3, 0.75, length(d)));

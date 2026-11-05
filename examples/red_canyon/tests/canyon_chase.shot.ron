@@ -1,0 +1,3 @@
+// The stylised look on the canyon road: layered mesas, boulders and dry grass
+// along the verges, dusty haze swallowing the distance, cool shade.
+(scene: Some("scenes/canyon.scene.ron"), spawn: Some("trailhead"), vehicle: Some("offroader"), throttle: 0.3, at_s: 3.0, camera: Chase)

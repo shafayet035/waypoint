@@ -60,7 +60,10 @@ iOS: `tools/ios/build.sh sim` builds `target/ios/sim/Waypoint.app` (game folder 
 
 `examples/sandbox` is a complete project and also the template for `wp new` (`--template minimal` takes
 one car, a flat ground and two tests from it). `examples/harbour_shuttle` is a second game built from the
-minimal template with data only (a night minibus route, toon look, and an electric-shuttle mod).
+minimal template with data only (a night minibus route, toon look, and an electric-shuttle mod). `examples/red_canyon` shows the stylised look: a
+desert loop road between layered mesas, boulders, scrub and an oasis, driven in a boxy 4x4; its models are our own CC0 work
+from `tools/models/blender/` (nature.py: rocks, mesas, autumn trees, pines, palms, bushes, grass; offroader.py), generated
+headless (`Blender -b -P <script> -- <out dir>`), and its scenery from `tools/scenes/red_canyon.py`.
 
 ## Architecture
 
@@ -138,6 +141,8 @@ lights. Pedestrians (`wp_traffic::pedestrian`) walk a sidewalk graph built from 
 (`wp_road::sidewalk`: sidewalk centre lines, zebra crossings at junction arms and dead ends, corner
 links), cross with the lights or when no vehicle is within 5 s, and are obstacles to AI drivers, who
 stop short of zebras; `HitPedestrian` and `NoPedestrianHits` (village: 30 people, none hit).
+Bends at nodes: where a road continues at a slight angle (a two-road node within 20° of straight), the lanes get room to bend
+through (`BEND_RADIUS_M` 15 m); before, their connector had no length and was rejected as an impossibly tight turn.
 Long vehicles and people: a bus's outward hold in a bend (front axle off the path so the rear wheels don't cut in) is capped to
 the room left in the lane when it points at the kerb, or its front rides over the pavement. Drivers watch the full width their
 front sweeps in the sharpest bend of the next 20 m (κ (a² + 2aL) / 2) for anyone walking on a crossing (people standing still

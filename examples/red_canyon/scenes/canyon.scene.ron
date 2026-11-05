@@ -1,0 +1,14 @@
+// Red Canyon in the late afternoon: a sandy loop road between layered
+// mesas, boulders and dry scrub, palms round the oasis.
+(
+  name: "canyon",
+  ground: (friction_scale: 0.85, gravity: 9.81),
+  roads: Some("roads/canyon.road.ron"),
+  scenery: Some("scenery/canyon.scenery.ron"),
+  time_of_day: Some((hour: 17.3, hours_per_hour: 0.0)),
+  spawns: [
+    (name: "trailhead", position: (16.6, 10.2), heading_deg: 38.1),
+    (name: "overlook", position: (25.5, -180.1), heading_deg: 131.6),
+    (name: "oasis", position: (270.7, -265.8), heading_deg: -164.1),
+  ],
+)
