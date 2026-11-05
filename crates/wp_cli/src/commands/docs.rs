@@ -14,7 +14,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
   wp run [drive opts]          drive in a window: W/S throttle-brake, A/D steer, C camera (incl. cab view),
                                Q/E or mouse drag to look around in the cab, R reset, P pause
   wp run --mission route_1     play a mission (its scene, vehicle and spawn); the title shows the objective
-  wp run --quality low         quality tier: low|mid|flagship (default game.toml [quality] tier)
+  wp run --quality low         quality tier: low|mid|flagship|auto (default game.toml [quality] tier)
+  wp bench                     measure this device (renderer benchmark + memory) and print the tier it gets
                                art style: game.toml [look] style = \"realistic\"|\"toon\"|\"flat\", plus colour
                                overrides (sky_top, ground, asphalt... as [r, g, b] 0–255); see `wp schema game`
   wp run --headless [opts]     simulate without a window; prints the final state (+ --trace, --seconds, --ticks)

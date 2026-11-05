@@ -7,6 +7,10 @@ start_scene = "scenes/flat.scene.ron"
 # low, mid or flagship: render resolution cap (540/720/900 lines, upscaled),
 # traffic and pedestrian counts, rain density. `wp run --quality low` overrides.
 tier = "mid"
+# The player measures each device on first launch (`wp bench` shows how) and
+# picks low, mid or flagship itself, saved in its settings.toml. Set false to
+# always use `tier`. `wp run` uses `tier` unless given --quality auto.
+auto = true
 
 [plugins]
 # Switch engine plugins off by name, e.g. disabled = ["vehicle"].

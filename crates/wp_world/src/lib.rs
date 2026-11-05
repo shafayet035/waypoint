@@ -71,7 +71,9 @@ pub struct TimeOfDay {
 /// How much detail the game runs with. Phones are grouped into three tiers
 /// (the design's table); the engine scales render resolution, traffic,
 /// pedestrians and effects to suit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityTier {
     /// Older or budget phones: 30 fps target, upscaled from about 540p.
@@ -154,6 +156,43 @@ impl QualityTier {
             Self::Low => 0.5,
             _ => 1.0,
         }
+    }
+
+    /// The name game.toml and the command line use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Mid => "mid",
+            Self::Flagship => "flagship",
+        }
+    }
+
+    /// The tier a device can hold. `bench_ms`: the renderer benchmark's mean
+    /// frame time at Mid settings and 1280×720 (`wp bench`); `memory_gb`: the
+    /// device's RAM, if known; `software`: no GPU, a CPU rasteriser.
+    ///
+    /// Mid must hold 60 fps with room for the simulation, so its benchmark
+    /// frame must take at most 12 ms; Flagship draws about twice as much
+    /// (900 lines, twice the lights, a 4096 shadow map), so at most 6 ms.
+    /// Memory caps it as the design's device classes do: under 5 GB (a 4 GB
+    /// phone) Low, under 7 GB (6 GB) at most Mid.
+    pub fn for_device(bench_ms: f32, memory_gb: Option<f32>, software: bool) -> QualityTier {
+        if software {
+            return Self::Low;
+        }
+        let by_speed = if bench_ms <= 6.0 {
+            Self::Flagship
+        } else if bench_ms <= 12.0 {
+            Self::Mid
+        } else {
+            Self::Low
+        };
+        let by_memory = match memory_gb {
+            Some(m) if m < 5.0 => Self::Low,
+            Some(m) if m < 7.0 => Self::Mid,
+            _ => Self::Flagship,
+        };
+        by_speed.min(by_memory)
     }
 }
 
@@ -472,5 +511,23 @@ impl Plugin for WorldPlugin {
             }
         })
         .writes_resource("TimeOfDay");
+    }
+}
+
+#[cfg(test)]
+mod tier_tests {
+    use super::QualityTier::{self, *};
+
+    #[test]
+    fn tiers_follow_speed_and_memory() {
+        assert_eq!(QualityTier::for_device(3.0, Some(12.0), false), Flagship);
+        assert_eq!(QualityTier::for_device(9.0, Some(12.0), false), Mid);
+        assert_eq!(QualityTier::for_device(20.0, None, false), Low);
+        // A fast GPU in a 6 GB phone stays Mid; in a 4 GB phone, Low.
+        assert_eq!(QualityTier::for_device(3.0, Some(5.6), false), Mid);
+        assert_eq!(QualityTier::for_device(3.0, Some(3.7), false), Low);
+        // No GPU: a CPU rasteriser is always Low.
+        assert_eq!(QualityTier::for_device(1.0, None, true), Low);
+        assert!(Low < Mid && Mid < Flagship);
     }
 }

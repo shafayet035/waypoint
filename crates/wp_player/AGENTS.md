@@ -1,7 +1,10 @@
 # wp_player
 
-The game player for every platform. `play(root, scenario, exit_after, run)` loads a project and
-runs it with the platform's window loop.
+The game player for every platform. `play(root, data_dir, scenario, exit_after, run)` loads a project and
+runs it with the platform's window loop. With game.toml `[quality] auto = true` (the default) it first
+reads the device's tier from `<data_dir>/<game>/settings.toml`, or measures it (`wp_render::bench`, about a
+second on first launch) and saves it there; the log says which (`quality flagship (benchmark 3.0 ms ...)`).
+Data folders: Android app storage; iOS/macOS `~/Library/Application Support/Waypoint`; Linux XDG data home.
 
 - Desktop/iOS: the `waypoint-player` binary (`main.rs`). Project lookup: a folder argument,
   `WP_PROJECT`, `<exe dir>/game` (iOS bundle), then the current folder. `--scenario <name>` plays a

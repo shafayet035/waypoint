@@ -38,6 +38,7 @@ fn main() {
     let root = find_project(&args);
     if let Err(diags) = wp_player::play(
         &root,
+        None,
         scenario.as_deref(),
         exit_after,
         wp_platform::run_windowed,

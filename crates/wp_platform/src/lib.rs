@@ -9,6 +9,7 @@
 //! can query and drive the same session while it runs.
 
 pub mod audio;
+pub mod settings;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;

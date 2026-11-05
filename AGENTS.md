@@ -268,4 +268,10 @@ sidewalks 0.3); with `weather.wetness` > 0, `fs_mesh` adds noise puddles (darker
 `wet_streaks`: every light in view reflected through a lobe that is narrow sideways and long towards the viewer at low angles
 (σ·cos θ by 2.5σ), so headlights, tail lamps and street lamps streak down the road; brightness goes with how bright a light
 looks (√ intensity), not its range. Dry frames take no wet branch (pictures unchanged). Shot `town_wet_night`.
+Automatic quality: game.toml `[quality] auto = true` (default): the player measures the device on first launch and keeps the
+tier in `settings.toml` in its data folder (`wp_platform::settings`; edit `tier` to override, delete to re-measure). The measure is
+`wp_render::bench`: an engine-owned rainy night grid town (generated buildings, trees, lamps, 40 cars with headlights) drawn
+offscreen at Mid settings, 1280×720, median of 40 waited frames; plus RAM (`wp_rhi::system_memory_gb`). `QualityTier::for_device`:
+≤ 6 ms → Flagship, ≤ 12 ms → Mid, else Low; under 7 GB at most Mid, under 5 GB Low; a CPU rasteriser Low (thresholds are
+provisional until checked on reference phones). `wp bench [--json]`; `wp run --quality auto`. Apple M4: 2.7–3.2 ms → Flagship.
 Not yet: testing on physical phones; running on an iOS simulator.

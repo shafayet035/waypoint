@@ -9,8 +9,11 @@ use wp_control::Session;
 use wp_platform::{WindowOptions, WindowSummary};
 
 /// Load the project at `root` and play it with `run` (the platform's window loop).
+/// `data_dir` is the app's private storage (phones); `None` uses the user's
+/// data folder. Device settings (the measured quality tier) live there.
 pub fn play(
     root: &Path,
+    data_dir: Option<&Path>,
     scenario: Option<&str>,
     exit_after_s: Option<f32>,
     run: impl FnOnce(Session, WindowOptions) -> Result<WindowSummary, Diagnostic>,
@@ -20,7 +23,16 @@ pub fn play(
         Some(p) if !diags.has_errors() => p,
         _ => return Err(diags.0),
     };
-    let (app, player) = waypoint::start(&project, scenario, 0).map_err(|d| vec![d])?;
+    let quality = &project.game.value.quality;
+    let tier = if quality.auto {
+        let path = wp_platform::settings::settings_path(data_dir, &project.game.value.name);
+        let (tier, how) = wp_platform::settings::device_tier(path.as_deref(), quality.tier);
+        log(&how.describe(tier));
+        tier
+    } else {
+        quality.tier
+    };
+    let (app, player) = waypoint::start_at(&project, scenario, 0, tier).map_err(|d| vec![d])?;
     let vehicles = project
         .vehicles
         .iter()
@@ -44,7 +56,7 @@ pub fn play(
             camera: wp_render::CameraMode::Chase,
             exit_after_s,
             control,
-            quality: Some(project.game.value.quality.tier),
+            quality: Some(tier),
             audio: true,
         },
     )
@@ -122,7 +134,8 @@ mod android {
             Err(e) => return log(&format!("error: {e}")),
         };
         log(&format!("playing {}", root.display()));
-        let result = super::play(&root, None, None, |session, opts| {
+        let data = root.parent().map(std::path::Path::to_path_buf);
+        let result = super::play(&root, data.as_deref(), None, None, |session, opts| {
             wp_platform::run_windowed_android(app, session, opts)
         });
         match result {

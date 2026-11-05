@@ -58,10 +58,20 @@ pub fn start(
     scenario: Option<&str>,
     seed: u64,
 ) -> Result<(App, wp_ecs::Entity), wp_core::Diagnostic> {
+    start_at(project, scenario, seed, project.game.value.quality.tier)
+}
+
+/// [`start`] at quality tier `tier` (traffic and pedestrian counts follow it).
+pub fn start_at(
+    project: &project::Project,
+    scenario: Option<&str>,
+    seed: u64,
+    tier: wp_world::QualityTier,
+) -> Result<(App, wp_ecs::Entity), wp_core::Diagnostic> {
     let spec = drive::DriveSpec {
         scenario: scenario.map(str::to_string),
         seed,
-        quality: Some(project.game.value.quality.tier),
+        quality: Some(tier),
         ..Default::default()
     };
     spec.build(project).map(|d| (d.app, d.player))

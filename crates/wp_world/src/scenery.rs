@@ -92,6 +92,19 @@ pub struct TreeRowDef {
     pub seed: u64,
 }
 
+impl Default for TreeRowDef {
+    fn default() -> Self {
+        TreeRowDef {
+            roads: Vec::new(),
+            sides: Sides::default(),
+            spacing_m: default_tree_spacing(),
+            kinds: Vec::new(),
+            height_m: default_tree_heights(),
+            seed: default_seed(),
+        }
+    }
+}
+
 fn default_tree_spacing() -> f32 {
     12.0
 }
@@ -197,6 +210,22 @@ pub struct StreetDef {
     pub styles: Vec<String>,
     #[serde(default = "default_seed")]
     pub seed: u64,
+}
+
+impl Default for StreetDef {
+    fn default() -> Self {
+        StreetDef {
+            roads: Vec::new(),
+            sides: Sides::default(),
+            setback_m: default_setback(),
+            frontage_m: default_frontage(),
+            depth_m: default_depth(),
+            height_m: default_height(),
+            gap_m: default_gap(),
+            styles: Vec::new(),
+            seed: default_seed(),
+        }
+    }
 }
 
 fn default_setback() -> f32 {

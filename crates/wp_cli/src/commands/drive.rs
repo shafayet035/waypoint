@@ -142,13 +142,23 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
     let project = load_project(ctx)?;
     let tier = match args.quality.as_deref() {
         None => project.game.value.quality.tier,
+        Some("auto") => {
+            // The tier the player would use on this machine (measured once).
+            let path = wp_platform::settings::settings_path(None, &project.game.value.name);
+            let (tier, how) = wp_platform::settings::device_tier(
+                path.as_deref(),
+                project.game.value.quality.tier,
+            );
+            eprintln!("{}", how.describe(tier));
+            tier
+        }
         Some("low") => waypoint::world::QualityTier::Low,
         Some("mid") => waypoint::world::QualityTier::Mid,
         Some("flagship") => waypoint::world::QualityTier::Flagship,
         Some(other) => {
             return Err(cli_error(
                 format!("unknown quality tier `{other}`"),
-                "tiers: low, mid, flagship",
+                "tiers: low, mid, flagship, auto",
             ));
         }
     };

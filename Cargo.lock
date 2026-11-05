@@ -3416,6 +3416,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "serde",
+ "toml",
  "winit",
  "wp_audio",
  "wp_control",
@@ -3464,6 +3465,7 @@ dependencies = [
 name = "wp_rhi"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "png",
  "pollster",
  "serde",

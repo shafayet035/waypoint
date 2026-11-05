@@ -98,6 +98,43 @@ impl Gpu {
     }
 }
 
+/// The device's RAM in GB (10⁹ bytes), if the platform reports it: from
+/// `/proc/meminfo` on Android and Linux, `hw.memsize` on iOS and macOS.
+pub fn system_memory_gb() -> Option<f32> {
+    memory_bytes().map(|b| (b as f64 / 1e9) as f32)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn memory_bytes() -> Option<u64> {
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = info.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
+}
+
+#[cfg(target_vendor = "apple")]
+fn memory_bytes() -> Option<u64> {
+    let mut bytes: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: the name is NUL-terminated and `bytes`/`len` describe a valid
+    // u64 buffer, which is what hw.memsize returns.
+    let ok = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut bytes).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (ok == 0 && bytes > 0).then_some(bytes)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+fn memory_bytes() -> Option<u64> {
+    None
+}
+
 /// A colour texture to render into without a window.
 pub struct OffscreenTarget {
     pub texture: wgpu::Texture,
@@ -264,6 +301,14 @@ fn write_error(path: &Path, e: std::io::Error) -> Diagnostic {
 
 #[cfg(test)]
 mod png_tests {
+    #[test]
+    fn memory_is_reported_where_supported() {
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
+            let gb = super::system_memory_gb().expect("RAM size");
+            assert!((0.5..4096.0).contains(&gb), "{gb}");
+        }
+    }
+
     #[test]
     fn png_round_trips() {
         let dir = std::env::temp_dir().join(format!("wp_png_{}", std::process::id()));

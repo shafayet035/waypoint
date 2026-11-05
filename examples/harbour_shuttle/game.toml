@@ -6,6 +6,8 @@ start_scene = "scenes/harbour.scene.ron"
 
 [quality]
 tier = "mid"
+# Measure each device on first launch and pick its tier (see `wp bench`).
+auto = true
 
 [look]
 # A bold cel-shaded look; colours tuned for a harbour at dusk.

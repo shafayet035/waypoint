@@ -47,6 +47,8 @@ enum Cmd {
     Run(commands::RunArgs),
     /// Render one frame to a PNG, headless: any scenario or drive at any time.
     Shot(commands::ShotArgs),
+    /// Measure this device with the renderer benchmark and say which quality tier it gets.
+    Bench,
     /// Render the player vehicle's sound (engine, road, skids) to a WAV, headless.
     Audio(commands::AudioArgs),
     /// Control protocol on stdin/stdout (JSON-RPC 2.0, one request per line).
@@ -237,6 +239,7 @@ fn main() {
         Cmd::Run(args) => commands::run(&ctx, &args),
         Cmd::Shot(args) => commands::shot(&ctx, &args),
         Cmd::Audio(args) => commands::audio(&ctx, &args),
+        Cmd::Bench => commands::bench(&ctx),
         Cmd::Serve(args) => commands::serve(&ctx, &args),
         Cmd::Mcp => mcp::serve(&ctx),
         Cmd::Test { filter, approve } => commands::test(&ctx, filter.as_deref(), approve),

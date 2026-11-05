@@ -19,6 +19,7 @@ wp_audio.workspace = true
 cpal = "0.18"
 winit.workspace = true
 serde.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

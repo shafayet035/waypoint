@@ -416,7 +416,11 @@ const LAMP_DRAW_M: f32 = 250.0;
 const TREE_DRAW_M: f32 = 450.0;
 
 /// Trees: a trunk (a box) and a crown (lumpy sphere, cone, or a flat palm top).
-fn tree_items(items: &mut Vec<DrawItem>, scenery: &wp_world::scenery::Scenery, focus: Vec2) {
+pub(crate) fn tree_items(
+    items: &mut Vec<DrawItem>,
+    scenery: &wp_world::scenery::Scenery,
+    focus: Vec2,
+) {
     use wp_world::scenery::{TRUNK_M, TreeKind};
     let bark = Vec3::new(0.11, 0.075, 0.05);
     let leaves = [
@@ -478,7 +482,7 @@ fn tree_items(items: &mut Vec<DrawItem>, scenery: &wp_world::scenery::Scenery, f
     }
 }
 
-fn lamp_items(
+pub(crate) fn lamp_items(
     items: &mut Vec<DrawItem>,
     lights: &mut Vec<PointLight>,
     net: &wp_road::RoadNetwork,

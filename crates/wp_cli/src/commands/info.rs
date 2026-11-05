@@ -62,3 +62,41 @@ pub fn plugins(ctx: &Ctx) -> CmdResult {
     }
     Ok(0)
 }
+
+// ---- wp bench ----------------------------------------------------------------
+
+/// Run the renderer benchmark headless and report the tier this device gets
+/// (what the player picks on first launch when game.toml has `auto = true`).
+pub fn bench(ctx: &Ctx) -> CmdResult {
+    let gpu = wp_rhi::Gpu::headless().map_err(|d| vec![d])?;
+    let report = wp_render::bench::run(&gpu).map_err(|d| vec![d])?;
+    let memory_gb = wp_rhi::system_memory_gb();
+    let tier =
+        waypoint::world::QualityTier::for_device(report.frame_ms, memory_gb, report.software());
+    if ctx.json {
+        print_json(&json!({ "bench": report, "memory_gb": memory_gb, "tier": tier.name() }));
+    } else {
+        println!(
+            "{} frames of the benchmark town ({}×{}, Mid settings, rain at night) on {} ({}, {})",
+            report.frames,
+            report.width,
+            report.height,
+            report.gpu.name,
+            report.gpu.backend,
+            report.gpu.device_type
+        );
+        println!(
+            "  frame time: median {:.2} ms, 90th percentile {:.2} ms ({} draw calls, {} triangles)",
+            report.frame_ms, report.p90_ms, report.draw_calls, report.triangles
+        );
+        println!(
+            "  memory: {}",
+            memory_gb.map_or("unknown".to_string(), |m| format!("{m:.1} GB"))
+        );
+        println!(
+            "tier: {} (Flagship needs ≤ 6 ms and 7 GB, Mid ≤ 12 ms and 5 GB)",
+            tier.name()
+        );
+    }
+    Ok(0)
+}

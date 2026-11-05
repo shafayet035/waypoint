@@ -9,6 +9,7 @@
 //! a sky/ground ambient term and sky reflections, all with 4× MSAA and ACES
 //! tonemapping. Tile-friendly: one render pass, no full-screen post passes.
 
+pub mod bench;
 pub mod compare;
 pub mod extract;
 pub mod mesh;

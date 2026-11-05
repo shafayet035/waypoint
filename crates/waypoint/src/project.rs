@@ -42,12 +42,31 @@ pub struct ModsConfig {
 }
 
 /// Quality settings.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityConfig {
-    /// low, mid or flagship (render resolution, traffic and effects).
+    /// low, mid or flagship (render resolution, traffic and effects). Used by
+    /// `wp run`, the asset budget checks, and the player when `auto` is off
+    /// or the device cannot be measured.
     #[serde(default)]
     pub tier: wp_world::QualityTier,
+    /// The player measures the device on first launch (a renderer benchmark
+    /// plus its memory), picks the tier and keeps it in its settings.toml.
+    #[serde(default = "yes")]
+    pub auto: bool,
+}
+
+impl Default for QualityConfig {
+    fn default() -> Self {
+        QualityConfig {
+            tier: Default::default(),
+            auto: true,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Development-only settings. Leave empty in shipped games.
