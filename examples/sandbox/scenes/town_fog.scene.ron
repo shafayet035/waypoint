@@ -1,0 +1,16 @@
+// The town in thick morning fog (about 100 m visibility): the sun is a pale
+// glow, buildings fade to grey, and traffic drives slower with headlights on.
+(
+  name: "town_fog",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/town.road.ron"),
+  scenery: Some("scenery/town.scenery.ron"),
+  traffic: Some((count: 12, vehicles: ["hatchback", "hatchback", "city_bus"])),
+  pedestrians: Some((count: 8)),
+  weather: Some((fog: 0.85, wetness: 0.3)),
+  time_of_day: Some((hour: 8.0, hours_per_hour: 60.0)),
+  spawns: [
+    (name: "avenue_start", position: (-125.0, -5.25), heading_deg: 0.0),
+    (name: "car_park", position: (-60.0, 50.0), heading_deg: 0.0),
+  ],
+)

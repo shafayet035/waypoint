@@ -1,0 +1,21 @@
+// Traffic in thick fog (about 100 m visibility): AI drivers keep to a speed
+// they can stop from within what they can see, leave longer gaps, and drive
+// with headlights on. Three minutes: no collisions, no red lights, and the
+// town keeps moving.
+(
+  scene: "scenes/town_fog.scene.ron",
+  seed: 3,
+  player: (
+    vehicle: "hatchback",
+    spawn: "car_park",
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 180.0,
+  assert: [
+    NoCollisions,
+    NoRedLightViolations,
+    TrafficFlows(min_trips: 8),
+    NoNaN,
+    Deterministic,
+  ],
+)

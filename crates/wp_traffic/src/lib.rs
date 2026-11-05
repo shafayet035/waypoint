@@ -200,6 +200,8 @@ struct TrafficState {
     rng: SimRng,
     /// Road grip now (1 dry, 0.7 soaked), for driving to the conditions.
     grip: f32,
+    /// How far drivers can see in fog, m; `None` when clear.
+    visibility_m: Option<f32>,
     /// Keep traffic this close to the player, m (None: everywhere).
     radius: Option<f32>,
     /// Vehicles moved back near the player after falling out of range.
@@ -277,6 +279,7 @@ fn traffic(world: &mut World) {
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
             grip: 1.0,
+            visibility_m: None,
             radius: setup.radius_m,
             recycled: 0,
             target: setup.count,
@@ -312,10 +315,14 @@ fn traffic(world: &mut World) {
 
     let bodies = bodies(world);
     let now = world.resource::<wp_core::SimTime>().seconds();
-    let grip = world
-        .get_resource::<wp_world::Weather>()
-        .map_or(1.0, |w| w.grip());
-    world.resource_mut::<TrafficState>().grip = grip;
+    let weather = world.get_resource::<wp_world::Weather>().map(|w| *w);
+    let grip = weather.map_or(1.0, |w| w.grip());
+    let visibility_m = weather.and_then(|w| w.visibility_m());
+    {
+        let mut st = world.resource_mut::<TrafficState>();
+        st.grip = grip;
+        st.visibility_m = visibility_m;
+    }
     let approaching = if roads
         .junctions
         .iter()
@@ -524,6 +531,7 @@ pub fn autopilot(world: &mut World, e: Entity, stops: Vec<Waypoint>) -> bool {
         world.insert_resource(TrafficState {
             rng: SimRng::fork(seed, "traffic"),
             grip: 1.0,
+            visibility_m: None,
             radius: None,
             recycled: 0,
             target: 0,
@@ -755,16 +763,14 @@ fn drive(
     idm.decel *= grip;
     idm.headway_s += (1.0 - grip) * 2.0;
     let lateral = if heavy(def) { 1.8 } else { 2.5 } * grip;
-    let v0 = route_speed_kmh_with(
-        &path,
-        s,
-        v0 * 3.6 * pace * grip.sqrt(),
-        to_stop,
-        lateral,
-        1.0,
-        3.0,
-        idm.decel,
-    ) / 3.6;
+    // In fog: able to stop within the distance they can see, and further apart.
+    let mut cruise_kmh = v0 * 3.6 * pace * grip.sqrt();
+    if let Some(sight) = state.visibility_m {
+        cruise_kmh = cruise_kmh.min(sight_speed_ms(sight, idm.decel) * 3.6);
+        idm.headway_s += (1.0 - sight / 1500.0).clamp(0.0, 1.0);
+    }
+    let v0 =
+        route_speed_kmh_with(&path, s, cruise_kmh, to_stop, lateral, 1.0, 3.0, idm.decel) / 3.6;
 
     // The nearest thing ahead in this lane.
     let fp = vehicle_footprint(def);
@@ -1447,8 +1453,30 @@ pub fn describe(world: &World, e: Entity) -> Option<String> {
     ))
 }
 
+/// The fastest speed (m/s) at which a driver can still stop within
+/// `sight_m`, braking at `decel` m/s² after a second to react.
+pub fn sight_speed_ms(sight_m: f32, decel: f32) -> f32 {
+    const REACT_S: f32 = 1.0;
+    let a = decel.max(0.1);
+    // v·t + v²/2a = sight
+    a * (-REACT_S + (REACT_S * REACT_S + 2.0 * sight_m.max(0.0) / a).sqrt())
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn fog_limits_speed_to_stopping_within_sight() {
+        let v = sight_speed_ms(60.0, 2.5);
+        // Reacting for a second, then braking, stops within 60 m.
+        assert!((v * 1.0 + v * v / 5.0 - 60.0).abs() < 1e-3);
+        assert!((40.0..60.0).contains(&(v * 3.6)), "{} km/h", v * 3.6);
+        assert!(
+            sight_speed_ms(300.0, 2.5) > 25.0,
+            "300 m of sight barely matters in town"
+        );
+    }
+
     use super::*;
     use wp_road::{DriveSide, NodeDef, RoadDef, RoadNetworkDef, RoadShape};
 

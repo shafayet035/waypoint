@@ -35,7 +35,8 @@ struct Globals {
     // (glass m), [4] time, cycle, stroke (s), arm (m), [5] mirrored, park and
     // top angles (rad), share of the arm the blade covers from.
     glass: array<vec4<f32>, 6>,
-    // x: road wetness (0–1), y: rain (0–1), z: simulated time (s), w: unused.
+    // x: road wetness (0–1), y: rain (0–1), z: simulated time (s),
+    // w: ground fog extinction per m (0: no fog).
     weather: vec4<f32>,
 };
 
@@ -141,8 +142,97 @@ fn ambient(n: vec3<f32>) -> vec3<f32> {
 // so big maps keep their precision).
 fn apply_fog(col: vec3<f32>, rel: vec3<f32>) -> vec3<f32> {
     let d = length(rel);
+    if (g.weather.w > 0.0) {
+        return in_fog(col, rel, d);
+    }
     let f = 1.0 - exp(-d * g.params.x);
     return mix(col, g.sky_horizon.rgb, f);
+}
+
+// ---- Weather fog -------------------------------------------------------------
+// Ground fog thins with height (scale FOG_HEIGHT_M), so the fog along a ray has
+// a closed form. It is lit by the sky, by the sun (scattered mostly forwards:
+// a glow round the sun) and by every local light: headlamp beams and halos
+// round street lamps, integrated along the view ray.
+
+const FOG_HEIGHT_M: f32 = 40.0;
+const FOG_LIGHT_STEPS: u32 = 8u;
+// Lamps are far brighter than their light on surfaces suggests (most of it
+// misses what they light); this brings their glow in fog up to that.
+const FOG_GLOW: f32 = 4.0;
+
+// Henyey-Greenstein phase function: how much light turning by an angle with
+// cosine `c` scatters, for forward bias `k`.
+fn phase(c: f32, k: f32) -> f32 {
+    let d = 1.0 + k * k - 2.0 * k * c;
+    return (1.0 - k * k) / (12.566 * d * sqrt(d));
+}
+
+// Fog extinction at world height `z`, per m.
+fn fog_at(z: f32) -> f32 {
+    return g.weather.w * exp(-max(z, 0.0) / FOG_HEIGHT_M);
+}
+
+// How much haze and ground fog lie between the camera and `rel` (`d` = its length).
+fn optical_depth(rel: vec3<f32>, d: f32) -> f32 {
+    let k = rel.z / FOG_HEIGHT_M;
+    // Mean of exp(-z/H) along the ray, relative to the camera's height.
+    let mean = select((1.0 - exp(-k)) / k, 1.0 - 0.5 * k, abs(k) < 1e-3);
+    return d * (g.params.x + fog_at(g.camera_pos.z) * mean);
+}
+
+// Local lights scattered towards the camera by the fog along the ray `v`,
+// out to `len` m. Each light's stretch of the ray is cut into pieces; within a
+// piece the 1/(d² + 1) falloff is integrated exactly (so a lamp's bright core
+// never bands) and the beam shape, range and phase are taken at its middle.
+fn fog_lights(v: vec3<f32>, len: f32) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let count = u32(g.params.w);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let a = g.lights[i * 3u];
+        let b = g.lights[i * 3u + 1u];
+        let tc = dot(a.xyz, v);
+        let h2 = max(dot(a.xyz, a.xyz) - tc * tc, 0.0);
+        if (h2 >= a.w * a.w) {
+            continue;
+        }
+        let half_chord = sqrt(a.w * a.w - h2);
+        let t0 = max(tc - half_chord, 0.0);
+        let t1 = min(tc + half_chord, len);
+        if (t1 <= t0) {
+            continue;
+        }
+        let dir = g.lights[i * 3u + 2u].xyz;
+        let hh = sqrt(h2 + 1.0);
+        let piece = (t1 - t0) / f32(FOG_LIGHT_STEPS);
+        var acc = 0.0;
+        for (var k = 0u; k < FOG_LIGHT_STEPS; k = k + 1u) {
+            let s0 = t0 + piece * f32(k);
+            let mid = s0 + piece * 0.5;
+            let falloff = (atan((s0 + piece - tc) / hh) - atan((s0 - tc) / hh)) / hh;
+            let p = v * mid;
+            let to_p = p - a.xyz;
+            let dist = length(to_p);
+            let l = to_p / max(dist, 1e-3);
+            let x = dist / a.w;
+            let window = clamp(1.0 - x * x * x * x, 0.0, 1.0);
+            var spot = 1.0;
+            if (b.w > -1.5) {
+                spot = smoothstep(b.w, b.w + 0.1, dot(l, dir));
+            }
+            let dens = fog_at(g.camera_pos.z + p.z);
+            acc += falloff * window * window * spot * phase(dot(l, -v), 0.5) * dens * exp(-dens * mid);
+        }
+        sum += b.rgb * acc * FOG_GLOW;
+    }
+    return sum;
+}
+
+fn in_fog(col: vec3<f32>, rel: vec3<f32>, d: f32) -> vec3<f32> {
+    let v = rel / max(d, 1e-4);
+    let f = 1.0 - exp(-optical_depth(rel, d));
+    let sun = g.sun_color.rgb * g.sun_dir.w * phase(dot(v, g.sun_dir.xyz), 0.6) * 0.5;
+    return mix(col, g.sky_horizon.rgb + sun, f) + fog_lights(v, d);
 }
 
 // Headlamps, tail lights and street lamps: Lambert diffuse plus a Blinn
@@ -197,7 +287,11 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     // A point on the near plane (depth 1 with reversed-Z), seen from the camera.
     let p = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
     let dir = normalize(p.xyz / p.w);
-    return vec4<f32>(tonemap(sky_color(dir)), 1.0);
+    var col = sky_color(dir);
+    if (g.weather.w > 0.0) {
+        col = in_fog(col, dir * 4000.0, 4000.0);
+    }
+    return vec4<f32>(tonemap(col), 1.0);
 }
 
 // ---- Ground: a large quad that follows the camera ------------------------

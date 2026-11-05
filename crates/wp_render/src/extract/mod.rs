@@ -187,10 +187,11 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         Some(t) => Environment::at_hour_from(day, t.hour),
         None => day,
     }
-    .with_rain(weather.rain);
+    .with_rain(weather.rain)
+    .with_fog(weather.fog, weather.visibility_m());
     let darkness = environment.darkness();
-    // Drivers switch on at dusk or in heavy rain; street lamps at dusk.
-    let headlights = darkness > 0.25 || weather.rain > 0.5;
+    // Drivers switch on at dusk, in heavy rain or in fog; street lamps at dusk.
+    let headlights = darkness > 0.25 || weather.rain > 0.5 || weather.fog > 0.3;
     let lamps_lit = darkness > 0.4;
     let library = world.get_resource::<VehicleLibrary>();
     let models = world

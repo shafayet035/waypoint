@@ -254,7 +254,7 @@ Screenshot tests: `tests/<name>.shot.ron` (`wp_test::ShotDef`: scenario or scene
 size, optional quality tier, tolerance) + the approved `tests/<name>.png`. `wp test` renders each (`Renderer::set_quality` for
 a tier) and compares with `wp_render::compare` (Oklab distance, 3×3 neighbourhood both ways, % of pixels over a threshold);
 failures write `target/shots/<name>.png` and `.diff.png`; `wp test --approve <name>` saves new pictures; no GPU: skipped.
-WP-O001–O003. Sandbox: town_day, town_night, town_cab, town_cab_rain, town_cab_night_rain, town_wet_night, town_low, crash_building; harbour: harbour_quay. Shipping builds
+WP-O001–O003. Sandbox: town_day, town_night, town_cab, town_cab_rain, town_cab_night_rain, town_wet_night, town_fog, town_night_fog, town_low, crash_building; harbour: harbour_quay. Shipping builds
 leave tests/ out (only scenarios with `--with-tests`).
 Windscreen rain (`extract::windscreen`): in the cab view in rain, a glass quad is blended over the scene (`fs_glass`; hidden
 behind the cab, writes no depth). Drops are not stored: each sits in a cell of four grids on the glass and shows once its
@@ -268,6 +268,15 @@ sidewalks 0.3); with `weather.wetness` > 0, `fs_mesh` adds noise puddles (darker
 `wet_streaks`: every light in view reflected through a lobe that is narrow sideways and long towards the viewer at low angles
 (σ·cos θ by 2.5σ), so headlights, tail lamps and street lamps streak down the road; brightness goes with how bright a light
 looks (√ intensity), not its range. Dry frames take no wet branch (pictures unchanged). Shot `town_wet_night`.
+Fog: scene `weather: Some((fog: 0.85))` (0–1; `Weather::visibility_m`: 1500 m × 0.04^fog, so 1.0 ≈ 60 m, 0.85 ≈ 100 m). Renderer:
+`Environment::with_fog` greys the sky, dims the sun and sets `ground_fog` = 3 / visibility (extinction per m at ground level,
+`Globals.weather.w`); the shader's `in_fog` integrates fog that thins with height (40 m scale, closed form along the ray), lit by the
+sky and by the sun through a forward-scattering phase function, plus `fog_lights`: each local light's in-scattering along the view
+ray in 8 pieces (falloff integrated exactly per piece; beam shape and phase at the middle), so headlamp beams, lamp cones and halos
+show. The sky is fogged too. Clear weather takes the old path (pictures unchanged). Headlights come on in fog > 0.3. AI traffic
+caps its speed to stop within sight (`wp_traffic::sight_speed_ms`: 1 s reaction, comfortable braking) and leaves longer gaps; the
+world hash is unchanged without fog. Sandbox: `scenes/town_fog`, `town_night_fog`; shots `town_fog`, `town_night_fog`; gate
+`town_fog_traffic` (3 min, no collisions or red lights). Cost: ~15 % frame time at Flagship (64 lights) on the M4.
 Automatic quality: game.toml `[quality] auto = true` (default): the player measures the device on first launch and keeps the
 tier in `settings.toml` in its data folder (`wp_platform::settings`; edit `tier` to override, delete to re-measure). The measure is
 `wp_render::bench`: an engine-owned rainy night grid town (generated buildings, trees, lamps, 40 cars with headlights) drawn

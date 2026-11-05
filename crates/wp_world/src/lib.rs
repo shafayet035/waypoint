@@ -40,7 +40,8 @@ pub struct SceneDef {
     /// People walking the sidewalks (roads need `sidewalk_m` > 0).
     #[serde(default)]
     pub pedestrians: Option<PedestrianDef>,
-    /// Rain. Wet roads have less grip; drivers slow down.
+    /// Rain and fog. Wet roads have less grip, fog hides what is ahead;
+    /// drivers slow down for both.
     #[serde(default)]
     pub weather: Option<WeatherDef>,
     /// Time of day (sun, sky, headlights, street lamps). Absent: early afternoon.
@@ -211,6 +212,9 @@ pub struct WeatherDef {
     /// How wet the road is, 0 to 1; defaults to `rain`.
     #[serde(default)]
     pub wetness: Option<f32>,
+    /// Fog, 0 (none) to 1 (thick: about 60 m visibility; 0.5 is about 300 m).
+    #[serde(default)]
+    pub fog: f32,
 }
 
 /// The weather now (`world.set` on "Weather" changes it live).
@@ -222,9 +226,23 @@ pub struct Weather {
     pub wetness: f32,
     /// The scene's dry-road grip, which wetness scales.
     pub dry_friction: f32,
+    /// Fog, 0 (none) to 1 (thick).
+    #[serde(default)]
+    pub fog: f32,
 }
 
+/// Visibility in clear air and in the thickest fog, m.
+const CLEAR_M: f32 = 1500.0;
+const THICK_M: f32 = 60.0;
+
 impl Weather {
+    /// How far one can see in this fog, m (the distance where contrast drops
+    /// to 5 %); `None` without fog.
+    pub fn visibility_m(&self) -> Option<f32> {
+        let f = self.fog.clamp(0.0, 1.0);
+        (f > 0.001).then(|| CLEAR_M * (THICK_M / CLEAR_M).powf(f))
+    }
+
     /// Grip multiplier on a road this wet: 1.0 dry, 0.7 soaked (typical
     /// asphalt goes from μ ≈ 1.0 to ≈ 0.7).
     pub fn grip(&self) -> f32 {
@@ -454,6 +472,7 @@ pub fn apply_scene(
         rain: weather.rain.clamp(0.0, 1.0),
         wetness: weather.wetness.unwrap_or(weather.rain).clamp(0.0, 1.0),
         dry_friction: scene.ground.friction_scale,
+        fog: weather.fog.clamp(0.0, 1.0),
     };
     world.insert_resource(Ground {
         friction_scale: scene.ground.friction_scale * w.grip(),

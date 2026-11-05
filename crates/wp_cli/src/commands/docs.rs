@@ -104,6 +104,8 @@ Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
 wet roads streak with lights and hold puddles;
 in the cab view, drops gather on the windscreen and the wipers run faster in harder rain;
+fog: 0.85 is about 100 m visibility, 1.0 about 60 m: ground fog, beams and halos round lamps, AI drivers
+keep to a speed they can stop within sight, headlights on;
 \"Weather\" can be changed live with world.set), pedestrians: Some((count: 30)) (they walk
 roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))],
 time_of_day: Some((hour: 21.5, hours_per_hour: 60.0)) (night: headlights and street lamps; \"TimeOfDay\" is live-editable),

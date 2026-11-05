@@ -1372,7 +1372,12 @@ impl Renderer {
             glass: frame
                 .windscreen
                 .map_or([[0.0; 4]; 6], |w| Self::glass_uniform(&w, eye)),
-            weather: [frame.wetness.clamp(0.0, 1.0), frame.rain, frame.time_s, 0.0],
+            weather: [
+                frame.wetness.clamp(0.0, 1.0),
+                frame.rain,
+                frame.time_s,
+                env.ground_fog,
+            ],
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame

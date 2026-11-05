@@ -53,6 +53,9 @@ pub struct Environment {
     pub ground_base: Vec3,
     pub ground_line: Vec3,
     pub fog_density: f32,
+    /// Weather fog at ground level, extinction per m (3 / visibility); 0:
+    /// none. It thins with height, so the sky overhead stays lighter.
+    pub ground_fog: f32,
     pub exposure: f32,
 }
 
@@ -73,6 +76,7 @@ impl Default for Environment {
             ground_base: Vec3::new(0.055, 0.057, 0.062),
             ground_line: Vec3::new(0.5, 0.5, 0.46),
             fog_density: 0.0012,
+            ground_fog: 0.0,
             exposure: 1.0,
         }
     }
@@ -151,6 +155,26 @@ impl Environment {
         self.sun_color = self.sun_color.lerp(Vec3::new(0.85, 0.88, 0.92), r);
         self.fog_density *= 1.0 + 3.0 * r;
         self.exposure *= 1.0 + 0.35 * r;
+        self
+    }
+
+    /// The same light in fog `amount` (0–1) that one can see `visibility_m`
+    /// through: a grey sky, a sun dimmed to a glow, light from everywhere.
+    pub fn with_fog(mut self, amount: f32, visibility_m: Option<f32>) -> Self {
+        let Some(sight) = visibility_m else {
+            return self;
+        };
+        let f = amount.clamp(0.0, 1.0);
+        let light = 1.0 - self.darkness();
+        // Lit by day; at night faintly warm from the town's lights.
+        let grey = Vec3::new(0.03, 0.027, 0.024).lerp(Vec3::new(0.6, 0.62, 0.64), light);
+        self.sky_zenith = self.sky_zenith.lerp(grey * 0.9, f * 0.85);
+        self.sky_horizon = self.sky_horizon.lerp(grey, f * 0.95);
+        self.sun_intensity *= 1.0 - 0.8 * f;
+        self.sun_color = self.sun_color.lerp(Vec3::new(0.95, 0.93, 0.9), f);
+        // Fog is defined by visibility: contrast falls to 5 % at `sight`.
+        self.ground_fog = 3.0 / sight.max(1.0);
+        self.exposure *= 1.0 + 0.25 * f;
         self
     }
 }
