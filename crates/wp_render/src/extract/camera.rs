@@ -140,8 +140,11 @@ impl Environment {
     /// The same light under rain `r` (0–1): overcast sky, weaker sun, haze.
     pub fn with_rain(mut self, r: f32) -> Self {
         let r = r.clamp(0.0, 1.0);
-        let grey_zenith = Vec3::new(0.36, 0.39, 0.44);
-        let grey_horizon = Vec3::new(0.55, 0.57, 0.6);
+        // Cloud is grey by day; at night it is dark, lit faintly from below
+        // by the town (warmer at the horizon).
+        let light = 1.0 - self.darkness();
+        let grey_zenith = Vec3::new(0.008, 0.009, 0.012).lerp(Vec3::new(0.36, 0.39, 0.44), light);
+        let grey_horizon = Vec3::new(0.03, 0.026, 0.022).lerp(Vec3::new(0.55, 0.57, 0.6), light);
         self.sky_zenith = self.sky_zenith.lerp(grey_zenith, r * 0.9);
         self.sky_horizon = self.sky_horizon.lerp(grey_horizon, r * 0.9);
         self.sun_intensity *= 1.0 - 0.75 * r;

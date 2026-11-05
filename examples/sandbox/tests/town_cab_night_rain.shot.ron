@@ -1,0 +1,3 @@
+// A wet night from the driver's seat: street lamps and lights glint in the
+// drops, and wet glass glows round them.
+(scene: Some("scenes/town_night_rain.scene.ron"), vehicle: Some("hatchback"), throttle: 0.3, at_s: 6.2, camera: Cab)

@@ -859,7 +859,10 @@ fn screenshot_tests_fail_until_approved_then_pass() {
     )
     .unwrap();
     let (_, v) = json(&game, &["check"]);
-    assert!(v.to_string().contains("WP-O002"), "no approved picture: {v}");
+    assert!(
+        v.to_string().contains("WP-O002"),
+        "no approved picture: {v}"
+    );
     let (code, v) = json(&game, &["test", "flat_chase"]);
     if v["skipped"] == 1 {
         return; // no GPU here

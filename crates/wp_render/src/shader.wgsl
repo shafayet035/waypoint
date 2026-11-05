@@ -30,6 +30,11 @@ struct Globals {
     lights: array<vec4<f32>, 192>,
     // Art style: x toon bands (0 = smooth), y saturation, z ground grid (0/1), w flat (0/1).
     style: vec4<f32>,
+    // Windscreen (cab view in the rain): [0] bottom-left corner (camera-relative)
+    // + width, [1] unit across + height, [2] unit up + rain, [3] wiper pivots
+    // (glass m), [4] time, cycle, stroke (s), arm (m), [5] mirrored, park and
+    // top angles (rad), share of the arm the blade covers from.
+    glass: array<vec4<f32>, 6>,
 };
 
 // Light falling on a surface (0–1) in the game's style: smooth, in hard toon
@@ -434,4 +439,181 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
 fn vs_shadow(v: VertexIn, inst: InstanceIn) -> @builtin(position) vec4<f32> {
     let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
     return g.light_view_proj * model * vec4<f32>(v.position, 1.0);
+}
+
+// ---- Windscreen: rain drops and the wipers that clear them ------------------
+// Drops are not stored: each sits in a cell of a grid on the glass, and is
+// there if its cell's random arrival time has passed since a blade last
+// crossed it (the same maths as `Wipers::since_wiped` in Rust).
+
+struct GlassOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) rel: vec3<f32>,
+    // Metres across and up the glass from its bottom-left corner.
+    @location(1) st: vec2<f32>,
+};
+
+@vertex
+fn vs_glass(@builtin(vertex_index) i: u32) -> GlassOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let st = corners[i] * vec2<f32>(g.glass[0].w, g.glass[1].w);
+    var out: GlassOut;
+    out.rel = g.glass[0].xyz + g.glass[1].xyz * st.x + g.glass[2].xyz * st.y;
+    out.pos = g.view_proj * vec4<f32>(out.rel, 1.0);
+    out.st = st;
+    return out;
+}
+
+// Seconds since a blade last crossed `p`, a number for that pass, and the
+// distance from its pivot. Never wiped: (1e6, 0, 0).
+fn since_wiped(p: vec2<f32>) -> vec3<f32> {
+    var best = vec3<f32>(1e6, 0.0, 0.0);
+    let t = g.glass[4].x;
+    let cycle = g.glass[4].y;
+    let stroke = g.glass[4].z;
+    let arm = g.glass[4].w;
+    if (cycle <= 0.0) {
+        return best;
+    }
+    let park = g.glass[5].y;
+    let top = g.glass[5].z;
+    let q = vec2<f32>(select(p.x, g.glass[0].w - p.x, g.glass[5].x > 0.5), p.y);
+    let n = floor(t / cycle);
+    let tau = t - n * cycle;
+    for (var k = 0u; k < 2u; k = k + 1u) {
+        let pivot = select(g.glass[3].zw, g.glass[3].xy, k == 0u);
+        let d = q - pivot;
+        let r = length(d);
+        let f = (atan2(d.y, d.x) - park) / (top - park);
+        if (r < arm * g.glass[5].w || r > arm || f < 0.0 || f > 1.0) {
+            continue;
+        }
+        let up = stroke / 6.2831853 * acos(1.0 - 2.0 * f);
+        let down = stroke - up;
+        var at = (n - 1.0) * cycle + down;
+        var crossing = n * 2.0 - 1.0;
+        if (tau >= down) {
+            at = n * cycle + down;
+            crossing = n * 2.0 + 1.0;
+        } else if (tau >= up) {
+            at = n * cycle + up;
+            crossing = n * 2.0;
+        }
+        let since = t - at;
+        if (since < best.x) {
+            best = vec3<f32>(since, crossing * 2.0 + f32(k), r);
+        }
+    }
+    return best;
+}
+
+// Bright lights seen through wet glass: water scatters them into a soft
+// glow round each one (`spread`: higher is tighter), for view direction `dir`.
+fn wet_glow(dir: vec3<f32>, rel: vec3<f32>, spread: f32) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let count = u32(g.params.w);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let a = g.lights[i * 3u];
+        let b = g.lights[i * 3u + 1u];
+        let d = a.xyz - rel;
+        let dist = length(d);
+        let l = d / max(dist, 1e-3);
+        var facing = 1.0;
+        if (b.w > -1.5) {
+            // Lamps glint even a little outside their beam.
+            facing = smoothstep(b.w - 0.35, b.w + 0.05, dot(-l, g.lights[i * 3u + 2u].xyz));
+        }
+        sum = sum + b.rgb * facing * pow(max(dot(dir, l), 0.0), spread) / (1.0 + dist * dist * 0.01);
+    }
+    return sum;
+}
+
+// What a drop shows: the scene beyond, upside down and shrunk (a tiny lens),
+// as the sky above and the lit ground below, with a bright point for every
+// light in view.
+fn seen_through(dir: vec3<f32>, rel: vec3<f32>) -> vec3<f32> {
+    let sun = g.sun_color.rgb * g.sun_dir.w * max(g.sun_dir.z, 0.0);
+    let ground = g.ground_base.rgb * (sun + ambient(vec3<f32>(0.0, 0.0, 1.0)));
+    let col = mix(sky_color(dir), ground, smoothstep(0.0, -0.12, dir.z));
+    return col + wet_glow(dir, rel, 80.0) * 3.0;
+}
+
+// One layer of drops: cells `cell` m wide, radii `r0`–`r1` m, a drop in a
+// share `chance` of cells, all arrived within `fill` s of a wipe.
+// Returns premultiplied colour and coverage.
+fn drop_layer(p: vec2<f32>, fw: f32, cell: f32, r0: f32, r1: f32, chance: f32, fill: f32,
+              layer: f32, rel: vec3<f32>, toward_eye: vec3<f32>) -> vec4<f32> {
+    let c = floor(p / cell);
+    let wiped = since_wiped((c + 0.5) * cell);
+    let seed = vec3<f32>(c, layer * 41.0 + wiped.y * 7.0);
+    if (hash3(seed) > chance || wiped.x < hash3(seed + 11.3) * fill) {
+        return vec4<f32>(0.0);
+    }
+    let h = hash3(seed + 23.7);
+    let r = mix(r0, r1, h * h);
+    let centre = c * cell + vec2<f32>(r) + (cell - 2.0 * r)
+        * vec2<f32>(hash3(seed + 37.1), hash3(seed + 51.9));
+    // Drops smaller than a pixel spread to one and fade instead of flickering.
+    let re = max(r, fw);
+    let q = (p - centre) / re;
+    let dd = length(q);
+    let cover = clamp((1.0 - dd) * re / fw + 0.5, 0.0, 1.0) * (r / re) * (r / re);
+    if (cover <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let across = g.glass[1].xyz;
+    let up = g.glass[2].xyz;
+    let v = normalize(rel);
+    // Looking through a drop bends the view outwards from its centre:
+    // its top shows the road, its bottom the sky.
+    let bend = (across * q.x + up * q.y) * 0.5;
+    let dir = normalize(v - bend);
+    var col = seen_through(dir, rel) + wet_glow(v, rel, 60.0) * 0.12;
+    // The rim turns light away; the near side catches the sky faintly.
+    let rim = smoothstep(0.45, 1.0, dd);
+    col = col * mix(1.0, 0.2, rim);
+    let n = normalize(toward_eye * sqrt(max(1.0 - dd * dd, 0.0)) * 1.5 + across * q.x + up * q.y);
+    col = col + sky_color(reflect(v, n)) * 0.04;
+    // The middle of a drop lets some of the view behind it through.
+    let a = cover * mix(0.6, 0.95, rim);
+    return vec4<f32>(tonemap(col) * a, a);
+}
+
+@fragment
+fn fs_glass(in: GlassOut) -> @location(0) vec4<f32> {
+    let fw = max(length(fwidth(in.st)) * 0.7, 1e-5);
+    let rain = g.glass[2].w;
+    let across = g.glass[1].xyz;
+    let up = g.glass[2].xyz;
+    var toward_eye = normalize(cross(across, up));
+    if (dot(toward_eye, -in.rel) < 0.0) {
+        toward_eye = -toward_eye;
+    }
+    // Drops gather faster in harder rain.
+    let fill = mix(8.0, 1.6, rain);
+    let wiped = since_wiped(in.st);
+    // A thin veil of water, thinner where a blade has just passed, with
+    // fresh streaks behind the blade that dry in a moment.
+    let settled = min(wiped.x / fill, 1.0);
+    let streaks = exp(-wiped.x * 12.0) * smoothstep(0.0, 0.04, wiped.x) * smoothstep(0.55, 0.9, value_noise(vec2<f32>(wiped.z * 900.0, wiped.y * 3.1)));
+    let veil_a = rain * (0.03 + 0.05 * settled) + 0.05 * rain * streaks;
+    let veil = g.sky_horizon.rgb * 0.9 + wet_glow(normalize(in.rel), in.rel, 60.0) * 0.6;
+    var acc = vec4<f32>(tonemap(veil) * veil_a, veil_a);
+    let more = 0.35 + 0.65 * rain;
+    let layers = array<vec4<f32>, 4>(
+        // cell, smallest and largest radius (m), share of cells with a drop
+        vec4<f32>(0.006, 0.0006, 0.0014, 0.5),
+        vec4<f32>(0.012, 0.0012, 0.003, 0.5),
+        vec4<f32>(0.022, 0.0025, 0.0055, 0.45),
+        vec4<f32>(0.045, 0.004, 0.0095, 0.3),
+    );
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        let L = layers[k];
+        let d = drop_layer(in.st, fw, L.x, L.y, L.z, L.w * more, fill, f32(k), in.rel, toward_eye);
+        acc = d + acc * (1.0 - d.a);
+    }
+    return acc;
 }

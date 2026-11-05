@@ -8,6 +8,7 @@ mod signal;
 mod stop;
 mod trailer;
 mod vehicle;
+pub mod windscreen;
 
 pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
@@ -17,6 +18,7 @@ use stop::stop_items;
 use trailer::trailer_items;
 pub use vehicle::{BodyShape, body_matrix, body_shape, cab_eye};
 use vehicle::{palette, vehicle_items};
+pub use windscreen::{Windscreen, WiperSpeed, Wipers};
 
 use glam::{Mat4, Quat, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -118,6 +120,8 @@ pub struct FrameView {
     pub deformed: Vec<DeformedModel>,
     /// The game's art style.
     pub look: wp_world::Look,
+    /// Rain on the windscreen (cab view in the rain).
+    pub windscreen: Option<Windscreen>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -188,6 +192,10 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         .get_resource::<wp_asset::Models>()
         .map(|m| m.0.clone());
     let players = world.query::<&Player>().entities();
+    let time_s = world
+        .get_resource::<wp_core::SimTime>()
+        .map_or(0.0, |t| t.seconds()) as f32;
+    let mut windscreen = None;
 
     world
         .query::<(&Pose, &Vehicle)>()
@@ -311,6 +319,26 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                     let (eye, fov) = cab_eye(&def, left_seat);
                     let body = body_matrix(&def, &pose, &veh);
                     vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
+                    let glass = windscreen::glass(body_shape(&def).width / 2.0 - 0.06, eye);
+                    let wipers = Wipers::for_glass(
+                        glass.1,
+                        glass.2,
+                        !left_seat,
+                        WiperSpeed::for_rain(weather.rain),
+                    );
+                    windscreen::wiper_items(&mut items, body, glass, &wipers, time_s);
+                    if weather.rain > 0.01 {
+                        windscreen = Some(Windscreen {
+                            origin: body.transform_point3(glass.0),
+                            across: body.transform_vector3(Vec3::NEG_Y).normalize(),
+                            up: body.transform_vector3(Vec3::Z).normalize(),
+                            width_m: glass.1,
+                            height_m: glass.2,
+                            rain: weather.rain,
+                            time_s,
+                            wipers,
+                        });
+                    }
                     let at = body.transform_point3(eye);
                     let (yaw, pitch) = view.look;
                     let gaze = Quat::from_rotation_z(yaw.clamp(-2.4, 2.4))
@@ -341,9 +369,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         camera.eye = camera.target + span * keep;
     }
     if weather.rain > 0.01 {
-        let t = world
-            .get_resource::<wp_core::SimTime>()
-            .map_or(0.0, |t| t.seconds()) as f32;
+        let t = time_s;
         let density = world
             .get_resource::<wp_world::Quality>()
             .map_or(1.0, |q| q.0.rain_density());
@@ -363,6 +389,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         lights,
         deformed,
         look,
+        windscreen,
     }
 }
 

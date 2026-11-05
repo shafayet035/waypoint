@@ -15,7 +15,8 @@ pub mod mesh;
 
 pub use extract::{
     BlobShadow, Camera, CameraMode, ChaseSmoothing, DeformedModel, DrawItem, Environment,
-    FrameView, MeshId, PointLight, ViewOptions, extract, extract_view, extract_with,
+    FrameView, MeshId, PointLight, ViewOptions, Windscreen, WiperSpeed, Wipers, extract,
+    extract_view, extract_with,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -49,6 +50,8 @@ struct Globals {
     lights: [[f32; 4]; MAX_LIGHTS * 3],
     /// Art style: toon bands (0 = smooth), saturation, grid (0/1), flat (0/1).
     style: [f32; 4],
+    /// Windscreen (see [`Renderer::glass_uniform`]).
+    glass: [[f32; 4]; 6],
 }
 
 /// Most local lights a frame can use (the uniform's size).
@@ -779,6 +782,7 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
+    glass: wgpu::RenderPipeline,
     cube: GpuMesh,
     wheel: GpuMesh,
     /// Crown, far crown, cone, far cone, palm fronds.
@@ -907,7 +911,8 @@ impl Renderer {
                         buffers: &[Option<wgpu::VertexBufferLayout>],
                         depth_write: bool,
                         compare: wgpu::CompareFunction,
-                        cull: Option<wgpu::Face>| {
+                        cull: Option<wgpu::Face>,
+                        blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -938,7 +943,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -971,6 +976,7 @@ impl Renderer {
             false,
             wgpu::CompareFunction::Always,
             None,
+            None,
         );
         let ground = pipeline(
             "ground",
@@ -979,6 +985,7 @@ impl Renderer {
             &[],
             true,
             wgpu::CompareFunction::Greater,
+            None,
             None,
         );
         let meshes_pipeline = pipeline(
@@ -989,6 +996,19 @@ impl Renderer {
             true,
             wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
+            None,
+        );
+        // Rain on the windscreen: blended over the scene, hidden behind the
+        // cab (steering wheel, dashboard), writing no depth.
+        let glass = pipeline(
+            "windscreen",
+            "vs_glass",
+            "fs_glass",
+            &[],
+            false,
+            wgpu::CompareFunction::Greater,
+            None,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
 
         let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1040,6 +1060,7 @@ impl Renderer {
             sky,
             ground,
             meshes_pipeline,
+            glass,
             cube: GpuMesh::new(gpu, &mesh::cube(), "cube"),
             wheel: GpuMesh::new(gpu, &mesh::wheel(), "wheel"),
             trees: [
@@ -1068,6 +1089,27 @@ impl Renderer {
             max_height: None,
             upscaler: None,
         }
+    }
+
+    /// The windscreen for the shader: corner (camera-relative) + width,
+    /// across + height, up + rain, the two pivots, (time, cycle, stroke,
+    /// arm), (mirrored, park angle, top angle, unused).
+    fn glass_uniform(w: &Windscreen, eye: glam::Vec3) -> [[f32; 4]; 6] {
+        let (cycle, stroke) = w.wipers.speed.timing().unwrap_or((0.0, 0.0));
+        let [a, b] = w.wipers.pivots;
+        [
+            (w.origin - eye).extend(w.width_m).to_array(),
+            w.across.extend(w.height_m).to_array(),
+            w.up.extend(w.rain).to_array(),
+            [a.x, a.y, b.x, b.y],
+            [w.time_s, cycle, stroke, w.wipers.arm_m],
+            [
+                if w.wipers.mirrored { 1.0 } else { 0.0 },
+                extract::windscreen::PARK_RAD,
+                extract::windscreen::TOP_RAD,
+                extract::windscreen::BLADE_FROM,
+            ],
+        ]
     }
 
     /// Cap the internal rendering height (quality tiers): taller windows
@@ -1290,6 +1332,9 @@ impl Renderer {
                     0.0
                 },
             ],
+            glass: frame
+                .windscreen
+                .map_or([[0.0; 4]; 6], |w| Self::glass_uniform(&w, eye)),
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1611,6 +1656,13 @@ impl Renderer {
                 stats.draw_calls += 1;
                 stats.triangles += mesh.index_count as u64 / 3 * count;
                 first += count;
+            }
+            if frame.windscreen.is_some() {
+                pass.set_pipeline(&self.glass);
+                pass.set_bind_group(1, &self.textures.white, &[]);
+                pass.draw(0..6, 0..1);
+                stats.draw_calls += 1;
+                stats.triangles += 2;
             }
         }
         if let Some(u) = &self.upscaler {

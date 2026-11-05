@@ -1,0 +1,15 @@
+// The town on a wet night: heavy rain, street lamps and headlights in every
+// drop on the windscreen (press C for the cab view). Wipers run fast.
+(
+  name: "town_night_rain",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/town.road.ron"),
+  scenery: Some("scenery/town.scenery.ron"),
+  traffic: Some((count: 12, vehicles: ["hatchback", "hatchback", "city_bus"])),
+  pedestrians: Some((count: 8)),
+  weather: Some((rain: 0.8)),
+  time_of_day: Some((hour: 22.0, hours_per_hour: 60.0)),
+  spawns: [
+    (name: "avenue_start", position: (-125.0, -5.25), heading_deg: 0.0),
+  ],
+)
