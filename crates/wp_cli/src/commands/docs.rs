@@ -95,6 +95,7 @@ Collision (bodies touching, or other: \"building\"; impact_kmh, and a dent in ea
 
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
+wet roads streak with lights and hold puddles;
 in the cab view, drops gather on the windscreen and the wipers run faster in harder rain;
 \"Weather\" can be changed live with world.set), pedestrians: Some((count: 30)) (they walk
 roads with sidewalk_m > 0 and cross at zebras), parked: [(vehicle: \"city_bus\", position: (80.0, 0.0))],

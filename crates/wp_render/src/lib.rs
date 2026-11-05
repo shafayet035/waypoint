@@ -52,6 +52,8 @@ struct Globals {
     style: [f32; 4],
     /// Windscreen (see [`Renderer::glass_uniform`]).
     glass: [[f32; 4]; 6],
+    /// Road wetness (0–1), rain (0–1), simulated time (s), unused.
+    weather: [f32; 4],
 }
 
 /// Most local lights a frame can use (the uniform's size).
@@ -1335,6 +1337,7 @@ impl Renderer {
             glass: frame
                 .windscreen
                 .map_or([[0.0; 4]; 6], |w| Self::glass_uniform(&w, eye)),
+            weather: [frame.wetness.clamp(0.0, 1.0), frame.rain, frame.time_s, 0.0],
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1375,10 +1378,12 @@ impl Renderer {
             .zip(road_colours)
             .enumerate()
             .map(|(i, ((_, rough), c))| {
-                let (dark, gloss) = match i {
-                    0 => (0.45, 0.18),
-                    1 => (0.15, 0.3),
-                    _ => (0.3, 0.45),
+                // Darkening and roughness when soaked, and how readily
+                // puddles form (markings match the asphalt under them).
+                let (dark, gloss, pools) = match i {
+                    0 => (0.45, 0.18, 1.0),
+                    1 => (0.15, 0.3, 1.0),
+                    _ => (0.3, 0.45, 0.3),
                 };
                 let k = 1.0 - dark * w;
                 InstanceRaw {
@@ -1389,7 +1394,8 @@ impl Renderer {
                         [0.0, 0.0, 1.0, 0.0],
                     ],
                     color: [c[0] * k, c[1] * k, c[2] * k, 1.0],
-                    material: [rough + (gloss - rough) * w, 0.0, 0.0, 0.0],
+                    // w > 0: this surface gathers water (streaks, puddles).
+                    material: [rough + (gloss - rough) * w, 0.0, 0.0, pools],
                 }
             })
             .collect();

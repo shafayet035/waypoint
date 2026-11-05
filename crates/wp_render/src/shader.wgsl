@@ -35,6 +35,8 @@ struct Globals {
     // (glass m), [4] time, cycle, stroke (s), arm (m), [5] mirrored, park and
     // top angles (rad), share of the arm the blade covers from.
     glass: array<vec4<f32>, 6>,
+    // x: road wetness (0–1), y: rain (0–1), z: simulated time (s), w: unused.
+    weather: vec4<f32>,
 };
 
 // Light falling on a surface (0–1) in the game's style: smooth, in hard toon
@@ -344,6 +346,55 @@ fn hash3(p: vec3<f32>) -> f32 {
     return fract((q.x + q.y) * q.z);
 }
 
+// Where water stands: patches covering about a fifth of a surface with
+// `share` 1 (asphalt), fewer on smaller shares (raised sidewalks drain).
+fn puddles(p: vec2<f32>, share: f32) -> f32 {
+    let n = value_noise(p * 0.22) * 0.65 + value_noise(p * 0.8 + 17.0) * 0.35;
+    let at = 0.74 - 0.1 * share;
+    return smoothstep(at, at + 0.07, n);
+}
+
+// Lights reflected in wet ground. Water roughened by rain reflects a light
+// over a lobe `sigma` rad wide; seen at a low angle the lobe is narrow
+// sideways and long towards the viewer, so lamps and headlights draw long
+// streaks down the road. Lights count by how bright they look, not by how
+// far they shine, so tail lamps streak too.
+fn wet_streaks(rel: vec3<f32>, n: vec3<f32>, v: vec3<f32>, sigma: f32) -> vec3<f32> {
+    let r = reflect(-v, n);
+    let flat_side = cross(r, vec3<f32>(0.0, 0.0, 1.0));
+    if (dot(flat_side, flat_side) < 1e-6) {
+        return vec3<f32>(0.0);
+    }
+    let side = normalize(flat_side);
+    let rise = cross(side, r);
+    let cos_i = max(dot(n, v), 0.02);
+    let sx = sigma * cos_i + 0.002;
+    let sy = sigma * 2.5;
+    let fresnel = 0.02 + 0.98 * pow(1.0 - cos_i, 5.0);
+    var sum = vec3<f32>(0.0);
+    let count = u32(g.params.w);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let a = g.lights[i * 3u];
+        let b = g.lights[i * 3u + 1u];
+        let d = a.xyz - rel;
+        let dist = length(d);
+        let l = d / max(dist, 1e-3);
+        if (dot(l, r) < 0.5) {
+            continue;
+        }
+        var facing = 1.0;
+        if (b.w > -1.5) {
+            facing = smoothstep(b.w - 0.5, b.w, dot(-l, g.lights[i * 3u + 2u].xyz));
+        }
+        let dx = dot(l, side) / sx;
+        let dy = dot(l, rise) / sy;
+        let lobe = exp(-0.5 * (dx * dx + dy * dy)) / (6.2831853 * sx * sy);
+        let peak = max(max(b.r, b.g), max(b.b, 1e-4));
+        sum = sum + b.rgb / peak * sqrt(peak) * facing * lobe / (1.0 + dist * dist * 0.02);
+    }
+    return sum * fresnel * 0.25;
+}
+
 @vertex
 fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
@@ -404,7 +455,18 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let n = perturb_normal(n_geo, in.rel, in.uv, normal_map, mat.params.x);
     let l = g.sun_dir.xyz;
     let v = normalize(-in.rel);
-    let rough = mix(clamp(in.material.x * mr.g, 0.02, 1.0), 0.06, glass);
+    var rough = mix(clamp(in.material.x * mr.g, 0.02, 1.0), 0.06, glass);
+    // Wet roads (material.w > 0 marks surfaces that gather water, and how
+    // readily puddles form): puddles, darker and mirror-smooth, and streaks
+    // of every light in view.
+    let wet = select(0.0, g.weather.x, in.material.w > 0.0);
+    var puddle = 0.0;
+    var albedo_wet = albedo;
+    if (wet > 0.0) {
+        puddle = puddles(in.rel.xy + g.camera_pos.xy, in.material.w) * wet;
+        albedo_wet = albedo * (1.0 - 0.55 * puddle);
+        rough = mix(rough, 0.03, puddle);
+    }
     let metal = clamp(in.material.y * mr.b, 0.0, 1.0);
 
     let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n_geo));
@@ -416,19 +478,23 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
         spec = step(8.0, spec) * 4.0;
     }
     spec = spec * (1.0 - g.style.w);
-    let f0 = mix(vec3<f32>(0.04), albedo, metal);
+    let f0 = mix(vec3<f32>(0.04), albedo_wet, metal);
     let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
 
     let sun = g.sun_color.rgb * g.sun_dir.w;
-    let diffuse = albedo * (1.0 - metal) * (sun * ndl + ambient(n) * ao);
+    let diffuse = albedo_wet * (1.0 - metal) * (sun * ndl + ambient(n) * ao);
     // Rough surfaces scatter the sky reflection away: fade it with roughness².
     let gloss = (1.0 - rough) * (1.0 - rough) * (1.0 - g.style.w) * select(1.0, 0.4, g.style.x > 0.5);
-    let env = sky_color(reflect(-v, n)) * fresnel * gloss * ao;
+    // Puddles also mirror the darker street round them, not just the sky.
+    let env = sky_color(reflect(-v, n)) * fresnel * gloss * ao * (1.0 - 0.45 * puddle);
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
-    col += local_lights(in.rel, n, v, albedo * (1.0 - metal), rough);
+    col += local_lights(in.rel, n, v, albedo_wet * (1.0 - metal), rough);
     // Glow: the emissive map's colour if there is one, else the surface's.
-    col += mix(albedo, glow, mat.params.z) * in.material.z;
+    col += mix(albedo_wet, glow, mat.params.z) * in.material.z;
     col += window_glow;
+    if (wet > 0.0) {
+        col += wet_streaks(in.rel, n_geo, v, mix(mix(0.12, 0.05, wet), 0.012, puddle)) * wet;
+    }
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
 }

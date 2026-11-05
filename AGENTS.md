@@ -254,7 +254,7 @@ Screenshot tests: `tests/<name>.shot.ron` (`wp_test::ShotDef`: scenario or scene
 size, optional quality tier, tolerance) + the approved `tests/<name>.png`. `wp test` renders each (`Renderer::set_quality` for
 a tier) and compares with `wp_render::compare` (Oklab distance, 3×3 neighbourhood both ways, % of pixels over a threshold);
 failures write `target/shots/<name>.png` and `.diff.png`; `wp test --approve <name>` saves new pictures; no GPU: skipped.
-WP-O001–O003. Sandbox: town_day, town_night, town_cab, town_cab_rain, town_cab_night_rain, town_low, crash_building; harbour: harbour_quay. Shipping builds
+WP-O001–O003. Sandbox: town_day, town_night, town_cab, town_cab_rain, town_cab_night_rain, town_wet_night, town_low, crash_building; harbour: harbour_quay. Shipping builds
 leave tests/ out (only scenarios with `--with-tests`).
 Windscreen rain (`extract::windscreen`): in the cab view in rain, a glass quad is blended over the scene (`fs_glass`; hidden
 behind the cab, writes no depth). Drops are not stored: each sits in a cell of four grids on the glass and shows once its
@@ -263,4 +263,9 @@ from simulated time, so pictures stay deterministic. Tandem wipers (arms drawn a
 rain; mirrored for right-hand drive. Drops show the scene upside down (sky below, road above), glint with nearby lights, and
 wet glass glows round them. Rain at night now darkens the overcast sky (it used to turn day-grey). Sandbox:
 `scenes/town_night_rain.scene.ron`; shots `town_cab_rain`, `town_cab_night_rain`.
+Wet roads: road layers mark themselves wet (`InstanceRaw.material.w` = how readily puddles form: asphalt and markings 1,
+sidewalks 0.3); with `weather.wetness` > 0, `fs_mesh` adds noise puddles (darker, mirror-smooth, dimmed sky reflection) and
+`wet_streaks`: every light in view reflected through a lobe that is narrow sideways and long towards the viewer at low angles
+(σ·cos θ by 2.5σ), so headlights, tail lamps and street lamps streak down the road; brightness goes with how bright a light
+looks (√ intensity), not its range. Dry frames take no wet branch (pictures unchanged). Shot `town_wet_night`.
 Not yet: testing on physical phones; running on an iOS simulator.

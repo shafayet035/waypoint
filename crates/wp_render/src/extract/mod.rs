@@ -109,8 +109,13 @@ pub struct FrameView {
     pub roads: Option<std::sync::Arc<wp_road::RoadNetwork>>,
     /// The scene's buildings, if it has any.
     pub scenery: Option<std::sync::Arc<wp_world::scenery::Scenery>>,
-    /// How wet the road is, 0–1 (darker, glossier asphalt).
+    /// How wet the road is, 0–1 (darker, glossier asphalt, puddles,
+    /// streaks of light).
     pub wetness: f32,
+    /// How hard it rains, 0–1.
+    pub rain: f32,
+    /// Simulated time, s.
+    pub time_s: f32,
     /// Models that [`MeshId::Model`] items refer to; the renderer uploads
     /// them once per library.
     pub models: Option<std::sync::Arc<wp_asset::ModelLibrary>>,
@@ -385,6 +390,8 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
             .get_resource::<wp_world::scenery::CurrentScenery>()
             .map(|s| s.0.clone()),
         wetness: weather.wetness,
+        rain: weather.rain,
+        time_s,
         models,
         lights,
         deformed,
