@@ -183,6 +183,7 @@ pub fn scene() -> FrameView {
         deformed: Vec::new(),
         look: wp_world::Look::default(),
         windscreen: None,
+        movers: Vec::new(),
     }
 }
 
@@ -206,6 +207,7 @@ fn car(items: &mut Vec<DrawItem>, lights: &mut Vec<PointLight>, at: Vec2, dir: V
             roughness: 0.3,
             metallic: 0.5,
             emissive: 0.0,
+            mover: 0,
         });
     }
     for side in [-0.6, 0.6] {
@@ -219,6 +221,7 @@ fn car(items: &mut Vec<DrawItem>, lights: &mut Vec<PointLight>, at: Vec2, dir: V
                 roughness: 0.9,
                 metallic: 0.0,
                 emissive: 0.0,
+                mover: 0,
             });
         }
         let lamp = base.transform_point3(Vec3::new(2.2, side, 0.7));

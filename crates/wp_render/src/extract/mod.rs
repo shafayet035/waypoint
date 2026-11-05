@@ -73,6 +73,9 @@ pub struct DrawItem {
     pub roughness: f32,
     pub metallic: f32,
     pub emissive: f32,
+    /// Which moving object this belongs to (see [`FrameView::movers`]); 0:
+    /// none (still, or moving in a way not tracked).
+    pub mover: u32,
 }
 
 /// A local light: headlamps, tail lights, street lamps.
@@ -127,6 +130,21 @@ pub struct FrameView {
     pub look: wp_world::Look,
     /// Rain on the windscreen (cab view in the rain).
     pub windscreen: Option<Windscreen>,
+    /// Where each moving object ([`DrawItem::mover`]) is now: the renderer
+    /// compares with the last frame to know how far its pixels moved.
+    pub movers: Vec<(u32, Mat4)>,
+}
+
+/// The mover number of entity `e`.
+fn mover_id(e: Entity) -> u32 {
+    e.index() + 1
+}
+
+/// Mark `items[from..]` as belonging to mover `id`.
+fn tag(items: &mut [DrawItem], from: usize, id: u32) {
+    for d in &mut items[from..] {
+        d.mover = id;
+    }
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -202,6 +220,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         .get_resource::<wp_core::SimTime>()
         .map_or(0.0, |t| t.seconds()) as f32;
     let mut windscreen = None;
+    let mut movers = Vec::new();
 
     world
         .query::<(&Pose, &Vehicle)>()
@@ -230,6 +249,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 }
                 _ => None,
             };
+            let from = items.len();
             vehicle_items(
                 &mut items,
                 &mut shadows,
@@ -242,11 +262,16 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 dented,
                 headlights.then_some(&mut lights),
             );
+            tag(&mut items, from, mover_id(e));
+            movers.push((mover_id(e), body_matrix(def, pose, veh)));
         });
     world
         .query::<(&Pose, &wp_traffic::pedestrian::Pedestrian)>()
         .for_each(|e, (pose, p)| {
+            let from = items.len();
             pedestrian_items(&mut items, &mut shadows, pose, p.down, palette(e.index()));
+            tag(&mut items, from, mover_id(e));
+            movers.push((mover_id(e), pose_matrix(pose)));
         });
     if let Some(roads) = world.get_resource::<wp_world::Roads>() {
         let t = world
@@ -273,9 +298,12 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
     let trailers = world.get_resource::<TrailerLibrary>();
     world
         .query::<(&Pose, &Trailer)>()
-        .for_each(|_, (pose, tr)| {
+        .for_each(|e, (pose, tr)| {
             if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&tr.model)) {
+                let from = items.len();
                 trailer_items(&mut items, &mut shadows, def, pose, tr);
+                tag(&mut items, from, mover_id(e));
+                movers.push((mover_id(e), pose_matrix(pose)));
             }
         });
 
@@ -324,6 +352,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         .is_none_or(|r| r.0.drive_side == wp_road::DriveSide::Right);
                     let (eye, fov) = cab_eye(&def, left_seat);
                     let body = body_matrix(&def, &pose, &veh);
+                    let from = items.len();
                     vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
                     let glass = windscreen::glass(body_shape(&def).width / 2.0 - 0.06, eye);
                     let wipers = Wipers::for_glass(
@@ -333,6 +362,8 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         WiperSpeed::for_rain(weather.rain),
                     );
                     windscreen::wiper_items(&mut items, body, glass, &wipers, time_s);
+                    // The cab rides with the vehicle (and the camera).
+                    tag(&mut items, from, mover_id(e));
                     if weather.rain > 0.01 {
                         windscreen = Some(Windscreen {
                             origin: body.transform_point3(glass.0),
@@ -398,7 +429,13 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         deformed,
         look,
         windscreen,
+        movers,
     }
+}
+
+/// A planar pose as a transform.
+fn pose_matrix(pose: &Pose) -> Mat4 {
+    Mat4::from_translation(pose.position.extend(0.0)) * Mat4::from_rotation_z(pose.heading)
 }
 
 /// Where the camera looks: the followed vehicle, else the origin.
@@ -469,6 +506,7 @@ pub(crate) fn tree_items(
             roughness: 0.9,
             metallic: 0.0,
             emissive: 0.0,
+            mover: 0,
         });
         items.push(DrawItem {
             mesh: crown,
@@ -479,6 +517,7 @@ pub(crate) fn tree_items(
             roughness: 0.85,
             metallic: 0.0,
             emissive: 0.0,
+            mover: 0,
         });
     }
 }
@@ -509,6 +548,7 @@ pub(crate) fn lamp_items(
                 roughness: 0.55,
                 metallic: 0.4,
                 emissive,
+                mover: 0,
             });
         };
         part(
@@ -576,6 +616,7 @@ fn rain_items(items: &mut Vec<DrawItem>, eye: Vec3, rain: f32, t: f32) {
             roughness: 0.2,
             metallic: 0.0,
             emissive: 0.25,
+            mover: 0,
         });
     }
 }

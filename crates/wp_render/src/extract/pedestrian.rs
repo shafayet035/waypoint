@@ -29,6 +29,7 @@ pub(super) fn pedestrian_items(
             roughness: 0.85,
             metallic: 0.0,
             emissive: 0.0,
+            mover: 0,
         });
     };
     let legs = Vec3::new(0.08, 0.09, 0.14);

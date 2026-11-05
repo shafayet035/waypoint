@@ -26,6 +26,7 @@ use glam::Mat3;
 use wp_core::Diagnostic;
 use wp_rhi::{Gpu, OffscreenTarget, wgpu};
 
+mod taa;
 mod upscale;
 
 pub const MSAA_SAMPLES: u32 = 4;
@@ -54,8 +55,14 @@ struct Globals {
     style: [f32; 4],
     /// Windscreen (see [`Renderer::glass_uniform`]).
     glass: [[f32; 4]; 6],
-    /// Road wetness (0–1), rain (0–1), simulated time (s), unused.
+    /// Road wetness (0–1), rain (0–1), simulated time (s), ground fog.
     weather: [f32; 4],
+    /// Temporal anti-aliasing (see `taa`): unjittered camera, last frame's
+    /// camera, how far the eye moved, and each mover's motion.
+    taa_view_proj: [[f32; 4]; 4],
+    taa_prev_view_proj: [[f32; 4]; 4],
+    taa_eye_delta: [f32; 4],
+    motions: [[[f32; 4]; 4]; taa::MAX_MOVERS],
 }
 
 /// Most local lights a frame can use (the uniform's size).
@@ -787,6 +794,10 @@ pub struct Renderer {
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
+    /// Sky, ground, meshes and glass writing motion too.
+    taa_pipelines: [wgpu::RenderPipeline; 4],
+    /// Temporal anti-aliasing and upscaling, when on (windows).
+    temporal: Option<taa::Temporal>,
     cube: GpuMesh,
     wheel: GpuMesh,
     /// Crown, far crown, cone, far cone, palm fronds.
@@ -918,7 +929,19 @@ impl Renderer {
                         depth_write: bool,
                         compare: wgpu::CompareFunction,
                         cull: Option<wgpu::Face>,
-                        blend: Option<wgpu::BlendState>| {
+                        blend: Option<wgpu::BlendState>,
+                        temporal: bool| {
+            let colour = Some(wgpu::ColorTargetState {
+                format,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            });
+            let motion = Some(wgpu::ColorTargetState {
+                format: taa::MOTION_FORMAT,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            });
+            let targets = [colour, motion];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -947,11 +970,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: if temporal { &targets } else { &targets[..1] },
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -983,6 +1002,7 @@ impl Renderer {
             wgpu::CompareFunction::Always,
             None,
             None,
+            false,
         );
         let ground = pipeline(
             "ground",
@@ -993,6 +1013,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             None,
+            false,
         );
         let meshes_pipeline = pipeline(
             "meshes",
@@ -1003,6 +1024,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
             None,
+            false,
         );
         // Rain on the windscreen: blended over the scene, hidden behind the
         // cab (steering wheel, dashboard), writing no depth.
@@ -1015,6 +1037,53 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            false,
+        );
+
+        // The same, also writing each pixel's motion (temporal anti-aliasing).
+        let sky_taa = pipeline(
+            "sky (taa)",
+            "vs_sky",
+            "fs_sky_taa",
+            &[],
+            false,
+            wgpu::CompareFunction::Always,
+            None,
+            None,
+            true,
+        );
+        let ground_taa = pipeline(
+            "ground (taa)",
+            "vs_ground",
+            "fs_ground_taa",
+            &[],
+            true,
+            wgpu::CompareFunction::Greater,
+            None,
+            None,
+            true,
+        );
+        let meshes_taa = pipeline(
+            "meshes (taa)",
+            "vs_mesh",
+            "fs_mesh_taa",
+            &[Some(vertex_layout()), Some(instance_layout())],
+            true,
+            wgpu::CompareFunction::Greater,
+            Some(wgpu::Face::Back),
+            None,
+            true,
+        );
+        let glass_taa = pipeline(
+            "windscreen (taa)",
+            "vs_glass",
+            "fs_glass_taa",
+            &[],
+            false,
+            wgpu::CompareFunction::Greater,
+            None,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            true,
         );
 
         let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1067,6 +1136,8 @@ impl Renderer {
             ground,
             meshes_pipeline,
             glass,
+            taa_pipelines: [sky_taa, ground_taa, meshes_taa, glass_taa],
+            temporal: None,
             cube: GpuMesh::new(gpu, &mesh::cube(), "cube"),
             wheel: GpuMesh::new(gpu, &mesh::wheel(), "wheel"),
             trees: [
@@ -1255,6 +1326,35 @@ impl Renderer {
     }
 
     /// The size frames are drawn at before any upscaling.
+    /// Temporal anti-aliasing and upscaling: smoother edges and finer detail
+    /// from several frames (for windows; single pictures stay without it).
+    pub fn set_temporal(&mut self, gpu: &Gpu, on: bool) {
+        if on == self.temporal.is_some() {
+            return;
+        }
+        self.temporal = on.then(|| {
+            taa::Temporal::new(
+                gpu,
+                self.format,
+                (self.width, self.height),
+                (self.out_width, self.out_height),
+            )
+        });
+        self.apply_size(gpu);
+    }
+
+    /// Whether temporal anti-aliasing is on.
+    pub fn temporal(&self) -> bool {
+        self.temporal.is_some()
+    }
+
+    /// Start the temporal history afresh (after a reset or a jump).
+    pub fn reset_history(&mut self) {
+        if let Some(t) = &mut self.temporal {
+            t.reset();
+        }
+    }
+
     pub fn internal_size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -1278,7 +1378,10 @@ impl Renderer {
             self.height = ih;
             (self.msaa, self.depth) = Self::attachments(gpu, self.format, iw, ih);
         }
-        if (iw, ih) == (w, h) {
+        if let Some(t) = &mut self.temporal {
+            t.resize(gpu, self.format, (iw, ih), (w, h));
+            self.upscaler = None;
+        } else if (iw, ih) == (w, h) {
             self.upscaler = None;
         } else {
             match &mut self.upscaler {
@@ -1343,9 +1446,21 @@ impl Renderer {
         let view_proj = frame.camera.view_proj_relative(aspect);
         let eye = frame.camera.eye;
         let env = &frame.environment;
+        // Temporal anti-aliasing: a jittered camera, and how things moved.
+        let motion = self
+            .temporal
+            .as_mut()
+            .map(|t| t.begin(view_proj, eye, frame.camera.target, &frame.movers));
+        let draw_view_proj = motion.as_ref().map_or(view_proj, |m| m.jittered);
+        let mut motions = [glam::Mat4::IDENTITY.to_cols_array_2d(); taa::MAX_MOVERS];
+        if let Some(m) = &motion {
+            for (slot, mat) in motions.iter_mut().zip(&m.motions) {
+                *slot = mat.to_cols_array_2d();
+            }
+        }
         let mut globals = Globals {
-            view_proj: view_proj.to_cols_array_2d(),
-            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            view_proj: draw_view_proj.to_cols_array_2d(),
+            inv_view_proj: draw_view_proj.inverse().to_cols_array_2d(),
             camera_pos: frame.camera.eye.extend(1.0).to_array(),
             sun_dir: env.sun_dir.normalize().extend(env.sun_intensity).to_array(),
             sun_color: env.sun_color.extend(1.0).to_array(),
@@ -1378,6 +1493,17 @@ impl Renderer {
                 frame.time_s,
                 env.ground_fog,
             ],
+            taa_view_proj: view_proj.to_cols_array_2d(),
+            taa_prev_view_proj: motion
+                .as_ref()
+                .map_or(view_proj, |m| m.prev_view_proj)
+                .to_cols_array_2d(),
+            taa_eye_delta: motion
+                .as_ref()
+                .map_or(glam::Vec3::ZERO, |m| m.eye_delta)
+                .extend(0.0)
+                .to_array(),
+            motions,
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1442,6 +1568,12 @@ impl Renderer {
 
         // Instances grouped by mesh: cubes, wheels, then model parts.
         let to_camera = glam::Mat4::from_translation(-eye);
+        let slot_of = |mover: u32| {
+            motion
+                .as_ref()
+                .and_then(|m| m.slots.get(&mover))
+                .map_or(0.0, |&s| s as f32)
+        };
         let raw = |d: &DrawItem| InstanceRaw {
             model: (to_camera * d.transform).to_cols_array_2d(),
             normal: {
@@ -1452,7 +1584,8 @@ impl Renderer {
                     n.z_axis.extend(0.0).to_array(),
                 ]
             },
-            color: d.color.extend(1.0).to_array(),
+            // Alpha: which motion the instance follows (0: still).
+            color: d.color.extend(slot_of(d.mover)).to_array(),
             material: [d.roughness, d.metallic, d.emissive, 0.0],
         };
         self.update_models(gpu, frame);
@@ -1627,18 +1760,32 @@ impl Renderer {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.msaa,
-                    depth_slice: None,
-                    resolve_target: Some(match &self.upscaler {
-                        Some(u) => &u.view,
-                        None => target,
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.msaa,
+                        depth_slice: None,
+                        resolve_target: Some(match (&self.temporal, &self.upscaler) {
+                            (Some(t), _) => &t.scene,
+                            (None, Some(u)) => &u.view,
+                            (None, None) => target,
+                        }),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Discard,
+                        },
                     }),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Discard,
-                    },
-                })],
+                    self.temporal
+                        .as_ref()
+                        .map(|t| wgpu::RenderPassColorAttachment {
+                            view: &t.motion_msaa,
+                            depth_slice: None,
+                            resolve_target: Some(&t.motion),
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Discard,
+                            },
+                        }),
+                ][..if self.temporal.is_some() { 2 } else { 1 }],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -1653,11 +1800,14 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(1, &self.textures.white, &[]);
-            pass.set_pipeline(&self.sky);
+            let temporal = self.temporal.is_some();
+            let [sky_taa, ground_taa, meshes_taa, glass_taa] = &self.taa_pipelines;
+            let pick = |plain, with_motion| if temporal { with_motion } else { plain };
+            pass.set_pipeline(pick(&self.sky, sky_taa));
             pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.ground);
+            pass.set_pipeline(pick(&self.ground, ground_taa));
             pass.draw(0..6, 0..1);
-            pass.set_pipeline(&self.meshes_pipeline);
+            pass.set_pipeline(pick(&self.meshes_pipeline, meshes_taa));
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().take(main_static) {
                 let Some(mesh) = self.static_mesh(kind, tile, layer) else {
@@ -1704,14 +1854,16 @@ impl Renderer {
                 first += count;
             }
             if frame.windscreen.is_some() {
-                pass.set_pipeline(&self.glass);
+                pass.set_pipeline(pick(&self.glass, glass_taa));
                 pass.set_bind_group(1, &self.textures.white, &[]);
                 pass.draw(0..6, 0..1);
                 stats.draw_calls += 1;
                 stats.triangles += 2;
             }
         }
-        if let Some(u) = &self.upscaler {
+        if let Some(t) = &mut self.temporal {
+            t.resolve(gpu, &mut encoder, target);
+        } else if let Some(u) = &self.upscaler {
             u.encode(&mut encoder, target);
         }
         gpu.queue.submit([encoder.finish()]);
@@ -1979,4 +2131,27 @@ pub fn render_rgba_at(
     }
     renderer.render(gpu, frame, &target.view);
     Ok((target.read_rgba(gpu)?, renderer.stats()))
+}
+
+/// Draw `frames` one after another with temporal anti-aliasing `temporal`
+/// on or off, and read back the last: how a window's picture builds up over
+/// several frames. `quality` caps the internal resolution as in windows.
+pub fn render_rgba_sequence(
+    gpu: &Gpu,
+    frames: &[FrameView],
+    width: u32,
+    height: u32,
+    quality: Option<wp_world::QualityTier>,
+    temporal: bool,
+) -> Result<Vec<u8>, Diagnostic> {
+    let target = OffscreenTarget::new(gpu, width, height);
+    let mut renderer = Renderer::new(gpu, wp_rhi::OFFSCREEN_FORMAT, width, height);
+    if let Some(q) = quality {
+        renderer.set_quality(gpu, q);
+    }
+    renderer.set_temporal(gpu, temporal);
+    for frame in frames {
+        renderer.render(gpu, frame, &target.view);
+    }
+    target.read_rgba(gpu)
 }

@@ -38,6 +38,30 @@ struct Globals {
     // x: road wetness (0–1), y: rain (0–1), z: simulated time (s),
     // w: ground fog extinction per m (0: no fog).
     weather: vec4<f32>,
+    // Temporal anti-aliasing: this frame's camera without its sub-pixel
+    // jitter, the last frame's (relative to its own eye), and how far the
+    // eye moved since (xyz).
+    taa_view_proj: mat4x4<f32>,
+    taa_prev_view_proj: mat4x4<f32>,
+    taa_eye_delta: vec4<f32>,
+    // How each moving object moved since the last frame, in camera-relative
+    // space; an instance's colour alpha picks one (0: still).
+    motions: array<mat4x4<f32>, 128>,
+};
+
+// Screen motion since the last frame, in texture coordinates, of a point
+// now at camera-relative `rel` that was at `prev_rel` (relative to this
+// frame's eye). Written alongside colour for the temporal resolve.
+fn motion(rel: vec3<f32>, prev_rel: vec3<f32>) -> vec4<f32> {
+    let now = g.taa_view_proj * vec4<f32>(rel, 1.0);
+    let then = g.taa_prev_view_proj * vec4<f32>(prev_rel + g.taa_eye_delta.xyz, 1.0);
+    let d = now.xy / now.w - then.xy / then.w;
+    return vec4<f32>(d * vec2<f32>(0.5, -0.5), 0.0, 1.0);
+}
+
+struct TaaOut {
+    @location(0) color: vec4<f32>,
+    @location(1) motion: vec4<f32>,
 };
 
 // Light falling on a surface (0–1) in the game's style: smooth, in hard toon
@@ -282,16 +306,33 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
     return out;
 }
 
-@fragment
-fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+fn sky_dir(ndc: vec2<f32>) -> vec3<f32> {
     // A point on the near plane (depth 1 with reversed-Z), seen from the camera.
-    let p = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
-    let dir = normalize(p.xyz / p.w);
+    let p = g.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    return normalize(p.xyz / p.w);
+}
+
+fn shade_sky(dir: vec3<f32>) -> vec4<f32> {
     var col = sky_color(dir);
     if (g.weather.w > 0.0) {
         col = in_fog(col, dir * 4000.0, 4000.0);
     }
     return vec4<f32>(tonemap(col), 1.0);
+}
+
+@fragment
+fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    return shade_sky(sky_dir(in.ndc));
+}
+
+@fragment
+fn fs_sky_taa(in: SkyOut) -> TaaOut {
+    let dir = sky_dir(in.ndc);
+    // The sky is infinitely far: only the camera's turning moves it.
+    let now = g.taa_view_proj * vec4<f32>(dir, 0.0);
+    let then = g.taa_prev_view_proj * vec4<f32>(dir, 0.0);
+    let d = now.xy / now.w - then.xy / then.w;
+    return TaaOut(shade_sky(dir), vec4<f32>(d * vec2<f32>(0.5, -0.5), 0.0, 1.0));
 }
 
 // ---- Ground: a large quad that follows the camera ------------------------
@@ -357,8 +398,7 @@ fn blob_shadows(p: vec2<f32>) -> f32 {
     return lit;
 }
 
-@fragment
-fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
+fn shade_ground(in: GroundOut) -> vec4<f32> {
     let p = in.world.xy;
     // Asphalt: smooth large-scale variation plus fine aggregate that fades with distance.
     let coarse = value_noise(p * 0.15) * 0.5 + value_noise(p * 0.6) * 0.5;
@@ -378,6 +418,16 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     col = col + local_lights(in.rel, n, normalize(-in.rel), base, 0.85);
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
+}
+
+@fragment
+fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
+    return shade_ground(in);
+}
+
+@fragment
+fn fs_ground_taa(in: GroundOut) -> TaaOut {
+    return TaaOut(shade_ground(in), motion(in.rel, in.rel));
 }
 
 // ---- Meshes: instanced, lit -----------------------------------------------
@@ -417,6 +467,8 @@ struct MeshOut {
     @location(4) uv: vec2<f32>,
     @location(5) facade: vec4<f32>,
     @location(6) seed: f32,
+    // Where this point was last frame, relative to this frame's eye.
+    @location(7) prev_rel: vec3<f32>,
 };
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
@@ -508,11 +560,12 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     out.uv = v.uv;
     out.facade = v.facade;
     out.seed = v.color.a;
+    let mover = min(u32(inst.color.a + 0.5), 127u);
+    out.prev_rel = (g.motions[mover] * world).xyz;
     return out;
 }
 
-@fragment
-fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+fn shade_mesh(in: MeshOut) -> vec4<f32> {
     // Sampled first, in uniform control flow.
     let albedo_map = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
     let normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
@@ -591,6 +644,16 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     }
     col = apply_fog(col, in.rel);
     return vec4<f32>(tonemap(col), 1.0);
+}
+
+@fragment
+fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+    return shade_mesh(in);
+}
+
+@fragment
+fn fs_mesh_taa(in: MeshOut) -> TaaOut {
+    return TaaOut(shade_mesh(in), motion(in.rel, in.prev_rel));
 }
 
 // ---- Shadow map: depth from the sun -------------------------------------------
@@ -742,8 +805,7 @@ fn drop_layer(p: vec2<f32>, fw: f32, cell: f32, r0: f32, r1: f32, chance: f32, f
     return vec4<f32>(tonemap(col) * a, a);
 }
 
-@fragment
-fn fs_glass(in: GlassOut) -> @location(0) vec4<f32> {
+fn shade_glass(in: GlassOut) -> vec4<f32> {
     let fw = max(length(fwidth(in.st)) * 0.7, 1e-5);
     let rain = g.glass[2].w;
     let across = g.glass[1].xyz;
@@ -776,4 +838,17 @@ fn fs_glass(in: GlassOut) -> @location(0) vec4<f32> {
         acc = d + acc * (1.0 - d.a);
     }
     return acc;
+}
+
+@fragment
+fn fs_glass(in: GlassOut) -> @location(0) vec4<f32> {
+    return shade_glass(in);
+}
+
+// The glass rides with the camera: where it covers the scene, the motion
+// fades towards none (premultiplied blending with the drop's alpha).
+@fragment
+fn fs_glass_taa(in: GlassOut) -> TaaOut {
+    let c = shade_glass(in);
+    return TaaOut(c, vec4<f32>(0.0, 0.0, 0.0, c.a));
 }

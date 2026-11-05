@@ -28,6 +28,7 @@ pub(super) fn trailer_items(
             roughness: rough,
             metallic: 0.0,
             emissive,
+            mover: 0,
         });
     };
     let curtain = Vec3::new(0.55, 0.57, 0.6);
@@ -105,6 +106,7 @@ pub(super) fn trailer_items(
                 roughness: 0.85,
                 metallic: 0.0,
                 emissive: 0.0,
+                mover: 0,
             });
         }
     }

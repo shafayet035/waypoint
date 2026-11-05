@@ -411,6 +411,7 @@ fn textured_models_show_their_texture() {
         roughness: 1.0,
         metallic: 0.0,
         emissive: 1.0,
+        mover: 0,
     });
     frame.camera = wp_render::Camera {
         eye: glam::Vec3::new(-5.0, 0.0, 2.0),
@@ -473,6 +474,7 @@ fn quad_frame(material: wp_asset::Material) -> wp_render::FrameView {
         roughness: 0.9,
         metallic: 0.0,
         emissive: 0.0,
+        mover: 0,
     });
     frame.camera = wp_render::Camera {
         eye: glam::Vec3::new(-5.0, 0.0, 2.0),

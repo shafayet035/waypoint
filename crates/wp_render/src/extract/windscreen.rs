@@ -202,6 +202,7 @@ pub(super) fn wiper_items(
                 roughness: 0.7,
                 metallic: 0.0,
                 emissive: 0.0,
+                mover: 0,
             });
         };
         // The arm rides a little off the glass; the blade lies on it.

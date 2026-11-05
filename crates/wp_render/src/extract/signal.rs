@@ -37,6 +37,7 @@ pub(super) fn signal_items(items: &mut Vec<DrawItem>, net: &RoadNetwork, t: f64)
                     roughness: 0.6,
                     metallic: 0.3,
                     emissive,
+                    mover: 0,
                 });
             };
             let dark = Vec3::new(0.03, 0.03, 0.035);

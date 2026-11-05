@@ -23,6 +23,7 @@ pub(super) fn stop_items(
                 roughness: rough,
                 metallic: 0.2,
                 emissive,
+                mover: 0,
             });
         };
         // Which local side is away from the road: +y if `out` is to the left of travel.

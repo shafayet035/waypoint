@@ -22,6 +22,7 @@ pub(super) fn dock_items(
             roughness: rough,
             metallic: 0.0,
             emissive: 0.0,
+            mover: 0,
         });
     };
     let half = d.width_m / 2.0;

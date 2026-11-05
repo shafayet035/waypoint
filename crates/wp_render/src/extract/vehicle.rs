@@ -94,6 +94,7 @@ pub(super) fn vehicle_items(
             roughness: rough,
             metallic: metal,
             emissive,
+            mover: 0,
         });
     };
 
@@ -140,6 +141,7 @@ pub(super) fn vehicle_items(
                 roughness: m.roughness,
                 metallic: m.metallic,
                 emissive,
+                mover: 0,
             });
         }
     } else if style == BodyStyle::TruckCab {
@@ -331,6 +333,7 @@ pub(super) fn vehicle_items(
             roughness: 0.85,
             metallic: 0.0,
             emissive: 0.0,
+            mover: 0,
         });
     }
 
@@ -515,6 +518,7 @@ pub(super) fn cab_items(
             roughness: rough,
             metallic: 0.0,
             emissive,
+            mover: 0,
         });
     };
     let dash_x = eye.x + 0.5;
@@ -580,5 +584,6 @@ pub(super) fn cab_items(
         roughness: 0.6,
         metallic: 0.2,
         emissive: 0.0,
+        mover: 0,
     });
 }
