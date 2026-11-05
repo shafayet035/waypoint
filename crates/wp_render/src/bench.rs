@@ -154,8 +154,8 @@ pub fn scene() -> FrameView {
     ));
     let mut items = Vec::new();
     let mut lights = Vec::new();
-    extract::tree_items(&mut items, &scenery, Vec2::ZERO);
-    extract::lamp_items(&mut items, &mut lights, &net, Vec2::ZERO, true);
+    extract::tree_items(&mut items, &scenery, Vec2::ZERO, None);
+    extract::lamp_items(&mut items, &mut lights, &net, Vec2::ZERO, true, None);
     // Cars in both directions along every road, headlights on.
     for (k, road) in net.roads.iter().enumerate() {
         let len = road.centre.length();

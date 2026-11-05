@@ -370,9 +370,32 @@ impl Project {
         };
         diags.extend(project.check_references());
         diags.extend(project.check_models());
+        diags.extend(project.check_scenery_models());
         diags.extend(project.check_replays());
         diags.extend(project.check_shots());
         (Some(project), diags)
+    }
+
+    /// Models that scenery files use (props, tree models, street furniture,
+    /// people) must be in the project.
+    fn check_scenery_models(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for s in self.scenery.values() {
+            for path in s.value.model_paths() {
+                if self.models.find(path).is_none() {
+                    let why = if self.failed.iter().any(|f| f == path) {
+                        "failed to load"
+                    } else {
+                        "is not in the project"
+                    };
+                    out.push(
+                        s.error_at("WP-B011", path, format!("model `{path}` {why}"))
+                            .help("put the .glb and its .asset.ron under assets/ and use its project path"),
+                    );
+                }
+            }
+        }
+        out
     }
 
     /// Vehicle models: present, sized like the vehicle, on the ground and

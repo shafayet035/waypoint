@@ -8,10 +8,32 @@ pub(super) fn stop_items(
     items: &mut Vec<DrawItem>,
     shadows: &mut Vec<BlobShadow>,
     net: &RoadNetwork,
+    model: Option<(&str, Option<&wp_asset::ModelLibrary>)>,
 ) {
     for st in &net.stops {
         let heading = st.direction.y.atan2(st.direction.x);
         let out = (st.kerb - st.position).normalize_or_zero();
+        // The game's model: +Y away from the road, +X along the kerb.
+        if let Some((path, library)) = model {
+            let y = out.extend(0.0);
+            let x = y.cross(Vec3::Z);
+            let frame = Mat4::from_cols(
+                x.extend(0.0),
+                y.extend(0.0),
+                Vec3::Z.extend(0.0),
+                st.kerb.extend(0.0).extend(1.0),
+            );
+            if model_items(items, library, path, frame, false) {
+                shadows.push(BlobShadow {
+                    center: st.kerb + out * 1.1,
+                    half_extents: Vec2::new(2.1, 0.8),
+                    heading,
+                    strength: 0.5,
+                    softness: 0.3,
+                });
+                continue;
+            }
+        }
         let base = Mat4::from_translation(st.kerb.extend(0.0)) * Mat4::from_rotation_z(heading);
         let mut box_at = |min: Vec3, max: Vec3, color: Vec3, rough: f32, emissive: f32| {
             items.push(DrawItem {

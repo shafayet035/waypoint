@@ -10,6 +10,7 @@ pub(super) fn pedestrian_items(
     pose: &Pose,
     down: bool,
     tint: Vec3,
+    model: Option<(&str, Option<&wp_asset::ModelLibrary>)>,
 ) {
     let mut base =
         Mat4::from_translation(pose.position.extend(0.0)) * Mat4::from_rotation_z(pose.heading);
@@ -18,6 +19,18 @@ pub(super) fn pedestrian_items(
         base = base
             * Mat4::from_translation(Vec3::new(0.0, 0.0, 0.15))
             * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    }
+    if let Some((path, library)) = model
+        && super::model_items(items, library, path, base, false)
+    {
+        shadows.push(BlobShadow {
+            center: pose.position,
+            half_extents: Vec2::new(0.35, 0.35),
+            heading: pose.heading,
+            strength: 0.45,
+            softness: 0.25,
+        });
+        return;
     }
     let mut box_at = |min: Vec3, max: Vec3, color: Vec3| {
         items.push(DrawItem {

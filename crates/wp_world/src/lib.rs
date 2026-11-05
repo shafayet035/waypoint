@@ -457,6 +457,12 @@ pub fn apply_scene(
                 wp_physics::Walls::new(built.buildings.iter().map(|b| b.footprint.as_slice()));
             let trunks: Vec<[glam::Vec2; 4]> = built.trees.iter().map(|t| t.trunk()).collect();
             walls.add(trunks.iter().map(|t| t.as_slice()), "tree");
+            // Solid props (only those with a size, so plain scenes stay as they were).
+            let solid: Vec<[glam::Vec2; 4]> =
+                built.props.iter().filter_map(|p| p.outline()).collect();
+            if !solid.is_empty() {
+                walls.add(solid.iter().map(|o| o.as_slice()), "prop");
+            }
             world.insert_resource(walls);
             world.insert_resource(scenery::CurrentScenery(std::sync::Arc::new(built)));
         }

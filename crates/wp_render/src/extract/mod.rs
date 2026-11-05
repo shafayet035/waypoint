@@ -4,6 +4,7 @@
 mod camera;
 mod dock;
 mod pedestrian;
+mod props;
 mod signal;
 mod stop;
 mod trailer;
@@ -13,6 +14,7 @@ pub mod windscreen;
 pub use camera::{Camera, CameraMode, ChaseSmoothing, Environment};
 use dock::dock_items;
 use pedestrian::pedestrian_items;
+use props::{model_items, model_tree, prop_items};
 use signal::signal_items;
 use stop::stop_items;
 use trailer::trailer_items;
@@ -243,27 +245,52 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 headlights.then_some(&mut lights),
             );
         });
+    // The game's models for street furniture and people, if any.
+    let scenery_now = world
+        .get_resource::<wp_world::scenery::CurrentScenery>()
+        .map(|s| s.0.clone());
+    let furniture = scenery_now
+        .as_ref()
+        .map(|s| s.furniture.clone())
+        .unwrap_or_default();
+    let model_lib = models.as_deref();
     world
         .query::<(&Pose, &wp_traffic::pedestrian::Pedestrian)>()
         .for_each(|e, (pose, p)| {
-            pedestrian_items(&mut items, &mut shadows, pose, p.down, palette(e.index()));
+            let person = (!furniture.people.is_empty())
+                .then(|| furniture.people[e.index() as usize % furniture.people.len()].as_str());
+            pedestrian_items(
+                &mut items,
+                &mut shadows,
+                pose,
+                p.down,
+                palette(e.index()),
+                person.map(|m| (m, model_lib)),
+            );
         });
     if let Some(roads) = world.get_resource::<wp_world::Roads>() {
         let t = world
             .get_resource::<wp_core::SimTime>()
             .map_or(0.0, |t| t.seconds());
         signal_items(&mut items, &roads.0, t);
-        stop_items(&mut items, &mut shadows, &roads.0);
+        stop_items(
+            &mut items,
+            &mut shadows,
+            &roads.0,
+            furniture.bus_stop.as_deref().map(|m| (m, model_lib)),
+        );
         lamp_items(
             &mut items,
             &mut lights,
             &roads.0,
             focus_point(world),
             lamps_lit,
+            furniture.street_lamp.as_ref().map(|l| (l, model_lib)),
         );
     }
-    if let Some(scenery) = world.get_resource::<wp_world::scenery::CurrentScenery>() {
-        tree_items(&mut items, &scenery.0, focus_point(world));
+    if let Some(scenery) = &scenery_now {
+        tree_items(&mut items, scenery, focus_point(world), model_lib);
+        prop_items(&mut items, scenery, model_lib, focus_point(world));
     }
     if let Some(docks) = world.get_resource::<wp_world::Docks>() {
         for d in &docks.0 {
@@ -421,6 +448,7 @@ pub(crate) fn tree_items(
     items: &mut Vec<DrawItem>,
     scenery: &wp_world::scenery::Scenery,
     focus: Vec2,
+    models: Option<&wp_asset::ModelLibrary>,
 ) {
     use wp_world::scenery::{TRUNK_M, TreeKind};
     let bark = Vec3::new(0.11, 0.075, 0.05);
@@ -432,6 +460,9 @@ pub(crate) fn tree_items(
     ];
     for t in &scenery.trees {
         if t.position.distance(focus) > TREE_DRAW_M {
+            continue;
+        }
+        if model_tree(items, models, t) {
             continue;
         }
         let h = t.height_m;
@@ -489,16 +520,37 @@ pub(crate) fn lamp_items(
     net: &wp_road::RoadNetwork,
     focus: Vec2,
     lit: bool,
+    model: Option<(
+        &wp_world::scenery::StreetLampModel,
+        Option<&wp_asset::ModelLibrary>,
+    )>,
 ) {
     const HEIGHT: f32 = 7.5;
     const ARM: f32 = 1.6;
     let pole = Vec3::new(0.16, 0.17, 0.18);
+    let warm = Vec3::new(1.0, 0.78, 0.5);
     for lamp in &net.lamps {
         if lamp.position.distance(focus) > LAMP_DRAW_M {
             continue;
         }
         let base = Mat4::from_translation(lamp.position.extend(0.0))
             * Mat4::from_rotation_z(lamp.toward_road.y.atan2(lamp.toward_road.x));
+        // The game's lamp model, lit from its head.
+        if let Some((m, library)) = model
+            && model_items(items, library, &m.model, base, lit)
+        {
+            if lit {
+                let head = lamp.position + lamp.toward_road * m.head_m.0;
+                lights.push(PointLight {
+                    position: head.extend(m.head_m.1 - 0.1),
+                    color: warm * 22.0,
+                    range: 20.0,
+                    direction: Vec3::NEG_Z,
+                    cone_cos: 65f32.to_radians().cos(),
+                });
+            }
+            continue;
+        }
         let mut part = |min: Vec3, max: Vec3, color: Vec3, emissive: f32| {
             items.push(DrawItem {
                 mesh: MeshId::Cube,
@@ -523,7 +575,6 @@ pub(crate) fn lamp_items(
             pole,
             0.0,
         );
-        let warm = Vec3::new(1.0, 0.78, 0.5);
         part(
             Vec3::new(ARM - 0.45, -0.16, HEIGHT - 0.22),
             Vec3::new(ARM + 0.1, 0.16, HEIGHT - 0.08),

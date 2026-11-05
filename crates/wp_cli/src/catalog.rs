@@ -54,6 +54,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Point `scenery` at a scenery/<name>.scenery.ron file, relative to the project root.",
     },
     ErrorDoc {
+        code: "WP-B011",
+        title: "Scenery uses a model that is not in the project",
+        fix: "Put the .glb (with its .asset.ron licence file) under assets/ and use its project path, e.g. \"assets/props/bench.glb\".",
+    },
+    ErrorDoc {
+        code: "WP-B010",
+        title: "A prop or prop row has values out of range",
+        fix: "Props: scale above 0 up to 100, solid_m 0–20. Prop rows: list models, spacing_m ≥ 2, kerb_m 0–10.",
+    },
+    ErrorDoc {
         code: "WP-B009",
         title: "A tree stands on a road (warning)",
         fix: "Move it off the carriageway and out of junctions: trunks are solid.",

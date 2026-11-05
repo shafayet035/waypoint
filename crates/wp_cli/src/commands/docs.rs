@@ -236,7 +236,18 @@ Scenery: buildings and trees beside the roads. A scene names a file: scenery: So
   tree_rows: [  // street trees near the kerb (or on the verge); skip junctions, lamps, bus stops, buildings
     (roads: [\"avenue_west\"], sides: Both, spacing_m: 14.0, kinds: [Round, Cone, Palm], height_m: (6.0, 11.0), seed: 6),
   ],
-  trees: [(position: (60.0, 90.0), height_m: 11.0, kind: Round)],
+  trees: [(position: (60.0, 90.0), height_m: 11.0, kind: Round)],   // model: Some(\"assets/trees/oak.glb\") scales a model to the height
+  props: [  // models placed by hand; +X points heading_deg; solid_m > 0 makes a solid square
+    (model: \"assets/props/kiosk.glb\", position: (20.0, 14.0), heading_deg: 90.0, solid_m: 1.2),
+  ],
+  prop_rows: [  // models along the kerb, +X facing the road; skip junctions, crossings, lamps, stops, trees, buildings
+    (models: [\"assets/props/bin.glb\", \"assets/props/bench.glb\"], spacing_m: 30.0, kerb_m: 0.5, solid_m: 0.3, seed: 1),
+  ],
+  furniture: (  // models for the engine's own street furniture and people (absent: built-in shapes)
+    street_lamp: Some((model: \"assets/props/lamp.glb\", head_m: (1.45, 7.2))),  // foot at origin, arm along +X; `head…` materials glow
+    bus_stop: Some(\"assets/props/shelter.glb\"),   // origin on the kerb, +Y away from the road
+    people: [\"assets/people/walker.glb\"],           // feet at origin, facing +X
+  ),
   buildings: [  // placed one by one: outline (x east, y north) in m, either direction round
     (footprint: [(40.0, 40.0), (75.0, 40.0), (75.0, 62.0), (40.0, 62.0)], height_m: 46.0, style: Some(\"office\")),
   ],

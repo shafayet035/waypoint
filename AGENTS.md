@@ -253,6 +253,11 @@ Buildings are solid: `apply_scene` turns their outlines into `wp_physics::Walls`
 `Impacts.walls`, and `detect_collisions` sends `Collision { other: "building" }` with the whole dent on the vehicle.
 Gate `crash_into_building`: 75 km/h into a warehouse wall, stops at the wall, never through. Chase, side and
 showcase cameras pull in front of the first wall between them and the car (`Scenery::first_hit`).
+Props: scenery `props` (a model at a position, heading, scale, optional solid square: `Walls` labelled "prop") and `prop_rows`
+(models along kerbs facing the road, skipping junctions, crossings, lamps, stops, trees, buildings; seeded); trees and tree rows
+can use `model`/`models` (scaled to the tree's height); `furniture` gives the engine's street lamps (head position for the light),
+bus stops and people models. Drawn by `extract::props` (one item per model part; `head…` materials glow when lit). WP-B010 values,
+WP-B011 unknown model.
 Trees: scenery `trees` (hand-placed) and `tree_rows` (along kerbs or verges; skip junctions, lamps, bus stops, buildings;
 seeded). Kinds Round (lumpy icosphere crown), Cone, Palm (drooping fronds); built-in meshes `mesh::crown/cone/fronds`
 with far versions the renderer picks by size over distance × lod_bias; drawn within 450 m of the player; trunks are
