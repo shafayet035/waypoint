@@ -10,6 +10,7 @@
 
 pub mod audio;
 pub mod settings;
+pub mod thermal;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -41,6 +42,11 @@ pub struct WindowOptions {
     pub quality: Option<wp_world::QualityTier>,
     /// Play the player vehicle's engine, road and skid sound.
     pub audio: bool,
+    /// Keep frames on time by lowering resolution, then effects, then frame
+    /// rate when frames run late or the device gets hot (needs `quality`).
+    pub governor: bool,
+    /// Pretend the device is this hot (testing the governor); `None` asks the OS.
+    pub thermal: Option<thermal::Thermal>,
     /// Control-protocol requests to answer between frames (see `wp_control::tcp`).
     pub control: Option<Receiver<Pending>>,
 }
@@ -55,9 +61,32 @@ pub struct WindowSummary {
     pub gpu: Option<GpuInfo>,
     /// What the last frame drew (draw calls, triangles, road tiles).
     pub render: Option<wp_render::RenderStats>,
+    /// Where the governor ended up, if it ran.
+    pub governor: Option<GovernorSummary>,
     /// The session's recording, if it was recording when the window closed.
     #[serde(skip)]
     pub replay: Option<wp_vehicle::replay::Replay>,
+}
+
+/// A line in the platform's log: logcat (tag `waypoint`) on Android, else stderr.
+fn log_line(msg: &str) {
+    #[cfg(target_os = "android")]
+    {
+        #[link(name = "log")]
+        unsafe extern "C" {
+            fn __android_log_write(
+                prio: i32,
+                tag: *const std::ffi::c_char,
+                text: *const std::ffi::c_char,
+            ) -> i32;
+        }
+        if let Ok(text) = std::ffi::CString::new(msg) {
+            // SAFETY: both pointers are valid NUL-terminated strings for the call.
+            unsafe { __android_log_write(4, c"waypoint".as_ptr(), text.as_ptr()) };
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("{msg}");
 }
 
 /// Run a session in a window until the user closes it. The session's player
@@ -122,7 +151,21 @@ fn run_with_event_loop(
         look: (0.0, 0.0),
         drag: None,
         mouse_down: false,
+        governor: None,
+        thermal_probe: thermal::ThermalProbe::new(),
+        heat: thermal::Thermal::Nominal,
+        heat_read: None,
     };
+    if handler.opts.governor
+        && let Some(tier) = handler.opts.quality
+    {
+        let fps = if tier == wp_world::QualityTier::Low {
+            30.0
+        } else {
+            60.0
+        };
+        handler.governor = Some(wp_render::governor::Governor::new(fps));
+    }
     if handler.opts.audio {
         handler.audio = Some(audio::EngineAudio::start());
     }
@@ -140,8 +183,27 @@ fn run_with_event_loop(
         sim_seconds: handler.session.app.time().seconds(),
         gpu: handler.gfx.as_ref().map(|g| g.gpu.info()),
         render: handler.gfx.as_ref().map(|g| g.renderer.stats()),
+        governor: handler.governor.as_ref().map(|g| GovernorSummary {
+            step: g.level(),
+            changes: g.changes,
+            thermal: g.thermal(),
+            frame_ms: g.smoothed_ms(),
+            target_fps: g.target_fps,
+        }),
         replay: handler.session.stop_recording(),
     })
+}
+
+/// The governor at the end of a window's run.
+#[derive(Clone, Debug, Serialize)]
+pub struct GovernorSummary {
+    /// 0 (full quality) to 5 (lowest resolution, effects off, 30 fps cap).
+    pub step: usize,
+    pub changes: u32,
+    pub thermal: thermal::Thermal,
+    /// Smoothed frame time, ms, and the frame rate aimed for.
+    pub frame_ms: f32,
+    pub target_fps: f32,
 }
 
 struct Gfx {
@@ -242,6 +304,11 @@ struct Handler {
     look: (f32, f32),
     drag: Option<(f64, f64)>,
     mouse_down: bool,
+    /// Frame-time and heat control, when the window has a quality tier.
+    governor: Option<wp_render::governor::Governor>,
+    thermal_probe: thermal::ThermalProbe,
+    heat: thermal::Thermal,
+    heat_read: Option<Instant>,
 }
 
 impl Handler {
@@ -423,6 +490,29 @@ impl Handler {
             },
         );
         let Some(gfx) = self.gfx.as_mut() else { return };
+        if let (Some(gov), Some(tier)) = (self.governor.as_mut(), self.opts.quality) {
+            // The OS's heat state, every two seconds (or the test override).
+            if self
+                .heat_read
+                .is_none_or(|t| t.elapsed().as_secs_f32() > 2.0)
+            {
+                self.heat_read = Some(Instant::now());
+                self.heat = self
+                    .opts
+                    .thermal
+                    .or_else(|| self.thermal_probe.read())
+                    .unwrap_or_default();
+            }
+            if let Some(level) = gov.update(real_dt as f32 * 1000.0, self.heat) {
+                gfx.renderer.apply_step(&gfx.gpu, tier, gov.step());
+                log_line(&format!(
+                    "render step {level} ({:?} heat, {:.1} ms frames): {:?}",
+                    self.heat,
+                    gov.smoothed_ms(),
+                    gov.step()
+                ));
+            }
+        }
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)
             | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
@@ -579,9 +669,24 @@ impl ApplicationHandler for Handler {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(g) = &self.gfx {
-            g.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        use winit::event_loop::ControlFlow;
+        let Some(g) = &self.gfx else { return };
+        // A frame-rate cap from the governor: sleep until the next frame is due.
+        let cap = self.governor.as_ref().and_then(|gov| gov.step().fps_cap);
+        match cap {
+            Some(fps) => {
+                let next = self.last + std::time::Duration::from_secs_f32(1.0 / fps);
+                if Instant::now() >= next {
+                    g.window.request_redraw();
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+                }
+            }
+            None => {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                g.window.request_redraw();
+            }
         }
     }
 }

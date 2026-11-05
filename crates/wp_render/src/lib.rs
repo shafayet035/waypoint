@@ -12,6 +12,7 @@
 pub mod bench;
 pub mod compare;
 pub mod extract;
+pub mod governor;
 pub mod mesh;
 
 pub use extract::{
@@ -815,6 +816,8 @@ pub struct Renderer {
     out_height: u32,
     /// Internal height cap (quality tier), and the upscaler when it applies.
     max_height: Option<u32>,
+    /// Share of the capped resolution actually drawn (the governor's first lever).
+    render_scale: f32,
     upscaler: Option<upscale::Upscaler>,
 }
 
@@ -1090,6 +1093,7 @@ impl Renderer {
             out_width: width,
             out_height: height,
             max_height: None,
+            render_scale: 1.0,
             upscaler: None,
         }
     }
@@ -1120,6 +1124,28 @@ impl Renderer {
     pub fn set_max_height(&mut self, gpu: &Gpu, max_height: Option<u32>) {
         self.max_height = max_height;
         self.apply_size(gpu);
+    }
+
+    /// Draw at `scale` (0.25–1) of the capped resolution on each side and
+    /// scale the result up: the cheapest way to win back frame time.
+    pub fn set_render_scale(&mut self, gpu: &Gpu, scale: f32) {
+        let scale = scale.clamp(0.25, 1.0);
+        if scale != self.render_scale {
+            self.render_scale = scale;
+            self.apply_size(gpu);
+        }
+    }
+
+    /// Apply a governor step on top of quality tier `tier`.
+    pub fn apply_step(&mut self, gpu: &Gpu, tier: wp_world::QualityTier, step: governor::Step) {
+        self.set_render_scale(gpu, step.render_scale);
+        let (size, extent_m) = tier.shadow_map();
+        let shadows = (step.shadow_scale > 0.0).then(|| ShadowSettings {
+            size: ((size as f32 * step.shadow_scale) as u32).max(256),
+            extent_m,
+        });
+        self.set_shadows(gpu, shadows);
+        self.set_max_lights(((tier.max_lights() as f32 * step.light_scale) as usize).max(4));
     }
 
     /// Largest texture side kept on the GPU (quality tier); bigger images
@@ -1238,6 +1264,14 @@ impl Renderer {
         let (iw, ih) = match self.max_height {
             Some(cap) if h > cap => (((w as u64 * cap as u64) / h as u64).max(1) as u32, cap),
             _ => (w, h),
+        };
+        let (iw, ih) = if self.render_scale < 1.0 {
+            (
+                ((iw as f32 * self.render_scale) as u32).max(1),
+                ((ih as f32 * self.render_scale) as u32).max(1),
+            )
+        } else {
+            (iw, ih)
         };
         if (iw, ih) != (self.width, self.height) {
             self.width = iw;

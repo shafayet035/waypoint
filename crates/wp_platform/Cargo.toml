@@ -21,5 +21,8 @@ winit.workspace = true
 serde.workspace = true
 toml.workspace = true
 
+[target.'cfg(any(target_os = "android", target_vendor = "apple"))'.dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true

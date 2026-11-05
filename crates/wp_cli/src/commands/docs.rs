@@ -15,6 +15,8 @@ wp — Waypoint command line. Every command takes --json and --project <dir>.
                                Q/E or mouse drag to look around in the cab, R reset, P pause
   wp run --mission route_1     play a mission (its scene, vehicle and spawn); the title shows the objective
   wp run --quality low         quality tier: low|mid|flagship|auto (default game.toml [quality] tier)
+  wp run --thermal serious     pretend the device is hot: the governor lowers resolution, effects, then frame rate
+                               (it also does this by itself when frames run late; --no-governor turns it off)
   wp bench                     measure this device (renderer benchmark + memory) and print the tier it gets
                                art style: game.toml [look] style = \"realistic\"|\"toon\"|\"flat\", plus colour
                                overrides (sky_top, ground, asphalt... as [r, g, b] 0–255); see `wp schema game`

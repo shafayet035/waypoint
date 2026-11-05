@@ -4,6 +4,8 @@ The game player for every platform. `play(root, data_dir, scenario, exit_after, 
 runs it with the platform's window loop. With game.toml `[quality] auto = true` (the default) it first
 reads the device's tier from `<data_dir>/<game>/settings.toml`, or measures it (`wp_render::bench`, about a
 second on first launch) and saves it there; the log says which (`quality flagship (benchmark 3.0 ms ...)`).
+The window runs the render governor (lower resolution, effects, then 30 fps when frames run late or the
+OS reports heat); step changes are logged (`render step 3 (Serious heat ...)`).
 Data folders: Android app storage; iOS/macOS `~/Library/Application Support/Waypoint`; Linux XDG data home.
 
 - Desktop/iOS: the `waypoint-player` binary (`main.rs`). Project lookup: a folder argument,

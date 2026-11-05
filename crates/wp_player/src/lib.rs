@@ -58,6 +58,8 @@ pub fn play(
             control,
             quality: Some(tier),
             audio: true,
+            governor: true,
+            thermal: None,
         },
     )
     .map_err(|d| vec![d])

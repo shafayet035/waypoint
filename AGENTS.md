@@ -274,4 +274,12 @@ tier in `settings.toml` in its data folder (`wp_platform::settings`; edit `tier`
 offscreen at Mid settings, 1280×720, median of 40 waited frames; plus RAM (`wp_rhi::system_memory_gb`). `QualityTier::for_device`:
 ≤ 6 ms → Flagship, ≤ 12 ms → Mid, else Low; under 7 GB at most Mid, under 5 GB Low; a CPU rasteriser Low (thresholds are
 provisional until checked on reference phones). `wp bench [--json]`; `wp run --quality auto`. Apple M4: 2.7–3.2 ms → Flagship.
+Render governor (`wp_render::governor`, pure; windows and the player run it when they have a tier): watches frame intervals
+(target 30 fps on Low, 60 otherwise) and the OS heat state (`wp_platform::thermal`: NSProcessInfo.thermalState on iOS/macOS,
+AThermal via dlsym on Android 11+), and moves through 6 steps: render scale 1 → 0.85 → 0.7, then shadow map ½ and lights ½,
+then no shadow map and ¼ lights at 0.6 scale, then a 30 fps cap (`ControlFlow::WaitUntil`). Down after 1.5 s of late frames;
+up by probing after 20 s calm (a probe that slips within 5 s is undone and the wait doubles, up to 160 s); 1 s settle after each
+change. Heat floors: Fair 1, Serious 3, Critical 5. The simulation is never touched (same ticks at any step). `Renderer::
+set_render_scale`/`apply_step`; `wp run --thermal serious|critical` simulates heat, `--no-governor` turns it off; the window
+summary reports the final step. Critical on the M4: ~29 fps drawn, ticks unchanged.
 Not yet: testing on physical phones; running on an iOS simulator.

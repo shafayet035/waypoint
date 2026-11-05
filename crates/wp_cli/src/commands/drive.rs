@@ -63,6 +63,12 @@ pub struct RunArgs {
     /// Close the window after this many real seconds (for smoke tests).
     #[arg(long)]
     exit_after: Option<f32>,
+    /// Keep the tier's full quality even when frames run late or the device is hot.
+    #[arg(long)]
+    no_governor: bool,
+    /// Pretend the device is this hot (nominal, fair, serious, critical) to test the governor.
+    #[arg(long)]
+    thermal: Option<String>,
     /// Accept control-protocol requests on 127.0.0.1:<port> while the window runs (0 = any free port).
     #[arg(long)]
     control: Option<u16>,
@@ -191,6 +197,15 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
         if args.record.is_some() {
             session.start_recording(args.hash_every);
         }
+        let thermal = match args.thermal.as_deref() {
+            None => None,
+            Some(t) => Some(wp_render::governor::Thermal::parse(t).ok_or_else(|| {
+                cli_error(
+                    format!("unknown thermal state `{t}`"),
+                    "states: nominal, fair, serious, critical",
+                )
+            })?),
+        };
         let summary = wp_platform::run_windowed(
             session,
             wp_platform::WindowOptions {
@@ -202,6 +217,8 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 control,
                 quality: Some(tier),
                 audio: !args.mute,
+                governor: !args.no_governor,
+                thermal,
             },
         )
         .map_err(|d| vec![d])?;
@@ -218,6 +235,12 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> CmdResult {
                 "closed after {:.1} s: {} frames, {} ticks ({:.1} simulated s)",
                 summary.real_seconds, summary.frames, summary.ticks, summary.sim_seconds
             );
+            if let Some(g) = &summary.governor {
+                println!(
+                    "render step {} of 5 ({} changes, {:?} heat, {:.1} ms frames, aiming for {} fps)",
+                    g.step, g.changes, g.thermal, g.frame_ms, g.target_fps
+                );
+            }
         }
         return Ok(0);
     }
