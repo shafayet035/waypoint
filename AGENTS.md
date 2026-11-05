@@ -160,7 +160,8 @@ Weather: scene `weather: Some((rain, wetness))` → reflected `Weather` resource
 (1 − 0.3·wetness) via Ground; AI slows (speed × √grip, longer gaps, gentler); renderer: overcast sky,
 dark glossy wet asphalt, rain streaks. `car_brake_100_wet`: 57 m (dry 41 m).
 Quality tiers: game.toml `[quality] tier` (low/mid/flagship; `wp run --quality`). Windows and the player
-cap the internal render height (540/720/900) and upscale (`Renderer::set_max_height`, bilinear pass);
+cap the internal render height (540/720/900) and upscale (`Renderer::set_max_height`; Catmull-Rom plus sharpening clamped to
+the nearest pixels: 0.0299 RMS against a supersampled reference where bilinear scored 0.0351, `wp_render/tests/upscale.rs`);
 traffic ×0.6/1/1.3, pedestrians ×0.5/1/1.5, rain ×0.5/1/1. Tests and `wp shot` run without a tier. `town_traffic` gate: 12
 vehicles, 3 min, no collisions. Stress (20 vehicles × 10 min × 10 seeds): cars only 0 collisions;
 with 12 m buses about 1 per 10 min on the town's tight bends. Gulshan (25 cars): 0 collisions.
@@ -306,4 +307,6 @@ NDK gravity/accelerometer on a looper thread; iOS CoreMotion gravity); touch lay
 accelerates; top right corner switches touch/tilt and saves it in settings.toml (`[controls] steering`). `wp run --steering
 tilt`, `--tilt-deg <deg>` (fake sensor). Scenario driver `Tilt([(at_s, turn_deg, throttle, brake)])`; gates
 `tilt_lane_change` (7° at 80 km/h: one lane, 0.25 g, no ESC) and `tilt_slalom` (±40° at 100 km/h: no spin).
+Temporal anti-aliasing was tried (branch `taa-experiment`: jitter, per-object motion, clipped history) and not merged: with
+4× MSAA already, it gained 7 % on still frames but was twice as far from the reference in motion. See that commit for numbers.
 Not yet: testing on physical phones; running on an iOS simulator.

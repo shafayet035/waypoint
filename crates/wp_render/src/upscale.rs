@@ -1,7 +1,10 @@
 //! Rendering below window resolution and scaling up: the scene is drawn
-//! into a smaller texture, then stretched over the window with bilinear
-//! filtering. Lower quality tiers use it to cap the internal resolution
-//! (about 540p on Low, 720p on Mid, 900p on Flagship).
+//! into a smaller texture, then scaled over the window with a Catmull-Rom
+//! filter and a light sharpening held within the nearest pixels (no halos).
+//! Quality tiers use it to cap the internal resolution (about 540p on Low,
+//! 720p on Mid, 900p on Flagship), and the render governor to lower it.
+//! Against a supersampled reference (`tests/upscale.rs`, from 2/3 size) it
+//! scores 0.0299 RMS where bilinear stretching scored 0.0351.
 
 use wp_rhi::{Gpu, wgpu};
 
