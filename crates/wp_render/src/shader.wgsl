@@ -38,6 +38,9 @@ struct Globals {
     // x: road wetness (0–1), y: rain (0–1), z: simulated time (s),
     // w: ground fog extinction per m (0: no fog).
     weather: vec4<f32>,
+    // Street reflections in wet roads: x, y: 1 / the target's size (screen
+    // position → texture coordinates), z: 1 when this frame has them.
+    reflect_params: vec4<f32>,
 };
 
 // Light falling on a surface (0–1) in the game's style: smooth, in hard toon
@@ -56,6 +59,26 @@ fn styled_light(x: f32) -> f32 {
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
+// The scene mirrored in the road plane (linear colour), for wet roads.
+@group(0) @binding(3) var reflection_tex: texture_2d<f32>;
+@group(0) @binding(4) var reflection_sampler: sampler;
+
+// What a wet road at screen position `frag` mirrors: the street drawn upside
+// down into the reflection texture, smeared down the screen as rough water
+// smears it, more so the rougher the surface.
+fn street_reflection(frag: vec2<f32>, rough: f32) -> vec3<f32> {
+    let uv = frag * g.reflect_params.xy;
+    let spread = 0.05 * rough;
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var k = -2; k <= 2; k = k + 1) {
+        let w = 3.0 - abs(f32(k));
+        let at = clamp(uv + vec2<f32>(0.0, f32(k) * spread), vec2<f32>(0.0), vec2<f32>(1.0));
+        sum += textureSampleLevel(reflection_tex, reflection_sampler, at, 0.0).rgb * w;
+        weight += w;
+    }
+    return sum / weight;
+}
 // The mesh's material maps (neutral when it has none): base colour (sRGB),
 // tangent-space normal, metallic-roughness (G roughness, B metallic),
 // emissive (sRGB), occlusion (R); strengths in mat_params.
@@ -282,16 +305,26 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
     return out;
 }
 
-@fragment
-fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+fn shade_sky(ndc: vec2<f32>) -> vec3<f32> {
     // A point on the near plane (depth 1 with reversed-Z), seen from the camera.
-    let p = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
+    let p = g.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
     let dir = normalize(p.xyz / p.w);
     var col = sky_color(dir);
     if (g.weather.w > 0.0) {
         col = in_fog(col, dir * 4000.0, 4000.0);
     }
-    return vec4<f32>(tonemap(col), 1.0);
+    return col;
+}
+
+@fragment
+fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(tonemap(shade_sky(in.ndc)), 1.0);
+}
+
+// The mirrored pass keeps linear colour (the road shader tone-maps it).
+@fragment
+fn fs_sky_mirror(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(shade_sky(in.ndc), 1.0);
 }
 
 // ---- Ground: a large quad that follows the camera ------------------------
@@ -511,8 +544,7 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     return out;
 }
 
-@fragment
-fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+fn shade_mesh(in: MeshOut) -> vec3<f32> {
     // Sampled first, in uniform control flow.
     let albedo_map = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
     let normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
@@ -579,8 +611,13 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     let diffuse = albedo_wet * (1.0 - metal) * (sun * ndl + ambient(n) * ao);
     // Rough surfaces scatter the sky reflection away: fade it with roughness².
     let gloss = (1.0 - rough) * (1.0 - rough) * (1.0 - g.style.w) * select(1.0, 0.4, g.style.x > 0.5);
-    // Puddles also mirror the darker street round them, not just the sky.
-    let env = sky_color(reflect(-v, n)) * fresnel * gloss * ao * (1.0 - 0.45 * puddle);
+    // Puddles also mirror the darker street round them, not just the sky:
+    // the real street where the frame has reflections, else a dimmed sky.
+    var mirrored = sky_color(reflect(-v, n)) * (1.0 - 0.45 * puddle);
+    if (wet > 0.0 && g.reflect_params.z > 0.5) {
+        mirrored = street_reflection(in.pos.xy, rough);
+    }
+    let env = mirrored * fresnel * gloss * ao;
     var col = diffuse + sun * spec * ndl * fresnel * (1.0 - rough * 0.7) + env;
     col += local_lights(in.rel, n, v, albedo_wet * (1.0 - metal), rough);
     // Glow: the emissive map's colour if there is one, else the surface's.
@@ -590,7 +627,22 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
         col += wet_streaks(in.rel, n_geo, v, mix(mix(0.12, 0.05, wet), 0.012, puddle)) * wet;
     }
     col = apply_fog(col, in.rel);
-    return vec4<f32>(tonemap(col), 1.0);
+    return col;
+}
+
+@fragment
+fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(tonemap(shade_mesh(in)), 1.0);
+}
+
+// The mirrored pass: linear colour, and nothing right round the camera (a
+// cab's dashboard would otherwise show up upside down in the road).
+@fragment
+fn fs_mesh_mirror(in: MeshOut) -> @location(0) vec4<f32> {
+    if (length(in.rel) < 2.5) {
+        discard;
+    }
+    return vec4<f32>(shade_mesh(in), 1.0);
 }
 
 // ---- Shadow map: depth from the sun -------------------------------------------

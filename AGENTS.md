@@ -275,6 +275,12 @@ sidewalks 0.3); with `weather.wetness` > 0, `fs_mesh` adds noise puddles (darker
 `wet_streaks`: every light in view reflected through a lobe that is narrow sideways and long towards the viewer at low angles
 (σ·cos θ by 2.5σ), so headlights, tail lamps and street lamps streak down the road; brightness goes with how bright a light
 looks (√ intensity), not its range. Dry frames take no wet branch (pictures unchanged). Shot `town_wet_night`.
+Street reflections: on wet frames the renderer first draws the scene mirrored in the road plane (sky, buildings, every mesh
+instance; not roads or ground, which are the mirror) at half the internal size into a linear Rgba16Float texture (`fs_sky_mirror`,
+`fs_mesh_mirror`: no tone mapping, front faces culled, nothing within 2.5 m of the eye so a cab never shows), and wet surfaces
+replace the sky term with `street_reflection` (same screen position, five taps smeared down the screen by roughness). Mid and
+Flagship have them (`QualityTier::reflections`), Low not; the governor drops them with the shadow map; `wp shot` has them.
+`Renderer::set_reflections`. Dry frames are byte-identical with them on or off (`wp_render/tests/reflections.rs`).
 Fog: scene `weather: Some((fog: 0.85))` (0–1; `Weather::visibility_m`: 1500 m × 0.04^fog, so 1.0 ≈ 60 m, 0.85 ≈ 100 m). Renderer:
 `Environment::with_fog` greys the sky, dims the sun and sets `ground_fog` = 3 / visibility (extinction per m at ground level,
 `Globals.weather.w`); the shader's `in_fog` integrates fog that thins with height (40 m scale, closed form along the ray), lit by the

@@ -111,6 +111,10 @@ impl QualityTier {
             Self::Flagship => 1.6,
         }
     }
+    /// Street reflections in wet roads (a mirrored pass at half size).
+    pub fn reflections(self) -> bool {
+        self != Self::Low
+    }
     /// Local lights (headlamps, street lamps) shaded per frame, nearest first.
     pub fn max_lights(self) -> usize {
         match self {

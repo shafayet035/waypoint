@@ -54,9 +54,28 @@ struct Globals {
     style: [f32; 4],
     /// Windscreen (see [`Renderer::glass_uniform`]).
     glass: [[f32; 4]; 6],
-    /// Road wetness (0–1), rain (0–1), simulated time (s), unused.
+    /// Road wetness (0–1), rain (0–1), simulated time (s), ground fog.
     weather: [f32; 4],
+    /// 1 / target width, 1 / target height, street reflections on (0/1), unused.
+    reflect_params: [f32; 4],
 }
+
+/// Where wet roads get their street reflections: the scene drawn mirrored in
+/// the road plane at a share of the internal size, in linear colour.
+struct Reflection {
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    size: (u32, u32),
+    /// The mirrored camera's globals and the bind group using them.
+    globals: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+/// Colour format of the reflection texture (linear, before tone mapping).
+const REFLECTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The reflection's size, a share of the internal size each way (blurred
+/// by rough water anyway).
+const REFLECTION_SCALE: f32 = 0.5;
 
 /// Most local lights a frame can use (the uniform's size).
 pub const MAX_LIGHTS: usize = 64;
@@ -787,6 +806,13 @@ pub struct Renderer {
     ground: wgpu::RenderPipeline,
     meshes_pipeline: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
+    /// Sky and meshes for the mirrored pass (street reflections).
+    mirror_pipelines: [wgpu::RenderPipeline; 2],
+    reflection: Option<Reflection>,
+    /// Share of the internal size the reflection is drawn at; `None`: off.
+    reflection_scale: Option<f32>,
+    no_reflection: wgpu::TextureView,
+    reflection_sampler: wgpu::Sampler,
     cube: GpuMesh,
     wheel: GpuMesh,
     /// Crown, far crown, cone, far cone, palm fronds.
@@ -886,6 +912,22 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -897,8 +939,22 @@ impl Renderer {
         });
         let shadow = Some(ShadowSettings::default());
         let shadow_view = Self::shadow_texture(gpu, shadow.map_or(1, |s| s.size));
-        let bind_group =
-            Self::main_bind_group(gpu, &main_layout, &globals, &shadow_view, &shadow_sampler);
+        let reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("reflection"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        // Bound where no reflection exists (and while drawing one).
+        let no_reflection = Self::colour_texture(gpu, "no reflection", REFLECTION_FORMAT, 1, 1);
+        let bind_group = Self::main_bind_group(
+            gpu,
+            &main_layout,
+            &globals,
+            &shadow_view,
+            &shadow_sampler,
+            (&no_reflection, &reflection_sampler),
+        );
         let textures = Textures::new(gpu);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("waypoint"),
@@ -918,7 +974,8 @@ impl Renderer {
                         depth_write: bool,
                         compare: wgpu::CompareFunction,
                         cull: Option<wgpu::Face>,
-                        blend: Option<wgpu::BlendState>| {
+                        blend: Option<wgpu::BlendState>,
+                        (target, samples): (wgpu::TextureFormat, u32)| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -940,7 +997,7 @@ impl Renderer {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
+                    count: samples,
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -948,7 +1005,7 @@ impl Renderer {
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: target,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -983,6 +1040,7 @@ impl Renderer {
             wgpu::CompareFunction::Always,
             None,
             None,
+            (format, MSAA_SAMPLES),
         );
         let ground = pipeline(
             "ground",
@@ -993,6 +1051,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             None,
+            (format, MSAA_SAMPLES),
         );
         let meshes_pipeline = pipeline(
             "meshes",
@@ -1003,6 +1062,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
             None,
+            (format, MSAA_SAMPLES),
         );
         // Rain on the windscreen: blended over the scene, hidden behind the
         // cab (steering wheel, dashboard), writing no depth.
@@ -1015,6 +1075,32 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            (format, MSAA_SAMPLES),
+        );
+
+        // The mirrored pass for street reflections: one sample, linear
+        // colour, and front faces culled (a mirror flips the winding).
+        let mirror_sky = pipeline(
+            "sky (mirrored)",
+            "vs_sky",
+            "fs_sky_mirror",
+            &[],
+            false,
+            wgpu::CompareFunction::Always,
+            None,
+            None,
+            (REFLECTION_FORMAT, 1),
+        );
+        let mirror_meshes = pipeline(
+            "meshes (mirrored)",
+            "vs_mesh",
+            "fs_mesh_mirror",
+            &[Some(vertex_layout()), Some(instance_layout())],
+            true,
+            wgpu::CompareFunction::Greater,
+            Some(wgpu::Face::Front),
+            None,
+            (REFLECTION_FORMAT, 1),
         );
 
         let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1049,7 +1135,7 @@ impl Renderer {
         let instance_capacity = 256;
         let instances = Self::instance_buffer(gpu, instance_capacity);
         let (msaa, depth) = Self::attachments(gpu, format, width, height);
-        Self {
+        let mut renderer = Self {
             format,
             width,
             height,
@@ -1067,6 +1153,11 @@ impl Renderer {
             ground,
             meshes_pipeline,
             glass,
+            mirror_pipelines: [mirror_sky, mirror_meshes],
+            reflection: None,
+            reflection_scale: None,
+            no_reflection,
+            reflection_sampler,
             cube: GpuMesh::new(gpu, &mesh::cube(), "cube"),
             wheel: GpuMesh::new(gpu, &mesh::wheel(), "wheel"),
             trees: [
@@ -1095,7 +1186,9 @@ impl Renderer {
             max_height: None,
             render_scale: 1.0,
             upscaler: None,
-        }
+        };
+        renderer.set_reflections(gpu, Some(REFLECTION_SCALE));
+        renderer
     }
 
     /// The windscreen for the shader: corner (camera-relative) + width,
@@ -1146,6 +1239,9 @@ impl Renderer {
         });
         self.set_shadows(gpu, shadows);
         self.set_max_lights(((tier.max_lights() as f32 * step.light_scale) as usize).max(4));
+        // Reflections go with the shadow map (the governor's effects lever).
+        let reflections = tier.reflections() && step.shadow_scale > 0.0;
+        self.set_reflections(gpu, reflections.then_some(REFLECTION_SCALE));
     }
 
     /// Largest texture side kept on the GPU (quality tier); bigger images
@@ -1173,13 +1269,7 @@ impl Renderer {
         let size = shadow.map_or(1, |s| s.size);
         if size != old {
             self.shadow_view = Self::shadow_texture(gpu, size);
-            self.bind_group = Self::main_bind_group(
-                gpu,
-                &self.main_layout,
-                &self.globals,
-                &self.shadow_view,
-                &self.shadow_sampler,
-            );
+            self.rebind(gpu);
         }
     }
 
@@ -1209,6 +1299,7 @@ impl Renderer {
         globals: &wgpu::Buffer,
         shadow: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        (reflection, reflection_sampler): (&wgpu::TextureView, &wgpu::Sampler),
     ) -> wgpu::BindGroup {
         gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals + shadow map"),
@@ -1226,8 +1317,129 @@ impl Renderer {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(reflection),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(reflection_sampler),
+                },
             ],
         })
+    }
+
+    /// A sampled colour texture that can also be drawn into.
+    fn colour_texture(
+        gpu: &Gpu,
+        label: &str,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> wgpu::TextureView {
+        gpu.device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: width.max(1),
+                    height: height.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Rebuild the bind groups that see the shadow map and the reflection
+    /// (after either changes).
+    fn rebind(&mut self, gpu: &Gpu) {
+        let reflection = self
+            .reflection
+            .as_ref()
+            .map_or(&self.no_reflection, |r| &r.color);
+        self.bind_group = Self::main_bind_group(
+            gpu,
+            &self.main_layout,
+            &self.globals,
+            &self.shadow_view,
+            &self.shadow_sampler,
+            (reflection, &self.reflection_sampler),
+        );
+        if let Some(r) = &mut self.reflection {
+            r.bind_group = Self::main_bind_group(
+                gpu,
+                &self.main_layout,
+                &r.globals,
+                &self.shadow_view,
+                &self.shadow_sampler,
+                (&self.no_reflection, &self.reflection_sampler),
+            );
+        }
+    }
+
+    /// Street reflections in wet roads, drawn at `scale` of the internal size
+    /// each way; `None` turns them off (wet roads mirror only the sky).
+    pub fn set_reflections(&mut self, gpu: &Gpu, scale: Option<f32>) {
+        self.reflection_scale = scale.map(|s| s.clamp(0.1, 1.0));
+        self.sync_reflection(gpu);
+    }
+
+    fn sync_reflection(&mut self, gpu: &Gpu) {
+        let size = self.reflection_scale.map(|s| {
+            (
+                ((self.width as f32 * s) as u32).max(1),
+                ((self.height as f32 * s) as u32).max(1),
+            )
+        });
+        if size == self.reflection.as_ref().map(|r| r.size) {
+            return;
+        }
+        self.reflection = size.map(|(w, h)| {
+            let globals = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("globals (reflection)"),
+                size: std::mem::size_of::<Globals>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let depth = gpu
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("reflection depth"),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: DEPTH_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            Reflection {
+                color: Self::colour_texture(gpu, "reflection", REFLECTION_FORMAT, w, h),
+                depth,
+                size: (w, h),
+                bind_group: Self::main_bind_group(
+                    gpu,
+                    &self.main_layout,
+                    &globals,
+                    &self.shadow_view,
+                    &self.shadow_sampler,
+                    (&self.no_reflection, &self.reflection_sampler),
+                ),
+                globals,
+            }
+        });
+        self.rebind(gpu);
     }
 
     /// Stream road tiles: keep those within `range_m` of the camera on the
@@ -1243,6 +1455,7 @@ impl Renderer {
         self.set_max_lights(q.max_lights());
         self.set_lod_bias(q.lod_bias());
         self.set_max_texture_size(q.max_texture_px());
+        self.set_reflections(gpu, q.reflections().then_some(REFLECTION_SCALE));
     }
 
     pub fn set_streaming(&mut self, range_m: Option<f32>) {
@@ -1277,6 +1490,7 @@ impl Renderer {
             self.width = iw;
             self.height = ih;
             (self.msaa, self.depth) = Self::attachments(gpu, self.format, iw, ih);
+            self.sync_reflection(gpu);
         }
         if (iw, ih) == (w, h) {
             self.upscaler = None;
@@ -1378,6 +1592,12 @@ impl Renderer {
                 frame.time_s,
                 env.ground_fog,
             ],
+            reflect_params: [
+                1.0 / self.width.max(1) as f32,
+                1.0 / self.height.max(1) as f32,
+                0.0,
+                0.0,
+            ],
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1406,6 +1626,27 @@ impl Renderer {
         for (i, s) in frame.shadows.iter().take(MAX_SHADOWS).enumerate() {
             globals.shadows[i] = [s.center.x, s.center.y, s.half_extents.x, s.half_extents.y];
             globals.shadow_rot[i] = [s.heading.cos(), s.heading.sin(), s.strength, s.softness];
+        }
+        // Street reflections only matter on wet roads.
+        let mirror = self.reflection.is_some() && frame.wetness > 0.01;
+        if mirror && let Some(r) = &self.reflection {
+            globals.reflect_params[2] = 1.0;
+            // The same camera looking at the scene mirrored in the road plane
+            // (world z = 0, camera-relative z = −eye height).
+            let h = eye.z;
+            let flip = glam::Mat4::from_cols(
+                glam::Vec4::X,
+                glam::Vec4::Y,
+                glam::Vec4::NEG_Z,
+                glam::Vec4::new(0.0, 0.0, -2.0 * h, 1.0),
+            );
+            let mirrored_view = view_proj * flip;
+            let mut mg = globals;
+            mg.view_proj = mirrored_view.to_cols_array_2d();
+            mg.inv_view_proj = mirrored_view.inverse().to_cols_array_2d();
+            mg.reflect_params[2] = 0.0;
+            gpu.queue
+                .write_buffer(&r.globals, 0, bytemuck::bytes_of(&mg));
         }
         gpu.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1622,6 +1863,81 @@ impl Renderer {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                     stats.draw_calls += 1;
                 }
+            }
+        }
+        if mirror && let Some(r) = &self.reflection {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reflection"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &r.color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &r.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &r.bind_group, &[]);
+            pass.set_bind_group(1, &self.textures.white, &[]);
+            let [sky, meshes] = &self.mirror_pipelines;
+            pass.set_pipeline(sky);
+            pass.draw(0..3, 0..1);
+            pass.set_pipeline(meshes);
+            let stride = std::mem::size_of::<InstanceRaw>() as u64;
+            // Buildings (the road surfaces are the mirror itself).
+            for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().take(main_static) {
+                if kind != StaticKind::Building {
+                    continue;
+                }
+                let Some(mesh) = self.static_mesh(kind, tile, layer) else {
+                    continue;
+                };
+                let slot = slot as u64;
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(
+                    1,
+                    self.road_instances
+                        .slice(slot * stride..(slot + 1) * stride),
+                );
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                stats.draw_calls += 1;
+            }
+            let mut first = 0u64;
+            for (id, list) in &groups {
+                let count = list.len() as u64;
+                if let Some(mesh) = self.mesh(*id)
+                    && count > 0
+                    && mesh.index_count > 0
+                {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.instances
+                            .slice(first * stride..(first + count) * stride),
+                    );
+                    pass.set_bind_group(
+                        1,
+                        mesh.material.as_deref().unwrap_or(&self.textures.white),
+                        &[],
+                    );
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..count as u32);
+                    stats.draw_calls += 1;
+                }
+                first += count;
             }
         }
         {
