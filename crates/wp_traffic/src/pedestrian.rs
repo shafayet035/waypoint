@@ -54,6 +54,11 @@ struct Walk {
     s: f32,
     /// Seconds lying down after being hit.
     down_s: f32,
+    /// How far they stand back from the kerb while waiting, m.
+    back_m: f32,
+    /// How far they have stepped aside (left of the way they walk) on a
+    /// sidewalk, m.
+    aside_m: f32,
 }
 
 struct PedestrianState {
@@ -66,6 +71,12 @@ struct PedestrianState {
 /// Seconds a vehicle must be from a crossing before someone steps out.
 const SAFE_GAP_S: f32 = 5.0;
 const DOWN_FOR_S: f32 = 8.0;
+/// Waiting at a kerb, people step back this far from a moving vehicle whose
+/// body comes within `STAND_BACK_WITHIN_M` of where they stand (a long
+/// vehicle's front swinging round a corner); walking along a sidewalk, they
+/// step aside as far.
+const STAND_BACK_M: f32 = 0.9;
+const STAND_BACK_WITHIN_M: f32 = 1.2;
 
 /// Move every pedestrian one tick (spawning them on the first).
 pub fn pedestrians(world: &mut World) {
@@ -96,10 +107,17 @@ pub fn pedestrians(world: &mut World) {
     }
     // Vehicles: position, velocity, how far their body reaches.
     let mut vehicles: Vec<(Vec2, Vec2, f32)> = Vec::new();
+    // Bodies of the moving ones, for stepping back.
+    let mut moving: Vec<[Vec2; 4]> = Vec::new();
     world.query::<(&Pose, &Vehicle)>().for_each(|e, (pose, _)| {
         let v = world.get::<Velocity>(e).map_or(Vec2::ZERO, |v| v.linear);
-        let r = world.get::<Collider>(e).map_or(3.0, |c| c.radius());
-        vehicles.push((pose.position, v, r));
+        let c = world.get::<Collider>(e).map(|c| *c);
+        vehicles.push((pose.position, v, c.map_or(3.0, |c| c.radius())));
+        if let Some(c) = c
+            && v.length() > 0.5
+        {
+            moving.push(c.corners(pose));
+        }
     });
     let people: Vec<Entity> = world
         .resource::<PedestrianState>()
@@ -162,10 +180,14 @@ pub fn pedestrians(world: &mut World) {
                 Some(_) => false,
                 None => clear(),
             };
-            if !safe {
+            // Step back from a body swinging close; go only from the kerb.
+            let (p, dir) = point_on(&net, edge_id, fwd, 0.0);
+            let close = moving.iter().any(|q| near_box(p, q, STAND_BACK_WITHIN_M));
+            let back = if close { STAND_BACK_M } else { 0.0 };
+            walk.back_m += (back - walk.back_m).clamp(-me.speed * dt, me.speed * dt);
+            if !safe || walk.back_m > 0.0 {
                 waiting += 1;
-                let (p, dir) = point_on(&net, edge_id, fwd, 0.0);
-                moves.push((e, p, dir, 0.0));
+                moves.push((e, p - dir * walk.back_m, dir, 0.0));
                 continue;
             }
             *crossings += 1;
@@ -198,7 +220,22 @@ pub fn pedestrians(world: &mut World) {
         }
         let (id, f) = walk.route[walk.idx];
         let (p, dir) = point_on(&net, id, f, walk.s);
-        moves.push((e, p, dir, me.speed));
+        // On a sidewalk, step aside from a body swinging over the kerb.
+        let left = Vec2::new(-dir.y, dir.x);
+        let mut aside = 0.0;
+        if matches!(net.sidewalks.edges[id].kind, WalkKind::Sidewalk)
+            && let Some(q) = moving.iter().find(|q| near_box(p, q, STAND_BACK_WITHIN_M))
+        {
+            let centre = (q[0] + q[1] + q[2] + q[3]) / 4.0;
+            aside = STAND_BACK_M
+                * if left.dot(p - centre) >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+        }
+        walk.aside_m += (aside - walk.aside_m).clamp(-me.speed * dt, me.speed * dt);
+        moves.push((e, p + left * walk.aside_m, dir, me.speed));
     }
     for (e, p, dir, speed) in moves {
         if let Some(mut pose) = world.get_mut::<Pose>(e) {
@@ -272,6 +309,8 @@ fn place(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
         idx: 0,
         s: 0.0,
         down_s: 0.0,
+        back_m: 0.0,
+        aside_m: 0.0,
     };
     drop(st);
     let (p, dir) = point_on(net, walk.route[0].0, walk.route[0].1, 0.0);
@@ -289,6 +328,23 @@ fn place(world: &mut World, net: &RoadNetwork, reuse: Option<Entity>) {
         .resource_mut::<PedestrianState>()
         .walks
         .insert(e, walk);
+}
+
+/// Whether person `e` is walking across a road on a crossing.
+pub(crate) fn on_crossing(world: &World, e: Entity) -> bool {
+    let (Some(st), Some(net)) = (
+        world.get_resource::<PedestrianState>(),
+        world.get_resource::<Roads>(),
+    ) else {
+        return false;
+    };
+    st.walks.get(&e).is_some_and(|w| {
+        w.s > 0.0
+            && matches!(
+                net.0.sidewalks.edges[w.route[w.idx].0].kind,
+                WalkKind::Crossing { .. }
+            )
+    })
 }
 
 /// Knock down people that vehicles touch, and tell the vehicle.

@@ -1,0 +1,14 @@
+// The town busy on foot and on wheels: 20 AI vehicles (a third of them 12 m
+// buses) and 16 pedestrians.
+(
+  name: "town_people",
+  ground: (friction_scale: 1.0, gravity: 9.81),
+  roads: Some("roads/town.road.ron"),
+  scenery: Some("scenery/town.scenery.ron"),
+  traffic: Some((count: 20, vehicles: ["hatchback", "hatchback", "city_bus"])),
+  pedestrians: Some((count: 16)),
+  spawns: [
+    (name: "avenue_start", position: (-125.0, -5.25), heading_deg: 0.0),
+    (name: "car_park", position: (-60.0, 50.0), heading_deg: 0.0),
+  ],
+)

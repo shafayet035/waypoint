@@ -231,6 +231,8 @@ struct Body {
     width: f32,
     /// The four corners of its footprint (people: their position).
     corners: [Vec2; 4],
+    /// A person walking across a road on a crossing.
+    crossing: bool,
 }
 
 const IDM: Idm = Idm {
@@ -592,6 +594,7 @@ fn bodies(world: &World) -> Vec<Body> {
                 rear: fp.rear,
                 width: fp.width,
                 corners,
+                crossing: false,
             });
         }
     });
@@ -607,6 +610,7 @@ fn bodies(world: &World) -> Vec<Body> {
                 rear: -0.3,
                 width: 0.6,
                 corners: [pose.position; 4],
+                crossing: pedestrian::on_crossing(world, e),
             });
         });
     let trailers = world.get_resource::<TrailerLibrary>();
@@ -627,6 +631,7 @@ fn bodies(world: &World) -> Vec<Body> {
                 rear: front - def.body.length_m,
                 width: def.body.width_m,
                 corners,
+                crossing: false,
             });
         }
     });
@@ -787,6 +792,22 @@ fn drive(
                 .changes
                 .contains(&plan.route[k]))
         || lane_closes(net, plan.route[k]);
+    // How far the front corners swing outside the front axle's path in the
+    // sharpest bend of the next 20 m (so a vehicle waiting to turn already
+    // watches where its turn will sweep): overhang a ahead of the axle,
+    // wheelbase L, curvature κ: about κ (a² + 2aL) / 2.
+    let front_swing = {
+        let bend = (0..8)
+            .map(|i| {
+                let at = s + i as f32 * 2.5;
+                let (_, t0) = path.sample(at - 3.0);
+                let (_, t1) = path.sample(at + 3.0);
+                (t0.angle_to(t1) / 6.0).abs()
+            })
+            .fold(0.0f32, f32::max);
+        let a = (fp.front - def.cg_to_front_axle_m).max(0.0);
+        bend * (a * a + 2.0 * a * def.wheelbase_m) / 2.0
+    };
     for b in bodies {
         if b.entity == me || b.position.distance(pose.position) > LOOK_AHEAD_M + 20.0 {
             continue;
@@ -796,6 +817,10 @@ fn drive(
         // People only matter in the lane itself.
         let (back, reach) = if changing && b.width > 1.0 {
             (fp.rear + b.rear - 2.0, 3.0 * lane_half)
+        } else if b.crossing && b.velocity.length() > 0.2 {
+            // Someone walking across: watch the whole width this body sweeps
+            // in a bend (the front overhang swings out), not just the lane.
+            (0.5, lane_half.max(fp.width / 2.0 + front_swing))
         } else {
             (0.5, lane_half)
         };
@@ -1052,6 +1077,11 @@ fn drive(
     let mut hold_left = -(swing - shy);
     if hold_left * kerb_side < 0.0 {
         hold_left *= 0.3;
+    } else {
+        // Swinging out towards the kerb (turning away from it): only as far
+        // as the lane has room, or the body rides over the kerb.
+        let room = ((lane_w - fp.width) / 2.0).max(0.0);
+        hold_left = hold_left.clamp(-room, room);
     }
     let seen = front_axle - left * hold_left;
     let steer = stanley_steering(&path, seen, pose.heading, speed.max(0.0), s);

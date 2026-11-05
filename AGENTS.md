@@ -138,6 +138,12 @@ lights. Pedestrians (`wp_traffic::pedestrian`) walk a sidewalk graph built from 
 (`wp_road::sidewalk`: sidewalk centre lines, zebra crossings at junction arms and dead ends, corner
 links), cross with the lights or when no vehicle is within 5 s, and are obstacles to AI drivers, who
 stop short of zebras; `HitPedestrian` and `NoPedestrianHits` (village: 30 people, none hit).
+Long vehicles and people: a bus's outward hold in a bend (front axle off the path so the rear wheels don't cut in) is capped to
+the room left in the lane when it points at the kerb, or its front rides over the pavement. Drivers watch the full width their
+front sweeps in the sharpest bend of the next 20 m (κ (a² + 2aL) / 2) for anyone walking on a crossing (people standing still
+don't count, so nobody waits on someone waiting for them). People waiting at a kerb step back 0.9 m, and people on a pavement
+step aside 0.9 m, from a moving body within 1.2 m. Gate `town_people` (20 vehicles incl. buses, 16 people, 5 min: nobody hit);
+10 seeds × 10 min × 20 vehicles: 0 hits (was 16 in 50 min), 1 vehicle collision.
 Missions (`wp_mission`, gameplay layer): road files have bus `stops`; `missions/<name>.mission.ron` lists
 stops with a timetable, passengers board/alight while the doors are open, and a score (punctuality,
 comfort ≤ 0.3 g, safety). `wp run --mission route_1` to play; the `Autopilot` driver lets the traffic AI

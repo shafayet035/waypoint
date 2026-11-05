@@ -1,0 +1,22 @@
+// Buses and people: 12 m buses turning into the town's narrow streets swing
+// their front over the kerb. Drivers watch the whole width they sweep for
+// anyone crossing, and people on the pavement step back from a swinging
+// body. Five busy minutes: nobody hit, no collisions, traffic keeps moving.
+(
+  scene: "scenes/town_people.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "car_park",
+    driver: Script([(at_s: 0.0, brake: 1.0)]),
+  ),
+  duration_s: 300.0,
+  assert: [
+    NoPedestrianHits,
+    NoCollisions,
+    NoRedLightViolations,
+    TrafficFlows(min_trips: 20),
+    NoNaN,
+    Deterministic,
+  ],
+)
