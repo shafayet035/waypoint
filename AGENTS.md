@@ -216,6 +216,11 @@ Sound (`wp_audio`): a synthesized voice per player vehicle: firing-frequency har
 half-order rumble, intake hiss with throttle, road roar with speed, squeal when sliding. Tuned per vehicle with
 `sound: (volume, pitch, roughness, rumble, intake, road, skid)` (multipliers). Windows play it via cpal (device
 opened on a thread; `wp run --mute`); `wp audio --scenario X --out f.wav` renders it headless for analysis.
+Stylised look (`style = "stylised"`): wrapped light (`look.wrap`), sky light in shade tinted cool (`shade`), aerial haze through the
+fog path (`haze`: ground fog density ≈ 1200 m visibility, 160 m height scale, sun glow), then post-processing (`wp_render::post`,
+only when `Look::post()`): the scene renders linear with distance in alpha into Rgba16Float, a 5-level blur pyramid gives bloom and
+the distance blur (sharp to ~2.2× the focus distance), then exposure, ACES, saturation, a split-tone grade (`highlights`, `shade`),
+an S-curve and a vignette. Overrides: haze, bloom, depth_blur, vignette, shade, highlights. Other styles never take the post path.
 Art styles: game.toml `[look]` → reflected `Look` resource (live-editable): `style = "realistic" | "toon" |
 "flat"` (toon: banded light, one crisp highlight, bold colour, no grid; flat: matte pastel, wrapped light, no
 reflections) plus overrides: sky_top, sky_horizon, ground, grid, asphalt, markings, sidewalk (sRGB 0–255),

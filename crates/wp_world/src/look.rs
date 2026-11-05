@@ -15,6 +15,10 @@ pub enum ArtStyle {
     Toon,
     /// Low-poly pastel: matte colours, no reflections, soft light.
     Flat,
+    /// Stylised: faceted shapes in soft wrapped light, a warm sun and cool
+    /// shade, deep coloured haze over distance, bloom, a colour grade and
+    /// distant blur.
+    Stylised,
 }
 
 /// game.toml `[look]`: a style preset plus optional overrides. Colours are
@@ -54,6 +58,24 @@ pub struct LookDef {
     /// Light bands for the toon style (2–6).
     #[serde(default)]
     pub toon_bands: Option<u8>,
+    /// Aerial haze, 0 (none) to 2: distant things melt into the sky colour.
+    #[serde(default)]
+    pub haze: Option<f32>,
+    /// Glow round bright things, 0–2.
+    #[serde(default)]
+    pub bloom: Option<f32>,
+    /// Blur of the far distance, 0–2.
+    #[serde(default)]
+    pub depth_blur: Option<f32>,
+    /// Darkened corners, 0–1.
+    #[serde(default)]
+    pub vignette: Option<f32>,
+    /// Colour of shade (sRGB 0–255): what light the sky casts into shadows.
+    #[serde(default)]
+    pub shade: Option<[u8; 3]>,
+    /// Colour the grade pushes the bright tones towards (sRGB 0–255).
+    #[serde(default)]
+    pub highlights: Option<[u8; 3]>,
 }
 
 /// The resolved look (linear colours).
@@ -73,6 +95,39 @@ pub struct Look {
     pub exposure: f32,
     /// 0 for smooth light; otherwise the number of toon bands.
     pub bands: f32,
+    /// Light wrapping round shapes past the terminator, 0–1 (softer form).
+    #[serde(default)]
+    pub wrap: f32,
+    /// Aerial haze density (0: only the classic distance fog).
+    #[serde(default)]
+    pub haze: f32,
+    #[serde(default)]
+    pub bloom: f32,
+    #[serde(default)]
+    pub depth_blur: f32,
+    #[serde(default)]
+    pub vignette: f32,
+    /// Tint of shade (multiplies sky light; white: none).
+    #[serde(default = "white")]
+    pub shade: [f32; 3],
+    /// Tint the grade gives bright tones (white: none).
+    #[serde(default = "white")]
+    pub highlights: [f32; 3],
+}
+
+fn white() -> [f32; 3] {
+    [1.0; 3]
+}
+
+impl Look {
+    /// Whether frames go through the post-processing chain (bloom, blur,
+    /// grade): only looks that ask for it.
+    pub fn post(&self) -> bool {
+        self.bloom > 0.0
+            || self.depth_blur > 0.0
+            || self.vignette > 0.0
+            || self.highlights != [1.0; 3]
+    }
 }
 
 impl Default for Look {
@@ -110,6 +165,13 @@ impl LookDef {
             fog: 1.0,
             exposure: 1.0,
             bands: 0.0,
+            wrap: 0.0,
+            haze: 0.0,
+            bloom: 0.0,
+            depth_blur: 0.0,
+            vignette: 0.0,
+            shade: [1.0; 3],
+            highlights: [1.0; 3],
         };
         match self.style {
             ArtStyle::Realistic => {}
@@ -136,6 +198,25 @@ impl LookDef {
                 look.saturation = 0.95;
                 look.fog = 0.8;
                 look.exposure = 0.55;
+            }
+            ArtStyle::Stylised => {
+                look.sky_top = srgb([120, 175, 225]);
+                look.sky_horizon = srgb([250, 222, 200]);
+                look.ground = srgb([170, 150, 110]);
+                look.grid = false;
+                look.asphalt = srgb([92, 88, 92]);
+                look.markings = srgb([245, 236, 214]);
+                look.sidewalk = srgb([214, 196, 176]);
+                look.saturation = 1.12;
+                look.fog = 0.5;
+                look.exposure = 0.9;
+                look.wrap = 0.4;
+                look.haze = 1.0;
+                look.bloom = 0.6;
+                look.depth_blur = 0.7;
+                look.vignette = 0.25;
+                look.shade = srgb([208, 216, 246]);
+                look.highlights = srgb([255, 238, 214]);
             }
         }
         let set = |slot: &mut [f32; 3], c: Option<[u8; 3]>| {
@@ -164,6 +245,17 @@ impl LookDef {
         if let Some(b) = self.toon_bands {
             look.bands = b.clamp(2, 8) as f32;
         }
+        let amount = |v: Option<f32>, max: f32, slot: &mut f32| {
+            if let Some(v) = v {
+                *slot = v.clamp(0.0, max);
+            }
+        };
+        amount(self.haze, 2.0, &mut look.haze);
+        amount(self.bloom, 2.0, &mut look.bloom);
+        amount(self.depth_blur, 2.0, &mut look.depth_blur);
+        amount(self.vignette, 1.0, &mut look.vignette);
+        set(&mut look.shade, self.shade);
+        set(&mut look.highlights, self.highlights);
         look
     }
 }
@@ -171,6 +263,36 @@ impl LookDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_stylised_look_uses_post_processing() {
+        for style in [ArtStyle::Realistic, ArtStyle::Toon, ArtStyle::Flat] {
+            let look = LookDef {
+                style,
+                ..Default::default()
+            }
+            .resolve();
+            assert!(!look.post(), "{style:?}");
+            assert_eq!((look.wrap, look.haze), (0.0, 0.0), "{style:?}");
+            assert_eq!(look.shade, [1.0; 3]);
+        }
+        let stylised = LookDef {
+            style: ArtStyle::Stylised,
+            ..Default::default()
+        }
+        .resolve();
+        assert!(stylised.post() && stylised.haze > 0.0 && stylised.wrap > 0.0);
+        // Overrides clamp to their ranges.
+        let tuned = LookDef {
+            style: ArtStyle::Stylised,
+            bloom: Some(5.0),
+            vignette: Some(0.0),
+            haze: Some(-1.0),
+            ..Default::default()
+        }
+        .resolve();
+        assert_eq!((tuned.bloom, tuned.vignette, tuned.haze), (2.0, 0.0, 0.0));
+    }
 
     #[test]
     fn presets_and_overrides() {

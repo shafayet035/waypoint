@@ -105,6 +105,8 @@ impl Environment {
             ground_base: Vec3::from(look.ground),
             ground_line: Vec3::from(look.ground_lines),
             fog_density: base.fog_density * look.fog,
+            // Aerial haze: about 1200 m of visibility at haze 1.
+            ground_fog: look.haze * 0.0025,
             exposure: base.exposure * look.exposure,
             ..base
         }
@@ -173,7 +175,7 @@ impl Environment {
         self.sun_intensity *= 1.0 - 0.8 * f;
         self.sun_color = self.sun_color.lerp(Vec3::new(0.95, 0.93, 0.9), f);
         // Fog is defined by visibility: contrast falls to 5 % at `sight`.
-        self.ground_fog = 3.0 / sight.max(1.0);
+        self.ground_fog = self.ground_fog.max(3.0 / sight.max(1.0));
         self.exposure *= 1.0 + 0.25 * f;
         self
     }

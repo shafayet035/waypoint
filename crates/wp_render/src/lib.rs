@@ -26,6 +26,7 @@ use glam::Mat3;
 use wp_core::Diagnostic;
 use wp_rhi::{Gpu, OffscreenTarget, wgpu};
 
+mod post;
 mod upscale;
 
 pub const MSAA_SAMPLES: u32 = 4;
@@ -58,7 +59,15 @@ struct Globals {
     weather: [f32; 4],
     /// 1 / target width, 1 / target height, street reflections on (0/1), unused.
     reflect_params: [f32; 4],
+    /// Light wrap, fog height scale (m), linear output for post (0/1), unused.
+    look: [f32; 4],
+    /// Tint of sky light in shade.
+    shade: [f32; 4],
 }
+
+/// Height scale of ground fog, m; stylised haze reaches higher.
+const FOG_HEIGHT_M: f32 = 40.0;
+const HAZE_HEIGHT_M: f32 = 160.0;
 
 /// Where wet roads get their street reflections: the scene drawn mirrored in
 /// the road plane at a share of the internal size, in linear colour.
@@ -808,6 +817,10 @@ pub struct Renderer {
     glass: wgpu::RenderPipeline,
     /// Sky and meshes for the mirrored pass (street reflections).
     mirror_pipelines: [wgpu::RenderPipeline; 2],
+    /// Sky, ground, meshes and glass writing linear colour for `post`.
+    hdr_pipelines: [wgpu::RenderPipeline; 4],
+    /// Bloom, distance blur and grading for stylised looks (made on first use).
+    post: Option<post::Post>,
     reflection: Option<Reflection>,
     /// Share of the internal size the reflection is drawn at; `None`: off.
     reflection_scale: Option<f32>,
@@ -1078,6 +1091,55 @@ impl Renderer {
             (format, MSAA_SAMPLES),
         );
 
+        // The same scene pipelines writing linear colour (and distance) for
+        // the post-processing chain of stylised looks.
+        let hdr_target = (post::HDR_FORMAT, MSAA_SAMPLES);
+        let hdr_pipelines = [
+            pipeline(
+                "sky (hdr)",
+                "vs_sky",
+                "fs_sky",
+                &[],
+                false,
+                wgpu::CompareFunction::Always,
+                None,
+                None,
+                hdr_target,
+            ),
+            pipeline(
+                "ground (hdr)",
+                "vs_ground",
+                "fs_ground",
+                &[],
+                true,
+                wgpu::CompareFunction::Greater,
+                None,
+                None,
+                hdr_target,
+            ),
+            pipeline(
+                "meshes (hdr)",
+                "vs_mesh",
+                "fs_mesh",
+                &[Some(vertex_layout()), Some(instance_layout())],
+                true,
+                wgpu::CompareFunction::Greater,
+                Some(wgpu::Face::Back),
+                None,
+                hdr_target,
+            ),
+            pipeline(
+                "windscreen (hdr)",
+                "vs_glass",
+                "fs_glass",
+                &[],
+                false,
+                wgpu::CompareFunction::Greater,
+                None,
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                hdr_target,
+            ),
+        ];
         // The mirrored pass for street reflections: one sample, linear
         // colour, and front faces culled (a mirror flips the winding).
         let mirror_sky = pipeline(
@@ -1154,6 +1216,8 @@ impl Renderer {
             meshes_pipeline,
             glass,
             mirror_pipelines: [mirror_sky, mirror_meshes],
+            hdr_pipelines,
+            post: None,
             reflection: None,
             reflection_scale: None,
             no_reflection,
@@ -1598,6 +1662,17 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
+            look: [
+                frame.look.wrap,
+                if frame.look.haze > 0.0 {
+                    HAZE_HEIGHT_M
+                } else {
+                    FOG_HEIGHT_M
+                },
+                if frame.look.post() { 1.0 } else { 0.0 },
+                0.0,
+            ],
+            shade: glam::Vec3::from(frame.look.shade).extend(1.0).to_array(),
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1807,6 +1882,15 @@ impl Renderer {
             building_tiles_total: self.buildings.as_ref().map_or(0, |c| c.tiles.len() as u32),
             ..Default::default()
         };
+        // Stylised looks draw into the post chain's linear buffer.
+        let post_on = frame.look.post();
+        if post_on {
+            let size = (self.width, self.height);
+            match &mut self.post {
+                Some(p) => p.resize(gpu, size),
+                None => self.post = Some(post::Post::new(gpu, self.format, size)),
+            }
+        }
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1944,11 +2028,15 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.msaa,
+                    view: match (&self.post, post_on) {
+                        (Some(p), true) => &p.msaa,
+                        _ => &self.msaa,
+                    },
                     depth_slice: None,
-                    resolve_target: Some(match &self.upscaler {
-                        Some(u) => &u.view,
-                        None => target,
+                    resolve_target: Some(match (&self.post, post_on, &self.upscaler) {
+                        (Some(p), true, _) => &p.hdr,
+                        (_, _, Some(u)) => &u.view,
+                        _ => target,
                     }),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1969,11 +2057,13 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(1, &self.textures.white, &[]);
-            pass.set_pipeline(&self.sky);
+            let [hdr_sky, hdr_ground, hdr_meshes, hdr_glass] = &self.hdr_pipelines;
+            let pick = |plain, linear| if post_on { linear } else { plain };
+            pass.set_pipeline(pick(&self.sky, hdr_sky));
             pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.ground);
+            pass.set_pipeline(pick(&self.ground, hdr_ground));
             pass.draw(0..6, 0..1);
-            pass.set_pipeline(&self.meshes_pipeline);
+            pass.set_pipeline(pick(&self.meshes_pipeline, hdr_meshes));
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().take(main_static) {
                 let Some(mesh) = self.static_mesh(kind, tile, layer) else {
@@ -2020,12 +2110,28 @@ impl Renderer {
                 first += count;
             }
             if frame.windscreen.is_some() {
-                pass.set_pipeline(&self.glass);
+                pass.set_pipeline(pick(&self.glass, hdr_glass));
                 pass.set_bind_group(1, &self.textures.white, &[]);
                 pass.draw(0..6, 0..1);
                 stats.draw_calls += 1;
                 stats.triangles += 2;
             }
+        }
+        if post_on && let Some(p) = &self.post {
+            let look = &frame.look;
+            let params = post::Params {
+                a: [env.exposure, look.saturation, look.bloom, look.depth_blur],
+                b: [
+                    look.vignette,
+                    (frame.camera.target - frame.camera.eye).length(),
+                    1.0 / self.width.max(1) as f32,
+                    1.0 / self.height.max(1) as f32,
+                ],
+                highlights: glam::Vec3::from(look.highlights).extend(1.0).to_array(),
+                shade: glam::Vec3::from(look.shade).extend(1.0).to_array(),
+            };
+            let out = self.upscaler.as_ref().map_or(target, |u| &u.view);
+            p.encode(gpu, &mut encoder, out, params);
         }
         if let Some(u) = &self.upscaler {
             u.encode(&mut encoder, target);

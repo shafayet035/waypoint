@@ -41,7 +41,29 @@ struct Globals {
     // Street reflections in wet roads: x, y: 1 / the target's size (screen
     // position → texture coordinates), z: 1 when this frame has them.
     reflect_params: vec4<f32>,
+    // Stylised looks: x: light wrap (0: plain Lambert), y: height scale of
+    // ground fog and haze (m), z: 1 to write linear colour for the
+    // post-processing chain, w: unused.
+    look: vec4<f32>,
+    // Tint of sky light in shade (rgb; white: none).
+    shade: vec4<f32>,
 };
+
+// Sunlight on a surface facing `ndotl`: Lambert, or wrapped past the
+// terminator for a softer form in stylised looks.
+fn lambert(ndotl: f32) -> f32 {
+    let w = g.look.x;
+    return select(max(ndotl, 0.0), clamp((ndotl + w) / (1.0 + w), 0.0, 1.0), w > 0.0);
+}
+
+// Tone-mapped colour, or linear (with the distance in alpha) when the
+// post-processing chain does the rest.
+fn finish(col: vec3<f32>, rel: vec3<f32>) -> vec4<f32> {
+    if (g.look.z > 0.5) {
+        return vec4<f32>(col, length(rel));
+    }
+    return vec4<f32>(tonemap(col), 1.0);
+}
 
 // Light falling on a surface (0–1) in the game's style: smooth, in hard toon
 // bands, or wrapped softly round the shape for the flat style.
@@ -158,7 +180,7 @@ fn ambient(n: vec3<f32>) -> vec3<f32> {
     let bounce = g.ground_base.rgb * g.sun_color.rgb * g.sun_dir.w * 0.35;
     // The whole sky dome lights a surface, not just the zenith: average it.
     let sky = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, 0.55);
-    return mix(bounce, sky * 0.95, n.z * 0.5 + 0.5);
+    return mix(bounce, sky * 0.95, n.z * 0.5 + 0.5) * g.shade.rgb;
 }
 
 // `rel`: position relative to the camera (all geometry is drawn camera-relative,
@@ -173,12 +195,11 @@ fn apply_fog(col: vec3<f32>, rel: vec3<f32>) -> vec3<f32> {
 }
 
 // ---- Weather fog -------------------------------------------------------------
-// Ground fog thins with height (scale FOG_HEIGHT_M), so the fog along a ray has
+// Ground fog thins with height (scale `g.look.y`, m), so the fog along a ray has
 // a closed form. It is lit by the sky, by the sun (scattered mostly forwards:
 // a glow round the sun) and by every local light: headlamp beams and halos
 // round street lamps, integrated along the view ray.
 
-const FOG_HEIGHT_M: f32 = 40.0;
 const FOG_LIGHT_STEPS: u32 = 8u;
 // Lamps are far brighter than their light on surfaces suggests (most of it
 // misses what they light); this brings their glow in fog up to that.
@@ -193,12 +214,12 @@ fn phase(c: f32, k: f32) -> f32 {
 
 // Fog extinction at world height `z`, per m.
 fn fog_at(z: f32) -> f32 {
-    return g.weather.w * exp(-max(z, 0.0) / FOG_HEIGHT_M);
+    return g.weather.w * exp(-max(z, 0.0) / g.look.y);
 }
 
 // How much haze and ground fog lie between the camera and `rel` (`d` = its length).
 fn optical_depth(rel: vec3<f32>, d: f32) -> f32 {
-    let k = rel.z / FOG_HEIGHT_M;
+    let k = rel.z / g.look.y;
     // Mean of exp(-z/H) along the ray, relative to the camera's height.
     let mean = select((1.0 - exp(-k)) / k, 1.0 - 0.5 * k, abs(k) < 1e-3);
     return d * (g.params.x + fog_at(g.camera_pos.z) * mean);
@@ -318,7 +339,8 @@ fn shade_sky(ndc: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(tonemap(shade_sky(in.ndc)), 1.0);
+    // The sky is as far as anything gets.
+    return finish(shade_sky(in.ndc), vec3<f32>(0.0, 0.0, 1.0e4));
 }
 
 // The mirrored pass keeps linear colour (the road shader tone-maps it).
@@ -401,7 +423,7 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     base = mix(base, g.ground_line.rgb, grid(p, 10.0, 0.06) * 0.35 * g.style.z);
     base = mix(base, g.ground_line.rgb, grid(p, 50.0, 0.14) * 0.5 * g.style.z);
     let n = vec3<f32>(0.0, 0.0, 1.0);
-    let ndl = max(dot(n, g.sun_dir.xyz), 0.0);
+    let ndl = lambert(dot(n, g.sun_dir.xyz));
     let blob = blob_shadows(p);
     // With a shadow map, blobs only darken contact areas a little (the map
     // casts the real shadow); without one they stand in for it.
@@ -410,7 +432,7 @@ fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     var col = base * (g.sun_color.rgb * g.sun_dir.w * styled_light(ndl * sun_vis) + ambient(n) * mix(0.55, 1.0, blob));
     col = col + local_lights(in.rel, n, normalize(-in.rel), base, 0.85);
     col = apply_fog(col, in.rel);
-    return vec4<f32>(tonemap(col), 1.0);
+    return finish(col, in.rel);
 }
 
 // ---- Meshes: instanced, lit -----------------------------------------------
@@ -595,7 +617,7 @@ fn shade_mesh(in: MeshOut) -> vec3<f32> {
     }
     let metal = clamp(in.material.y * mr.b, 0.0, 1.0);
 
-    let ndl = styled_light(max(dot(n, l), 0.0) * sun_shadow(in.rel, n_geo));
+    let ndl = styled_light(lambert(dot(n, l)) * sun_shadow(in.rel, n_geo));
     let h = normalize(l + v);
     let shininess = mix(512.0, 6.0, rough);
     var spec = pow(max(dot(n, h), 0.0), shininess) * (shininess + 8.0) / 25.0;
@@ -632,7 +654,7 @@ fn shade_mesh(in: MeshOut) -> vec3<f32> {
 
 @fragment
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(tonemap(shade_mesh(in)), 1.0);
+    return finish(shade_mesh(in), in.rel);
 }
 
 // The mirrored pass: linear colour, and nothing right round the camera (a
@@ -791,7 +813,8 @@ fn drop_layer(p: vec2<f32>, fw: f32, cell: f32, r0: f32, r1: f32, chance: f32, f
     col = col + sky_color(reflect(v, n)) * 0.04;
     // The middle of a drop lets some of the view behind it through.
     let a = cover * mix(0.6, 0.95, rim);
-    return vec4<f32>(tonemap(col) * a, a);
+    let shown = select(tonemap(col), col, g.look.z > 0.5);
+    return vec4<f32>(shown * a, a);
 }
 
 @fragment
