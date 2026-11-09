@@ -6,6 +6,27 @@
   roads: Some("roads/canyon.road.ron"),
   scenery: Some("scenery/canyon.scenery.ron"),
   time_of_day: Some((hour: 17.3, hours_per_hour: 0.0)),
+  // Rolling red land with ridges; the road is levelled into it, with
+  // cuttings where it passes through high ground.
+  terrain: Some((
+    centre: (235.0, -85.0),
+    size_m: (1500.0, 1300.0),
+    cell_m: 4.0,
+    noise: Some((height_m: 26.0, wavelength_m: 240.0, octaves: 4, seed: 7, ridged: true)),
+    hills: [
+      (position: (235.0, -95.0), radius_m: 110.0, height_m: 22.0),
+      (position: (680.0, -120.0), radius_m: 220.0, height_m: 55.0),
+      (position: (-230.0, -170.0), radius_m: 230.0, height_m: 45.0),
+      (position: (300.0, 330.0), radius_m: 210.0, height_m: 40.0),
+    ],
+    shoulder_m: 3.0,
+    blend_m: 30.0,
+    road_smoothing_m: 160.0,
+    edge_m: 160.0,
+    faceted: true,
+    rock: (172, 92, 64),
+    rock_from_grade: 0.8,
+  )),
   spawns: [
     (name: "trailhead", position: (16.6, 10.2), heading_deg: 38.1),
     (name: "overlook", position: (25.5, -180.1), heading_deg: 131.6),

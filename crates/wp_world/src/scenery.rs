@@ -464,9 +464,23 @@ pub struct Building {
     pub wall: (u8, u8, u8),
     /// Varies which windows are lit.
     pub seed: u8,
+    /// Height of the ground floor above 0 (the lowest ground under its
+    /// outline on hilly terrain), m.
+    pub base_m: f32,
 }
 
 impl Building {
+    /// Stand on the lowest ground under the outline (the rest is buried).
+    fn settle(&mut self, field: &wp_physics::HeightField) {
+        self.base_m = self
+            .footprint
+            .iter()
+            .chain(std::iter::once(&self.centroid()))
+            .map(|p| field.height(*p))
+            .fold(f32::MAX, f32::min)
+            .max(0.0);
+    }
+
     pub fn centroid(&self) -> Vec2 {
         self.footprint.iter().copied().sum::<Vec2>() / self.footprint.len().max(1) as f32
     }
@@ -539,6 +553,13 @@ impl Prop {
 }
 
 impl Scenery {
+    /// Stand buildings on hilly ground (see [`crate::terrain`]).
+    pub fn settle(&mut self, field: &wp_physics::HeightField) {
+        for b in &mut self.buildings {
+            b.settle(field);
+        }
+    }
+
     /// Where the straight line from `from` to `to` first enters a building,
     /// as a share of its length (0–1), if it does. Cameras use it to stay
     /// out of walls.
@@ -798,6 +819,7 @@ impl Scenery {
                 footprint,
                 height_m: b.height_m,
                 wall: pick(&style.walls, seed),
+                base_m: 0.0,
                 style: style.clone(),
                 seed: (seed >> 8) as u8,
             });
@@ -925,6 +947,7 @@ fn fill_street(
                     out.push(Building {
                         height_m: storeys * style.storey_m + 0.4,
                         wall: pick(&style.walls, wall_seed),
+                        base_m: 0.0,
                         seed: (wall_seed >> 8) as u8,
                         style,
                         footprint,
@@ -1430,6 +1453,9 @@ pub fn build_tiles(scenery: &Scenery, tile_m: f32) -> Vec<SceneryTile> {
         let origin = Vec2::from(tile.centre);
         let from = tile.mesh.positions.len();
         building_mesh(&mut tile.mesh, b, origin);
+        for p in &mut tile.mesh.positions[from..] {
+            p[2] += b.base_m;
+        }
         for p in &tile.mesh.positions[from..] {
             tile.min = std::array::from_fn(|a| tile.min[a].min(p[a]));
             tile.max = std::array::from_fn(|a| tile.max[a].max(p[a]));

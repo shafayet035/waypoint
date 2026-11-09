@@ -83,6 +83,29 @@ pub fn speed_control(integral: &mut f32, target_kmh: f32, speed_kmh: f32, dt: f3
     (throttle, brake)
 }
 
+/// [`speed_control`] on a slope. `pull` is gravity along the heading, m/s²
+/// (+ uphill, − downhill; 0 on the flat gives exactly [`speed_control`]);
+/// `brake_mps2` is the deceleration at full pedal. Downhill, once the
+/// vehicle is at its target speed, brake pressure that cancels the slope is
+/// added, so it neither runs away nor overshoots a stop.
+pub fn speed_control_on_slope(
+    integral: &mut f32,
+    target_kmh: f32,
+    speed_kmh: f32,
+    dt: f32,
+    pull: f32,
+    brake_mps2: f32,
+) -> (f32, f32) {
+    let (throttle, brake) = speed_control(integral, target_kmh, speed_kmh, dt);
+    if pull >= 0.0 {
+        return (throttle, brake);
+    }
+    // Fades in from 2 km/h under the target to fully at 1 km/h over it.
+    let share = ((2.0 - (target_kmh - speed_kmh)) / 3.0).clamp(0.0, 1.0);
+    let hold = (-pull / brake_mps2.max(1.0)).min(1.0) * share;
+    (throttle * (1.0 - share), (brake + hold).min(1.0))
+}
+
 /// Wrap an angle to (−π, π].
 pub fn wrap(a: f32) -> f32 {
     let pi = std::f32::consts::PI;

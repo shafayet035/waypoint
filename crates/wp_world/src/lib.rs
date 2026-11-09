@@ -3,6 +3,7 @@
 
 mod look;
 pub mod scenery;
+pub mod terrain;
 use glam::Vec2;
 pub use look::{ArtStyle, Look, LookDef, srgb};
 use schemars::JsonSchema;
@@ -47,6 +48,9 @@ pub struct SceneDef {
     /// Time of day (sun, sky, headlights, street lamps). Absent: early afternoon.
     #[serde(default)]
     pub time_of_day: Option<TimeOfDayDef>,
+    /// Hills and valleys (absent: flat ground). Roads are levelled into it.
+    #[serde(default)]
+    pub terrain: Option<terrain::TerrainDef>,
 }
 
 /// A scene's clock.
@@ -409,6 +413,34 @@ impl SceneDef {
                 "scene has no spawn points; nothing can start here",
             ));
         }
+        if let Some(t) = &s.terrain {
+            for (field, expected) in t.problems() {
+                out.push(
+                    file.error_at(
+                        "WP-W009",
+                        field,
+                        format!("terrain `{field}` is out of range"),
+                    )
+                    .expected(expected)
+                    .help("see `wp schema scene` for each terrain field's meaning and units"),
+                );
+            }
+            let (nx, ny) = t.grid();
+            if t.problems().is_empty() && nx * ny > terrain::MAX_POINTS {
+                out.push(
+                    file.error_at(
+                        "WP-W010",
+                        "terrain",
+                        format!(
+                            "terrain has {} grid points; at most {} fit in memory on phones",
+                            nx * ny,
+                            terrain::MAX_POINTS
+                        ),
+                    )
+                    .help("raise cell_m or make size_m smaller"),
+                );
+            }
+        }
         for (i, sp) in s.spawns.iter().enumerate() {
             if s.spawns[..i].iter().any(|o| o.name == sp.name) {
                 out.push(
@@ -449,9 +481,28 @@ pub fn apply_scene(
     scenery: Option<&scenery::SceneryDef>,
 ) {
     let net = roads.map(|def| std::sync::Arc::new(wp_road::RoadNetwork::build(def)));
+    let land = scene.terrain.as_ref().map(|def| {
+        std::sync::Arc::new(terrain::BuiltTerrain {
+            def: def.clone(),
+            field: std::sync::Arc::new(terrain::build(def, net.as_deref())),
+        })
+    });
+    match &land {
+        Some(t) => {
+            world.insert_resource(wp_physics::Terrain(t.field.clone()));
+            world.insert_resource(terrain::CurrentTerrain(t.clone()));
+        }
+        None => {
+            world.remove_resource::<wp_physics::Terrain>();
+            world.remove_resource::<terrain::CurrentTerrain>();
+        }
+    }
     match scenery {
         Some(def) => {
-            let built = scenery::Scenery::build(def, net.as_deref());
+            let mut built = scenery::Scenery::build(def, net.as_deref());
+            if let Some(t) = &land {
+                built.settle(&t.field);
+            }
             // Buildings are solid.
             let mut walls =
                 wp_physics::Walls::new(built.buildings.iter().map(|b| b.footprint.as_slice()));

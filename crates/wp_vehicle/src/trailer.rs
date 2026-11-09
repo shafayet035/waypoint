@@ -265,6 +265,27 @@ pub fn spawn_trailer(world: &mut World, def: &TrailerDef, tractor: Entity) -> Op
     Some(e)
 }
 
+/// How a trailer stands on `field`: from its kingpin to its rearmost axle.
+pub fn footing(
+    def: &TrailerDef,
+    pose: &Pose,
+    field: &wp_physics::HeightField,
+) -> wp_physics::Footing {
+    let rear = def
+        .axles_behind_kingpin_m
+        .iter()
+        .copied()
+        .fold(0.0f32, f32::max);
+    wp_physics::Footing::on(
+        field,
+        pose.position,
+        pose.heading,
+        def.cg_behind_kingpin_m,
+        rear - def.cg_behind_kingpin_m,
+        def.track_width_m / 2.0,
+    )
+}
+
 /// One physics substep for every trailer.
 pub fn trailer_dynamics(world: &mut World) {
     let dt = world.resource::<SimTime>().physics_dt();
@@ -276,6 +297,9 @@ pub fn trailer_dynamics(world: &mut World) {
     let Some(library) = world.get_resource::<TrailerLibrary>() else {
         return;
     };
+    let terrain = world
+        .get_resource::<wp_physics::Terrain>()
+        .map(|t| t.0.clone());
     let mut events = Vec::new();
     world
         .query::<(&mut Trailer, &PinJoint, &Pose, &Velocity, &mut RigidBody)>()
@@ -292,8 +316,25 @@ pub fn trailer_dynamics(world: &mut World) {
                 .get::<Vehicle>(tractor)
                 .map(|v| v.brake_fraction)
                 .unwrap_or(0.0);
-            let kingpin_load =
-                step_trailer(def, tr, pose, vel, body, brake_fraction, dt, g, surface);
+            // Slope under the trailer's centre (see `vehicle_dynamics`).
+            let (g_normal, pull) = match &terrain {
+                Some(field) => {
+                    let f = footing(def, pose, field);
+                    (g * f.normal_share(), f.sines() * g)
+                }
+                None => (g, Vec2::ZERO),
+            };
+            let kingpin_load = step_trailer(
+                def,
+                tr,
+                pose,
+                vel,
+                body,
+                brake_fraction,
+                dt,
+                (g_normal, pull),
+                surface,
+            );
             if let Some(mut veh) = world.get_mut::<Vehicle>(tractor) {
                 veh.hitch_load_n = kingpin_load;
             }
@@ -327,7 +368,7 @@ fn step_trailer(
     body: &mut RigidBody,
     brake_fraction: f32,
     dt: f32,
-    g: f32,
+    (g, pull): (f32, Vec2),
     surface: f32,
 ) -> f32 {
     let m = def.mass_kg;
@@ -342,7 +383,11 @@ fn step_trailer(
     tr.prev_velocity = vel.linear;
     let alpha = dt / (0.03 + dt);
     tr.accel_local += (pose.to_local(a_world) - tr.accel_local) * alpha;
-    let (ax, ay) = (tr.accel_local.x, tr.accel_local.y);
+    let (ax, ay) = if pull == Vec2::ZERO {
+        (tr.accel_local.x, tr.accel_local.y)
+    } else {
+        (tr.accel_local.x + pull.x, tr.accel_local.y + pull.y)
+    };
 
     // Loads: weight shared between kingpin and axle group; braking (ax < 0)
     // pushes load forward onto the kingpin. Lateral transfer is instant.
@@ -392,6 +437,9 @@ fn step_trailer(
         }
     }
     force += -0.5 * 1.225 * def.aero.drag_area_m2 * v_local.length() * v_local;
+    if pull != Vec2::ZERO {
+        force -= pull * m;
+    }
     body.apply_force(pose.to_world(force));
     body.apply_torque(moment);
     kingpin

@@ -183,6 +183,7 @@ pub fn scene() -> FrameView {
         deformed: Vec::new(),
         look: wp_world::Look::default(),
         windscreen: None,
+        terrain: None,
     }
 }
 

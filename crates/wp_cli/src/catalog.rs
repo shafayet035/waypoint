@@ -619,6 +619,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Add at least one entry to `spawns`.",
     },
     ErrorDoc {
+        code: "WP-W009",
+        title: "A terrain setting is out of range",
+        fix: "Use 2 ≤ cell_m ≤ 20, sides of at least 50 m, distances ≥ 0, noise wavelength_m ≥ 10 with 1–8 octaves, and hills with radius_m > 0.",
+    },
+    ErrorDoc {
+        code: "WP-W010",
+        title: "The terrain grid is too big",
+        fix: "Raise cell_m or shrink size_m (at most about 1.1 million grid points).",
+    },
+    ErrorDoc {
         code: "WP-Y001",
         title: "A replay refers to a scenario, scene, vehicle or mission that does not exist",
         fix: "Re-record it (`wp replay record --scenario <name>` or `wp run --record`), or restore what it refers to.",

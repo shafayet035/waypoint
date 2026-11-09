@@ -80,6 +80,24 @@ pub struct RoadMeshes {
     pub sidewalks: Mesh,
 }
 
+impl RoadMeshes {
+    /// Lay the meshes on hilly ground: every vertex rises by the ground's
+    /// `height` under it, and upward faces tilt with the ground's `gradient`
+    /// (rise per metre in x and y).
+    pub fn drape(&mut self, height: impl Fn(Vec2) -> f32, gradient: impl Fn(Vec2) -> Vec2) {
+        for m in [&mut self.asphalt, &mut self.markings, &mut self.sidewalks] {
+            for (p, n) in m.positions.iter_mut().zip(&mut m.normals) {
+                let xy = Vec2::new(p[0], p[1]);
+                p[2] += height(xy);
+                if n[2] > 0.9 {
+                    let g = gradient(xy);
+                    *n = Vec3::new(-g.x, -g.y, 1.0).normalize().to_array();
+                }
+            }
+        }
+    }
+}
+
 /// A painted line `offset` metres left of `centre`, solid or dashed.
 fn line(mesh: &mut Mesh, centre: &Polyline, offset: f32, dashed: bool) {
     paint(mesh, centre.offset(offset), dashed);

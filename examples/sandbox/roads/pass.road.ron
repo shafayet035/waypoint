@@ -1,0 +1,17 @@
+// A two-lane road straight over a hill (see scenes/hills.scene.ron): the
+// terrain sets its heights, about 10 % at the steepest.
+(
+  name: "pass",
+  drive_side: Right,
+  nodes: [
+    (id: "west", position: (-600.0, 0.0)),
+    (id: "summit", position: (0.0, 0.0)),
+    (id: "east", position: (600.0, 0.0)),
+  ],
+  roads: [
+    (id: "pass_west", name: Some("Pass Road"), from: "west", to: "summit", shape: Straight,
+     speed_limit_kmh: 80.0),
+    (id: "pass_east", name: Some("Pass Road"), from: "summit", to: "east", shape: Straight,
+     speed_limit_kmh: 80.0),
+  ],
+)

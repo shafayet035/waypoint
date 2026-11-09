@@ -5,7 +5,7 @@ use crate::{Vehicle, VehicleEvent, VehicleInput, VehicleLibrary, WHEEL_NAMES, pa
 use glam::Vec2;
 use wp_core::SimTime;
 use wp_ecs::{Events, World};
-use wp_physics::{Gravity, Ground, Pose, RigidBody, Velocity};
+use wp_physics::{Footing, Gravity, Ground, Pose, RigidBody, Terrain, Velocity};
 
 /// Air density at sea level, kg/m³.
 const AIR_DENSITY: f32 = 1.225;
@@ -31,6 +31,7 @@ pub fn vehicle_dynamics(world: &mut World) {
         .map(|gr| gr.friction_scale)
         .unwrap_or(1.0);
     let library = world.resource::<VehicleLibrary>();
+    let terrain = world.get_resource::<Terrain>().map(|t| t.0.clone());
     // Crash damage that changes how a vehicle drives (power, steering pull).
     let mut harm: std::collections::BTreeMap<wp_ecs::Entity, Harm> = Default::default();
     world
@@ -52,10 +53,20 @@ pub fn vehicle_dynamics(world: &mut World) {
         )>()
         .for_each(|e, (veh, input, pose, vel, body)| {
             if let Some(def) = library.0.get(&veh.model) {
+                // On a slope only part of the weight presses into the ground;
+                // the rest pulls the vehicle downhill.
+                let (g_normal, pull) = match &terrain {
+                    Some(field) => {
+                        let f = footing(def, pose, field);
+                        (g * f.normal_share(), f.sines() * g)
+                    }
+                    None => (g, Vec2::ZERO),
+                };
                 let ctx = Ctx {
                     def,
                     dt,
-                    g,
+                    g: g_normal,
+                    pull,
                     surface,
                     entity: e.to_string(),
                     harm: harm.get(&e).copied().unwrap_or_default(),
@@ -68,6 +79,18 @@ pub fn vehicle_dynamics(world: &mut World) {
             ev.send(e);
         }
     }
+}
+
+/// How a vehicle stands on `field`: contact points at its wheels.
+pub fn footing(def: &VehicleDef, pose: &Pose, field: &wp_physics::HeightField) -> Footing {
+    Footing::on(
+        field,
+        pose.position,
+        pose.heading,
+        def.cg_to_front_axle_m,
+        def.rear_axle_from_cg(),
+        def.track_width_m / 2.0,
+    )
 }
 
 /// One tyre's contact for this substep: sliding friction, relaxed slip states,
@@ -121,7 +144,11 @@ pub(crate) fn tyre_contact(
 struct Ctx<'a> {
     def: &'a VehicleDef,
     dt: f32,
+    /// Gravity pressing into the ground (all of it on the flat), m/s².
     g: f32,
+    /// Gravity along the ground in the body frame, uphill positive (zero
+    /// on the flat), m/s²: forward for nose-up, left for left-side-up.
+    pull: Vec2,
     surface: f32,
     entity: String,
     harm: Harm,
@@ -196,6 +223,13 @@ fn step_vehicle(
     update_steering(ctx, veh, input);
     let v_local = pose.to_local(vel.linear);
     let (ax, ay) = measure_acceleration(ctx, veh, pose, vel);
+    // The springs feel acceleration plus gravity's pull along a slope (a car
+    // parked facing uphill sits back on its rear axle).
+    let (ax, ay) = if ctx.pull == Vec2::ZERO {
+        (ax, ay)
+    } else {
+        (ax + ctx.pull.x, ay + ctx.pull.y)
+    };
     let roll = update_body_motion(ctx, veh, ax, ay);
     let loads = wheel_loads(ctx, veh, &roll, ax, ay, events);
     let esc_torque = stability_control(ctx, veh, v_local, vel.angular, events);
@@ -215,7 +249,10 @@ fn step_vehicle(
         &brake_torque,
         events,
     );
-    let (force, moment) = add_body_forces(ctx, veh, v_local, vel.angular, force, moment);
+    let (mut force, moment) = add_body_forces(ctx, veh, v_local, vel.angular, force, moment);
+    if ctx.pull != Vec2::ZERO {
+        force -= ctx.pull * ctx.def.mass_kg;
+    }
     body.apply_force(pose.to_world(force));
     body.apply_torque(moment);
 }
@@ -464,7 +501,10 @@ fn update_drivetrain(
     veh.shift_timer = (veh.shift_timer - dt).max(0.0);
     if veh.shift_timer == 0.0 && !veh.reverse {
         let from = veh.gear;
-        if road_rpm > def.gearbox.shift_up_rpm && (veh.gear as usize) < gears.len() {
+        if road_rpm > def.gearbox.shift_up_rpm
+            && (veh.gear as usize) < gears.len()
+            && can_hold_next_gear(ctx, veh, ratio, engine_torque, road_rpm, throttle)
+        {
             veh.gear += 1;
         } else if road_rpm < def.gearbox.shift_down_rpm && veh.gear > 1 {
             veh.gear -= 1;
@@ -482,6 +522,35 @@ fn update_drivetrain(
         driven,
         wheel_torque,
     }
+}
+
+/// Climbing, an automatic gearbox only shifts up if the next gear still
+/// pulls harder than the hill and the air hold the vehicle back; otherwise
+/// it would drop back at once and hunt between the two. On level ground
+/// (or downhill) it always shifts.
+fn can_hold_next_gear(
+    ctx: &Ctx,
+    veh: &Vehicle,
+    ratio: f32,
+    engine_torque: f32,
+    road_rpm: f32,
+    throttle: f32,
+) -> bool {
+    if ctx.pull.x <= 0.0 || throttle < 0.5 {
+        return true;
+    }
+    let def = ctx.def;
+    let (radius, eff) = (def.wheel.radius_m, def.gearbox.efficiency);
+    let next = def.gearbox.ratios[veh.gear as usize] * def.gearbox.final_drive;
+    let pull_now = engine_torque * ratio * eff / radius;
+    // What holds it back: the pull it has now less what goes into speeding up.
+    let resistance = pull_now - def.mass_kg * veh.accel_local.x;
+    let rpm_next = road_rpm * next / ratio;
+    let torque_next = parts::curve_torque(&def.engine.torque_curve, rpm_next)
+        * throttle
+        * veh.tc_factor
+        * ctx.harm.power;
+    torque_next * next * eff / radius > resistance * 1.05
 }
 
 /// Driven-wheel slip above which traction control cuts torque.
@@ -757,6 +826,73 @@ mod tests {
             );
         }
         kinds
+    }
+
+    /// A 10 % slope rising eastward over the whole test area.
+    fn on_ramp(app: &mut App) {
+        let mut f = wp_physics::HeightField::flat(Vec2::new(-500.0, -500.0), 10.0, 101, 101);
+        for j in 0..101 {
+            for i in 0..101 {
+                f.heights[j * 101 + i] = 50.0 + i as f32;
+            }
+        }
+        app.world
+            .insert_resource(wp_physics::Terrain(std::sync::Arc::new(f)));
+    }
+
+    fn speed_along(app: &App, e: Entity) -> f32 {
+        app.world.get::<wp_physics::Velocity>(e).unwrap().linear.x
+    }
+
+    #[test]
+    fn slopes_pull_downhill_and_brakes_hold() {
+        let def = sandbox_vehicle("hatchback");
+        let idle = VehicleInput::default();
+        // Facing uphill with nothing pressed: rolls back.
+        let (mut app, e) = app_with(&def);
+        on_ramp(&mut app);
+        drive(&mut app, e, idle, 3.0);
+        let back = speed_along(&app, e);
+        assert!(back < -1.5, "should roll back: {back}");
+        // On the flat it stays put.
+        let (mut flat, f) = app_with(&def);
+        drive(&mut flat, f, idle, 3.0);
+        assert!(speed_along(&flat, f).abs() < 0.05);
+        // Brakes hold it on the slope.
+        let (mut app, e) = app_with(&def);
+        on_ramp(&mut app);
+        let held = VehicleInput { brake: 0.6, ..idle };
+        drive(&mut app, e, held, 3.0);
+        assert!(
+            speed_along(&app, e).abs() < 0.05,
+            "{}",
+            speed_along(&app, e)
+        );
+        // Weight moves onto the rear wheels facing uphill (about m·g·sinθ·h/L).
+        let (mut flat, f) = app_with(&def);
+        drive(&mut flat, f, held, 3.0);
+        let rear_share = |app: &App, e: Entity| {
+            let veh = app.world.get::<crate::Vehicle>(e).unwrap();
+            veh.wheels[2].load / (veh.wheels[0].load + veh.wheels[2].load)
+        };
+        let (up, level) = (rear_share(&app, e), rear_share(&flat, f));
+        let expected = 0.1 * def.cg_height_m / def.wheelbase_m;
+        assert!(
+            (up - level - expected).abs() < 0.01,
+            "rear share {up} vs {level} on the flat, expected +{expected}"
+        );
+        // Full throttle climbs, but slower than on the flat.
+        let go = VehicleInput {
+            throttle: 1.0,
+            ..idle
+        };
+        let (mut app, e) = app_with(&def);
+        on_ramp(&mut app);
+        drive(&mut app, e, go, 6.0);
+        let (mut flat, f) = app_with(&def);
+        drive(&mut flat, f, go, 6.0);
+        let (up, level) = (speed_along(&app, e), speed_along(&flat, f));
+        assert!(up > 5.0 && up < level * 0.92, "uphill {up} flat {level}");
     }
 
     #[test]

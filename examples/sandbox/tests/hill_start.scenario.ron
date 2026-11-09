@@ -1,0 +1,19 @@
+// A hill start on a 10 % grade: brakes held, then released onto half
+// throttle. The car must pull away uphill (steering held straight, so the
+// land's side slope drifts it a little across the road).
+(
+  scene: "scenes/hills.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "slope",
+    driver: Script([(at_s: 0.0, brake: 1.0), (at_s: 2.0, brake: 0.0, throttle: 0.6)]),
+  ),
+  duration_s: 12.0,
+  assert: [
+    ReachSpeed(kmh: 40.0, within_s: 12.0),
+    FinalPositionWithin(min: (-120.0, -4.0), max: (0.0, 4.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

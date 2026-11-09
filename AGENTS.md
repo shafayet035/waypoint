@@ -330,4 +330,22 @@ tilt`, `--tilt-deg <deg>` (fake sensor). Scenario driver `Tilt([(at_s, turn_deg,
 `tilt_lane_change` (7° at 80 km/h: one lane, 0.25 g, no ESC) and `tilt_slalom` (±40° at 100 km/h: no spin).
 Temporal anti-aliasing was tried (branch `taa-experiment`: jitter, per-object motion, clipped history) and not merged: with
 4× MSAA already, it gained 7 % on still frames but was twice as far from the reference in motion. See that commit for numbers.
+Terrain (`wp_physics::terrain`, `wp_world::terrain`): a scene's `terrain: Some((size_m, cell_m, noise, hills, ...))` shapes
+hills and valleys on a grid (default 4 m; heights bilinear between points, never below 0, flattening to 0 over `edge_m` at the
+edge). Roads are levelled into it: the land along each road is smoothed over `road_smoothing_m` into the road's height profile,
+pinned to shared node heights (the land averaged round each node), levelled across the road plus `shoulder_m`, and blended back
+to the land's own shape over `blend_m` (cuttings and embankments). One `HeightField` (resource `Terrain`) is what physics drives
+on and the renderer draws. Physics: `Footing::on` measures the grade along and across a body between its wheels; gravity along
+the ground pulls the body (`m·g·sinθ`), only `g·cosθ` presses into it, and the springs feel acceleration plus that pull (load
+moves to the rear axle facing uphill: +h/L × grade). Trailers too. Climbing, the automatic gearbox only shifts up if the next
+gear still out-pulls the hill (no hunting). Route drivers and AI traffic brake against downhill slopes (feed-forward), and plan
+stops more gently downhill. Renderer: land tiles (smooth, or `faceted` low-poly), coloured from `colour` (else the look's
+ground) to `rock` on slopes past `rock_from_grade`, drawn 6 cm under the true heights so roads (draped vertex by vertex,
+normals tilted) never show it through; vehicles and trailers tilt with the ground, everything else stands on the ground under
+it, buildings on the lowest ground under their outline, cameras follow up and down and stay above the land; the flat plane
+sits 12 cm lower. Telemetry: `altitude_m`, `grade_pct`. WP-W009 (values), WP-W010 (grid too big). Flat scenes are unchanged
+(every hash, replay and picture). Sandbox: `scenes/hills.scene.ron` (a 10 % pass); gates `hill_road`, `hill_start`,
+`hill_rollback`, `bus_hill`, shot `hills`; Red Canyon has faceted red hills. Not yet: bridges and tunnels (one height per point),
+jumps (wheels never leave the ground), wet-road reflections on slopes (mirrored in z = 0), a stopped vehicle held on a slope
+by its brakes creeps (about 1 cm/s: the tyre model has no static friction).
 Not yet: testing on physical phones; running on an iOS simulator.

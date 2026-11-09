@@ -456,6 +456,10 @@ pub struct Telemetry {
     pub air_reservoir_bar: Option<f32>,
     /// Wheel loads FL, FR, RL, RR, newtons.
     pub wheel_loads_n: [f32; 4],
+    /// Ground height under the vehicle, m (0 on flat scenes).
+    pub altitude_m: f32,
+    /// Slope of the ground along the vehicle's heading, % (+ uphill).
+    pub grade_pct: f32,
 }
 
 /// Sideslip angle, rad: from the heading to the velocity, + left; 0 when slow.
@@ -477,6 +481,11 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
     let vel = *world.get::<Velocity>(e)?;
     let veh = world.get::<Vehicle>(e)?;
     let g = world.get_resource::<Gravity>().map(|g| g.0).unwrap_or(9.81);
+    let ground = world.get_resource::<wp_physics::Terrain>().and_then(|t| {
+        let lib = world.get_resource::<VehicleLibrary>()?;
+        let def = lib.0.get(&veh.model)?;
+        Some(dynamics::footing(def, &pose, &t.0))
+    });
     Some(Telemetry {
         speed_kmh: vel.linear.length() * 3.6,
         forward_kmh: vel.linear.dot(pose.forward()) * 3.6,
@@ -498,5 +507,7 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         reverse: veh.reverse,
         air_reservoir_bar: veh.air.map(|a| a.reservoir_bar),
         wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),
+        altitude_m: ground.map_or(0.0, |f| f.height_m),
+        grade_pct: ground.map_or(0.0, |f| f.grade.x * 100.0),
     })
 }

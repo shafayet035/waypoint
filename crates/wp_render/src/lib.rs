@@ -59,12 +59,15 @@ struct Globals {
     weather: [f32; 4],
     /// 1 / target width, 1 / target height, street reflections on (0/1), unused.
     reflect_params: [f32; 4],
-    /// Light wrap, fog height scale (m), linear output for post (0/1), unused.
+    /// Light wrap, fog height scale (m), linear output for post (0/1), ground plane height (m).
     look: [f32; 4],
     /// Tint of sky light in shade.
     shade: [f32; 4],
 }
 
+/// Height of the flat ground plane under hilly land, m (just below the
+/// land mesh, which stops at height 0 at its edge).
+const GROUND_UNDER_LAND_M: f32 = -0.12;
 /// Height scale of ground fog, m; stylised haze reaches higher.
 const FOG_HEIGHT_M: f32 = 40.0;
 const HAZE_HEIGHT_M: f32 = 160.0;
@@ -151,6 +154,38 @@ impl TileData {
             min: t.min,
             max: t.max,
             layers,
+        }
+    }
+
+    fn from_terrain(t: wp_world::terrain::TerrainTile) -> Self {
+        let srgb = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            let s = if c <= 0.003_130_8 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            };
+            (s * 255.0).round() as u8
+        };
+        let vertices = (0..t.positions.len())
+            .map(|i| {
+                let c = t.colors[i];
+                mesh::Vertex {
+                    position: t.positions[i],
+                    normal: t.normals[i],
+                    color: [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255],
+                    ..Default::default()
+                }
+            })
+            .collect();
+        Self {
+            centre: t.centre,
+            min: t.min,
+            max: t.max,
+            layers: vec![mesh::MeshData {
+                vertices,
+                indices: t.indices,
+            }],
         }
     }
 
@@ -837,6 +872,8 @@ pub struct Renderer {
     roads: Option<TileCache>,
     /// Building meshes for the current scenery, in tiles like the roads.
     buildings: Option<TileCache>,
+    /// The land's mesh (hilly scenes), in tiles like the roads.
+    terrain: Option<TileCache>,
     road_instances: wgpu::Buffer,
     road_instance_capacity: usize,
     /// Keep road tiles within this distance of the camera (m) and build
@@ -1237,6 +1274,7 @@ impl Renderer {
             road_instances,
             road_instance_capacity,
             buildings: None,
+            terrain: None,
             stream_range: None,
             models: None,
             textures,
@@ -1670,7 +1708,12 @@ impl Renderer {
                     FOG_HEIGHT_M
                 },
                 if frame.look.post() { 1.0 } else { 0.0 },
-                0.0,
+                // The flat ground plane sits under any hilly land.
+                if frame.terrain.is_some() {
+                    GROUND_UNDER_LAND_M
+                } else {
+                    0.0
+                },
             ],
             shade: glam::Vec3::from(frame.look.shade).extend(1.0).to_array(),
         };
@@ -1829,6 +1872,20 @@ impl Renderer {
                 }
             }
         }
+        if let Some(cache) = &self.terrain {
+            for &i in cache.resident.keys() {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if !in_view(&view_proj, offset, &cache.tiles[i]) {
+                    continue;
+                }
+                static_draws.push((StaticKind::Terrain, i, 0));
+                static_raw.push(InstanceRaw {
+                    model,
+                    material: [0.92, 0.0, 0.0, 0.0],
+                    ..building_mat
+                });
+            }
+        }
         let mut building_tiles_drawn = 0;
         if let Some(cache) = &self.buildings {
             for &i in cache.resident.keys() {
@@ -1844,8 +1901,23 @@ impl Renderer {
                 });
             }
         }
-        // Buildings near the shadow map's square cast shadows, even off screen.
+        // Buildings and hills near the shadow map's square cast shadows, even off screen.
         let main_static = static_draws.len();
+        if self.shadow.is_some()
+            && let Some(cache) = &self.terrain
+        {
+            let light = glam::Mat4::from_cols_array_2d(&globals.light_view_proj);
+            for &i in cache.resident.keys() {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if in_view(&light, offset, &cache.tiles[i]) {
+                    static_draws.push((StaticKind::Terrain, i, 0));
+                    static_raw.push(InstanceRaw {
+                        model,
+                        ..building_mat
+                    });
+                }
+            }
+        }
         if self.shadow.is_some()
             && let Some(cache) = &self.buildings
         {
@@ -2146,6 +2218,7 @@ impl Renderer {
 enum StaticKind {
     Road,
     Building,
+    Terrain,
 }
 
 impl Renderer {
@@ -2154,6 +2227,7 @@ impl Renderer {
         let cache = match kind {
             StaticKind::Road => self.roads.as_ref()?,
             StaticKind::Building => self.buildings.as_ref()?,
+            StaticKind::Terrain => self.terrain.as_ref()?,
         };
         cache
             .resident
@@ -2271,19 +2345,52 @@ impl Renderer {
         });
     }
 
-    /// Keep the frame's road and building tiles on the GPU.
+    /// Keep the frame's road, building and land tiles on the GPU.
     fn update_tiles(&mut self, gpu: &Gpu, frame: &FrameView, eye: glam::Vec3) {
         let range = self.stream_range;
         let net = frame.roads.clone();
+        let land = frame.terrain.clone();
+        // Roads lie on the land, so they are rebuilt when either changes.
+        let land_id = land
+            .as_ref()
+            .map_or(0, |t| std::sync::Arc::as_ptr(t) as usize);
+        let field = land.as_ref().map(|t| t.field.clone());
         TileCache::sync(
             &mut self.roads,
             gpu,
-            net.as_ref().map(|n| std::sync::Arc::as_ptr(n) as usize),
+            net.as_ref()
+                .map(|n| (std::sync::Arc::as_ptr(n) as usize) ^ land_id.rotate_left(17)),
             move || {
                 net.map(|n| {
-                    wp_road::build_tiles(&n, wp_road::TILE_M)
+                    let mut meshes = wp_road::build_meshes(&n);
+                    if let Some(f) = &field {
+                        meshes.drape(|p| f.height(p), |p| f.gradient(p));
+                    }
+                    wp_road::split_tiles(&meshes, wp_road::TILE_M)
                         .into_iter()
                         .map(TileData::from_road)
+                        .collect()
+                })
+                .unwrap_or_default()
+            },
+            range,
+            eye,
+        );
+        // The land is coloured from the look's ground colour: rebuild if it changes.
+        let ground = glam::Vec3::from(frame.look.ground);
+        let colour_id = ground
+            .to_array()
+            .iter()
+            .fold(0usize, |h, c| h.rotate_left(11) ^ c.to_bits() as usize);
+        TileCache::sync(
+            &mut self.terrain,
+            gpu,
+            land.as_ref().map(|_| land_id ^ colour_id),
+            move || {
+                land.map(|t| {
+                    wp_world::terrain::build_tiles(&t.def, &t.field, ground)
+                        .into_iter()
+                        .map(TileData::from_terrain)
                         .collect()
                 })
                 .unwrap_or_default()

@@ -129,6 +129,8 @@ pub struct FrameView {
     pub look: wp_world::Look,
     /// Rain on the windscreen (cab view in the rain).
     pub windscreen: Option<Windscreen>,
+    /// The scene's hills and valleys, if it has any.
+    pub terrain: Option<std::sync::Arc<wp_world::terrain::BuiltTerrain>>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -204,6 +206,10 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         .get_resource::<wp_core::SimTime>()
         .map_or(0.0, |t| t.seconds()) as f32;
     let mut windscreen = None;
+    // Hilly ground: everything stands on it (vehicles tilt with it).
+    let land = world.get_resource::<wp_world::terrain::CurrentTerrain>();
+    let field = land.as_ref().map(|t| t.0.field.clone());
+    let field = field.as_deref();
 
     world
         .query::<(&Pose, &Vehicle)>()
@@ -232,6 +238,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 }
                 _ => None,
             };
+            let (first_item, first_light) = (items.len(), lights.len());
             vehicle_items(
                 &mut items,
                 &mut shadows,
@@ -244,6 +251,10 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 dented,
                 headlights.then_some(&mut lights),
             );
+            if let Some(f) = field {
+                let m = on_ground(pose, wp_vehicle::dynamics::footing(def, pose, f));
+                place(&mut items[first_item..], &mut lights[first_light..], m);
+            }
         });
     // The game's models for street furniture and people, if any.
     let scenery_now = world
@@ -254,6 +265,8 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         .map(|s| s.furniture.clone())
         .unwrap_or_default();
     let model_lib = models.as_deref();
+    let first_item = items.len();
+    let first_light = lights.len();
     world
         .query::<(&Pose, &wp_traffic::pedestrian::Pedestrian)>()
         .for_each(|e, (pose, p)| {
@@ -297,12 +310,29 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
             dock_items(&mut items, &mut shadows, d);
         }
     }
+    // People, road furniture, trees, props and docks stand on the ground
+    // under them (roads are level across, so arms over a road stay level).
+    if let Some(f) = field {
+        for d in &mut items[first_item..] {
+            let at = d.transform.w_axis;
+            d.transform =
+                Mat4::from_translation(Vec3::Z * f.height(Vec2::new(at.x, at.y))) * d.transform;
+        }
+        for l in &mut lights[first_light..] {
+            l.position.z += f.height(l.position.truncate());
+        }
+    }
     let trailers = world.get_resource::<TrailerLibrary>();
     world
         .query::<(&Pose, &Trailer)>()
         .for_each(|_, (pose, tr)| {
             if let Some(def) = trailers.as_ref().and_then(|l| l.0.get(&tr.model)) {
+                let first = items.len();
                 trailer_items(&mut items, &mut shadows, def, pose, tr);
+                if let Some(f) = field {
+                    let m = on_ground(pose, wp_vehicle::trailer::footing(def, pose, f));
+                    place(&mut items[first..], &mut [], m);
+                }
             }
         });
 
@@ -350,7 +380,10 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         .get_resource::<wp_world::Roads>()
                         .is_none_or(|r| r.0.drive_side == wp_road::DriveSide::Right);
                     let (eye, fov) = cab_eye(&def, left_seat);
-                    let body = body_matrix(&def, &pose, &veh);
+                    let ground = field.map_or(Mat4::IDENTITY, |f| {
+                        on_ground(&pose, wp_vehicle::dynamics::footing(&def, &pose, f))
+                    });
+                    let body = ground * body_matrix(&def, &pose, &veh);
                     vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
                     let glass = windscreen::glass(body_shape(&def).width / 2.0 - 0.06, eye);
                     let wipers = Wipers::for_glass(
@@ -384,7 +417,17 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         fov_y_deg: fov,
                     }
                 }
-                None => mode.camera(&pose, len + towed * 0.6),
+                None => {
+                    let mut c = mode.camera(&pose, len + towed * 0.6);
+                    if let Some(f) = field {
+                        // Follow the car up and down hills; never into one.
+                        let h = f.height(pose.position);
+                        c.eye.z += h;
+                        c.target.z += h;
+                        c.eye.z = c.eye.z.max(f.height(c.eye.truncate()) + 1.2);
+                    }
+                    c
+                }
             }
         }
         None => mode.camera(&Pose::default(), 4.2),
@@ -425,6 +468,32 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         deformed,
         look,
         windscreen,
+        terrain: land.map(|t| t.0.clone()),
+    }
+}
+
+/// A body standing on hilly ground at `pose`: raised to the ground and
+/// tilted with it (pitch and roll about the body's own axes). Multiplies
+/// world-space transforms built for flat ground.
+fn on_ground(pose: &Pose, f: wp_physics::Footing) -> Mat4 {
+    let p = pose.position.extend(0.0);
+    let s = f.sines();
+    Mat4::from_translation(p + Vec3::Z * f.height_m)
+        * Mat4::from_rotation_z(pose.heading)
+        * Mat4::from_rotation_y(-s.x.asin())
+        * Mat4::from_rotation_x(s.y.asin())
+        * Mat4::from_rotation_z(-pose.heading)
+        * Mat4::from_translation(-p)
+}
+
+/// Apply `m` to draw items and lights built for flat ground.
+fn place(items: &mut [DrawItem], lights: &mut [PointLight], m: Mat4) {
+    for d in items {
+        d.transform = m * d.transform;
+    }
+    for l in lights {
+        l.position = m.transform_point3(l.position);
+        l.direction = m.transform_vector3(l.direction).normalize_or(l.direction);
     }
 }
 

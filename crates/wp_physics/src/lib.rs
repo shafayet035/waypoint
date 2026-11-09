@@ -8,10 +8,12 @@
 //! counter-clockwise from +x. Body frame: `x` forward, `y` left.
 
 pub mod contact;
+pub mod terrain;
 
 pub use contact::{Collider, Contact, Walls, box_contact, solve_contacts};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
+pub use terrain::{Footing, HeightField, Terrain};
 use wp_app::{App, Plugin};
 use wp_core::SimTime;
 use wp_ecs::{Component, Entity, Stage, World};

@@ -356,6 +356,15 @@ fn traffic(world: &mut World) {
             continue;
         };
         let pace = world.get::<TrafficAgent>(e).map_or(1.0, |a| a.pace);
+        // Gravity holding it back on hilly ground (+ uphill, − downhill).
+        let pull = world
+            .get_resource::<wp_physics::Terrain>()
+            .map_or(0.0, |t| {
+                let g = world
+                    .get_resource::<wp_physics::Gravity>()
+                    .map_or(9.81, |g| g.0);
+                wp_vehicle::dynamics::footing(&def, &pose, &t.0).sines().x * g
+            });
         let mut state = world.resource_mut::<TrafficState>();
         let (input, outcome) = drive(
             &mut state,
@@ -369,6 +378,7 @@ fn traffic(world: &mut World) {
             dt,
             now,
             &approaching,
+            pull,
         );
         drop(state);
         let speed = vel.linear.dot(pose.forward());
@@ -660,6 +670,7 @@ fn drive(
     dt: f32,
     now: f64,
     approaching: &[Approach],
+    pull: f32,
 ) -> (VehicleInput, Outcome) {
     let speed = vel.linear.dot(pose.forward());
     // Stop without a jolt: about 1.2 m/s² while still rolling, then hold.
@@ -1029,12 +1040,15 @@ fn drive(
     // beyond what rolling and drag give is brake pressure in proportion to
     // this vehicle's brakes (no switching back and forth between modes).
     let a = idm.accel(speed, v0, gap, speed - lead_v);
+    // What the brakes must do: on a downhill slope gravity already speeds
+    // the vehicle up, so it needs more brake (and uphill, less).
+    let a_brake = if pull == 0.0 { a } else { a + pull };
     let plan = state.plans.get_mut(&me).expect("planned above");
     // Once on the brake, stay on it until the car clearly wants to speed up.
     plan.braking = if plan.braking {
-        a < 0.0
+        a_brake < 0.0
     } else {
-        a < -COAST_DECEL
+        a_brake < -COAST_DECEL
     };
     let (throttle, brake) = if speed < 0.3 && a <= 0.0 {
         // Stopped or all but: hold firmly, without the jolt a full stamp on
@@ -1045,7 +1059,7 @@ fn drive(
         plan.integral = 0.0;
         (
             0.0,
-            ((-a - COAST_DECEL).max(0.0) / capacity.max(1.0)).clamp(0.0, 1.0),
+            ((-a_brake - COAST_DECEL).max(0.0) / capacity.max(1.0)).clamp(0.0, 1.0),
         )
     } else {
         let target = (speed + a).max(0.0) * 3.6;

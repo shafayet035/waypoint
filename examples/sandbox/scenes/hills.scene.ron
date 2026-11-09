@@ -1,0 +1,21 @@
+// Hilly ground: a big round hill with a road straight over its top, and
+// gentler rolling land around it. Physics feels the slopes (gravity along
+// the ground, weight shifting between axles); the renderer draws the land.
+(
+  name: "hills",
+  roads: Some("roads/pass.road.ron"),
+  terrain: Some((
+    size_m: (1600.0, 1000.0),
+    cell_m: 4.0,
+    noise: Some((height_m: 8.0, wavelength_m: 180.0, octaves: 3, seed: 3)),
+    hills: [(position: (0.0, 0.0), radius_m: 480.0, height_m: 48.0)],
+    road_smoothing_m: 80.0,
+    colour: Some((92, 112, 58)),   // grass
+    rock: (118, 110, 98),
+  )),
+  spawns: [
+    (name: "west", position: (-560.0, -1.75), heading_deg: 0.0),
+    (name: "slope", position: (-190.0, -1.75), heading_deg: 0.0),
+    (name: "slope_down", position: (190.0, 1.75), heading_deg: 180.0),
+  ],
+)

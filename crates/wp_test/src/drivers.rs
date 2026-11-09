@@ -11,7 +11,8 @@ use wp_ecs::{Entity, World};
 use wp_physics::{PinJoint, Pose};
 use wp_road::Polyline;
 pub use wp_traffic::control::{
-    TRACK_AHEAD_M, TRACK_BACK_M, route_speed_kmh, speed_control, stanley_steering, wrap,
+    TRACK_AHEAD_M, TRACK_BACK_M, route_speed_kmh, route_speed_kmh_with, speed_control,
+    stanley_steering, wrap,
 };
 use wp_vehicle::{Trailer, TrailerLibrary, Vehicle, VehicleInput, VehicleLibrary};
 use wp_world::{DockDef, Roads};
@@ -186,15 +187,28 @@ impl DriverState {
             return stop;
         };
         let model = world.get::<Vehicle>(player).map(|v| v.model.clone());
-        let dims = model.and_then(|m| {
-            world.get_resource::<VehicleLibrary>().and_then(|l| {
-                l.0.get(&m)
-                    .map(|d| (d.cg_to_front_axle_m, d.steering.max_angle_deg.to_radians()))
-            })
+        let def = model.and_then(|m| {
+            world
+                .get_resource::<VehicleLibrary>()
+                .and_then(|l| l.0.get(&m).cloned())
         });
-        let Some((to_front_axle, max_steer)) = dims else {
+        let Some(def) = def else {
             return stop;
         };
+        let (to_front_axle, max_steer) = (
+            def.cg_to_front_axle_m,
+            def.steering.max_angle_deg.to_radians(),
+        );
+        // Gravity holding the vehicle back on hilly ground: + uphill, − downhill, 0 on the flat.
+        let pull = world
+            .get_resource::<wp_physics::Terrain>()
+            .map_or(0.0, |t| {
+                let g = world
+                    .get_resource::<wp_physics::Gravity>()
+                    .map_or(9.81, |g| g.0);
+                wp_vehicle::dynamics::footing(&def, &pose, &t.0).sines().x * g
+            });
+        let full_brake = def.brakes.max_torque_nm / def.wheel.radius_m / def.mass_kg;
         if self.route.is_none() {
             self.route = Some(plan_route(world, pose.position, to_road));
         }
@@ -220,8 +234,21 @@ impl DriverState {
         let speed = forward_kmh.max(0.0) / 3.6;
         let front_axle = pose.position + pose.forward() * to_front_axle;
         let steer = stanley_steering(&path, front_axle, pose.heading, speed, s);
-        let target = route_speed_kmh(&path, s, kmh, remaining);
-        let (throttle, brake) = speed_control(&mut self.integral, target, forward_kmh, dt);
+        // Downhill, plan stops more gently: gravity eats into the braking.
+        let target = if pull < 0.0 {
+            let braking = (2.0 + 0.8 * pull).max(1.0);
+            route_speed_kmh_with(&path, s, kmh, remaining, 2.5, 5.0, 5.0, braking)
+        } else {
+            route_speed_kmh(&path, s, kmh, remaining)
+        };
+        let (throttle, brake) = wp_traffic::control::speed_control_on_slope(
+            &mut self.integral,
+            target,
+            forward_kmh,
+            dt,
+            pull,
+            full_brake,
+        );
         VehicleInput {
             throttle,
             brake,

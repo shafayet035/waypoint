@@ -1,0 +1,18 @@
+// Over the pass at 70 km/h: up a 10 % grade, over the top and down the
+// far side, on the route follower. Slopes must not push it off its lane.
+(
+  scene: "scenes/hills.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "hatchback",
+    spawn: "west",
+    driver: FollowRoute(to_road: "pass_east", kmh: 70.0),
+  ),
+  duration_s: 90.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.4),
+    MaxSideslipDeg(3.0),
+    NoNaN,
+    Deterministic,
+  ],
+)

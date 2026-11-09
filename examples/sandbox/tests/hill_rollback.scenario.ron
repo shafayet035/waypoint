@@ -1,0 +1,13 @@
+// Parked on a 10 % grade with the brakes off, a car rolls back down the hill
+// (gravity along the ground); with them on it stays put (hill_start).
+(
+  scene: "scenes/hills.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "slope", driver: Script([(at_s: 0.0, throttle: 0.0)])),
+  duration_s: 6.0,
+  assert: [
+    FinalPositionWithin(min: (-260.0, -4.0), max: (-205.0, 1.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

@@ -43,7 +43,7 @@ struct Globals {
     reflect_params: vec4<f32>,
     // Stylised looks: x: light wrap (0: plain Lambert), y: height scale of
     // ground fog and haze (m), z: 1 to write linear colour for the
-    // post-processing chain, w: unused.
+    // post-processing chain, w: height of the flat ground plane (m).
     look: vec4<f32>,
     // Tint of sky light in shade (rgb; white: none).
     shade: vec4<f32>,
@@ -365,8 +365,9 @@ fn vs_ground(@builtin(vertex_index) i: u32) -> GroundOut {
     );
     let c = corners[i] * 2000.0;
     var out: GroundOut;
-    out.rel = vec3<f32>(c, -g.camera_pos.z);
-    out.world = vec3<f32>(c + g.camera_pos.xy, 0.0);
+    // look.w: the plane's height (below any hilly land; 0 otherwise).
+    out.rel = vec3<f32>(c, g.look.w - g.camera_pos.z);
+    out.world = vec3<f32>(c + g.camera_pos.xy, g.look.w);
     out.pos = g.view_proj * vec4<f32>(out.rel, 1.0);
     return out;
 }

@@ -1,0 +1,18 @@
+// A loaded city bus over the pass: it must climb the 10 % grade (holding a
+// low gear, not hunting between two) and come down the far side on its lane.
+(
+  scene: "scenes/hills.scene.ron",
+  seed: 1,
+  player: (
+    vehicle: "city_bus",
+    spawn: "west",
+    driver: FollowRoute(to_road: "pass_east", kmh: 50.0),
+  ),
+  duration_s: 150.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.5),
+    MaxSideslipDeg(6.0),   // the same route on flat ground peaks at 5.8°
+    NoNaN,
+    Deterministic,
+  ],
+)
