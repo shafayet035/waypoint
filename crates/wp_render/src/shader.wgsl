@@ -47,6 +47,8 @@ struct Globals {
     look: vec4<f32>,
     // Tint of sky light in shade (rgb; white: none).
     shade: vec4<f32>,
+    // Where hilly land covers the flat plane: min xy, max xy (empty: none).
+    land_rect: vec4<f32>,
 };
 
 // Sunlight on a surface facing `ndotl`: Lambert, or wrapped past the
@@ -416,6 +418,10 @@ fn blob_shadows(p: vec2<f32>) -> f32 {
 @fragment
 fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     let p = in.world.xy;
+    // Hilly land is drawn there instead (its hollows go below the plane).
+    if (all(p > g.land_rect.xy) && all(p < g.land_rect.zw)) {
+        discard;
+    }
     // Asphalt: smooth large-scale variation plus fine aggregate that fades with distance.
     let coarse = value_noise(p * 0.15) * 0.5 + value_noise(p * 0.6) * 0.5;
     let fine_fade = clamp(1.0 - length(fwidth(p)) * 8.0, 0.0, 1.0);
@@ -852,4 +858,73 @@ fn fs_glass(in: GlassOut) -> @location(0) vec4<f32> {
         acc = d + acc * (1.0 - d.a);
     }
     return acc;
+}
+
+// ---- Water ----------------------------------------------------------------
+// Lake surfaces (static tiles through `vs_mesh`): uv.x is the depth, uv.y the
+// ripple strength, the vertex colour the deep colour; the facade slot holds
+// the shallow colour (sRGB) and the clarity (alpha × 25.5 m). Ripples are sums of
+// moving waves in simulated time; the surface reflects the sky by Fresnel,
+// glints in the sun, shows the bottom where shallow and foams at the shore.
+// Output is premultiplied; alpha keeps what is under it (distance for post).
+
+fn water_ripples(p: vec2<f32>, t: f32, strength: f32) -> vec3<f32> {
+    var grad = vec2<f32>(0.0);
+    let dirs = array<vec2<f32>, 4>(
+        vec2<f32>(0.94, 0.34), vec2<f32>(-0.42, 0.91), vec2<f32>(0.71, -0.70), vec2<f32>(-0.88, -0.47),
+    );
+    let lens = array<f32, 4>(7.0, 4.3, 2.6, 1.7);
+    for (var k = 0; k < 4; k = k + 1) {
+        let kk = 6.2832 / lens[k];
+        let speed = sqrt(9.81 / kk);
+        let phase = dot(dirs[k], p) * kk - t * speed * kk;
+        // Slope of each wave train (steeper for the short ones).
+        let slope = 0.022 + 0.01 * f32(k);
+        grad += dirs[k] * cos(phase) * slope;
+    }
+    return normalize(vec3<f32>(-grad * strength, 1.0));
+}
+
+@fragment
+fn fs_water(in: MeshOut) -> @location(0) vec4<f32> {
+    let depth = in.uv.x;
+    let strength = in.uv.y;
+    let p = in.rel.xy + g.camera_pos.xy;
+    let t = g.weather.z;
+    // Ripples calm with distance (they would alias into stripes).
+    let n = water_ripples(p, t, strength / (1.0 + length(in.rel) * 0.03));
+    let v = normalize(-in.rel);
+    let l = g.sun_dir.xyz;
+    let clarity = max(in.facade.w * 25.5, 0.1);
+    let shallow = srgb_to_linear(in.facade.rgb);
+    let deep = in.color;
+    let k = clamp(depth / clarity, 0.0, 1.0);
+    let body = mix(shallow, deep, sqrt(k));
+    let up = vec3<f32>(0.0, 0.0, 1.0);
+    let shadow = sun_shadow(in.rel, up);
+    let sun = g.sun_color.rgb * g.sun_dir.w;
+    let lit = body * (sun * styled_light(lambert(dot(up, l)) * shadow) * 0.55 + ambient(up));
+    let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+    // The sky without the sun's disc (the glint below is the sun).
+    let r = reflect(-v, n);
+    let sky = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, pow(clamp(r.z, 0.0, 1.0), 0.45));
+    // The sun's mirror image: tight, so ripples break it into sparkles.
+    // Fine wavelets (noise) only for the glint: sparkles, not a disc.
+    let fine = vec2<f32>(
+        value_noise(p * 9.0 + vec2<f32>(t * 1.3, 0.0)),
+        value_noise(p * 9.7 + vec2<f32>(17.0, -t * 1.1)),
+    ) - vec2<f32>(0.5);
+    let n_fine = normalize(n + vec3<f32>(fine * 0.5 * strength, 0.0));
+    let glint = pow(max(dot(reflect(-l, n_fine), v), 0.0), 1500.0) * 3.0 * shadow;
+    var col = mix(lit, sky, fresnel * (1.0 - g.style.w * 0.6)) + sun * glint * (1.0 - g.style.w);
+    // Foam where it laps the shore.
+    let lap = 0.5 + 0.5 * sin(t * 1.6 + dot(p, vec2<f32>(0.6, 0.45)));
+    let broken = 0.45 + 0.55 * value_noise(p * 1.7 + vec2<f32>(t * 0.3, 0.0));
+    let foam = (1.0 - smoothstep(0.0, 0.03 + 0.025 * lap, depth)) * 0.75 * broken;
+    col = mix(col, (sun * shadow + ambient(up)) * 0.9, foam);
+    col = apply_fog(col, in.rel);
+    // See-through where shallow; opaque with depth and at grazing angles.
+    let alpha = clamp(mix(0.45, 1.0, smoothstep(0.0, clarity * 0.6, depth)) + fresnel + foam, 0.0, 1.0);
+    let f = finish(col, in.rel);
+    return vec4<f32>(f.rgb * alpha, alpha);
 }

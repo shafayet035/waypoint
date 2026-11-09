@@ -15,7 +15,8 @@ This folder is a Waypoint game. Everything is plain text; there is no editor.
 - `[look] style = "stylised"` in game.toml: soft warm light, cool shade, haze, bloom, distance blur.
 - `scenes/*.scene.ron`: ground settings and named spawn points. `canyon.scene.ron` has `terrain`: red,
   faceted hills (ridged noise plus four big hills) with the loop road levelled into them, and sparse
-  dry `grass` that sways in the wind.
+  dry `grass` that sways in the wind. The oasis is a terrain `flat` with a hollow that `water` fills (the `pond`
+  spawn looks at it). The offroader's snorkel lets it ford 0.7 m (`wading_depth_m`).
 - `tests/*.scenario.ron`: headless tests with a driver and assertions.
 - `tests/*.shot.ron` + `tests/*.png`: screenshot tests: a frame of a scenario or scene, compared
   with the approved picture.

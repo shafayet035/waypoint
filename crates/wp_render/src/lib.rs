@@ -64,6 +64,9 @@ struct Globals {
     look: [f32; 4],
     /// Tint of sky light in shade.
     shade: [f32; 4],
+    /// Where hilly land covers the flat plane (min x, min y, max x, max y);
+    /// empty (min > max) without terrain.
+    land_rect: [f32; 4],
 }
 
 /// Height of the flat ground plane under hilly land, m (just below the
@@ -177,6 +180,32 @@ impl TileData {
                     color: [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255],
                     ..Default::default()
                 }
+            })
+            .collect();
+        Self {
+            centre: t.centre,
+            min: t.min,
+            max: t.max,
+            layers: vec![mesh::MeshData {
+                vertices,
+                indices: t.indices,
+            }],
+        }
+    }
+
+    /// Water tiles: depth and ripple strength in the texture coordinates,
+    /// the deep colour in the vertex colour, the shallow colour and clarity
+    /// (0.1 m steps) in the facade slot (`fs_water`).
+    fn from_water(t: wp_world::terrain::TerrainTile, w: &wp_world::terrain::WaterDef) -> Self {
+        let clarity = (w.clarity_m * 10.0).round().clamp(1.0, 255.0) as u8;
+        let vertices = (0..t.positions.len())
+            .map(|i| mesh::Vertex {
+                position: t.positions[i],
+                normal: t.normals[i],
+                uv: [t.colors[i][0], w.waves],
+                color: [w.deep_colour.0, w.deep_colour.1, w.deep_colour.2, 255],
+                facade: [w.colour.0, w.colour.1, w.colour.2, clarity],
+                ..Default::default()
             })
             .collect();
         Self {
@@ -855,6 +884,10 @@ pub struct Renderer {
     mirror_pipelines: [wgpu::RenderPipeline; 2],
     /// Sky, ground, meshes and glass writing linear colour for `post`.
     hdr_pipelines: [wgpu::RenderPipeline; 4],
+    /// Lakes: plain and linear (post) targets.
+    water_pipelines: [wgpu::RenderPipeline; 2],
+    /// Water surface tiles.
+    water: Option<TileCache>,
     /// Bloom, distance blur and grading for stylised looks (made on first use).
     post: Option<post::Post>,
     reflection: Option<Reflection>,
@@ -1148,6 +1181,33 @@ impl Renderer {
         // The same scene pipelines writing linear colour (and distance) for
         // the post-processing chain of stylised looks.
         let hdr_target = (post::HDR_FORMAT, MSAA_SAMPLES);
+        // Water: blended over what is under it (premultiplied colour), and
+        // the alpha channel left alone (it holds distance for post).
+        let water_blend = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        });
+        let water_pipelines = [(format, MSAA_SAMPLES), hdr_target].map(|target| {
+            pipeline(
+                "water",
+                "vs_mesh",
+                "fs_water",
+                &[Some(vertex_layout()), Some(instance_layout())],
+                false,
+                wgpu::CompareFunction::Greater,
+                None,
+                water_blend,
+                target,
+            )
+        });
         let hdr_pipelines = [
             pipeline(
                 "sky (hdr)",
@@ -1271,6 +1331,8 @@ impl Renderer {
             glass,
             mirror_pipelines: [mirror_sky, mirror_meshes],
             hdr_pipelines,
+            water_pipelines,
+            water: None,
             post: None,
             reflection: None,
             reflection_scale: None,
@@ -1735,6 +1797,13 @@ impl Renderer {
                 },
             ],
             shade: glam::Vec3::from(frame.look.shade).extend(1.0).to_array(),
+            land_rect: match &frame.terrain {
+                Some(t) => {
+                    let (lo, hi, c) = (t.field.origin, t.field.max(), t.field.cell_m);
+                    [lo.x + c, lo.y + c, hi.x - c, hi.y - c]
+                }
+                None => [1.0, 1.0, -1.0, -1.0],
+            },
         };
         // The nearest lights (ties by order, so frames are repeatable).
         let mut order: Vec<(f32, usize)> = frame
@@ -1871,6 +1940,7 @@ impl Renderer {
             material: [0.85, 0.0, 0.0, 0.0],
         };
         let mut static_draws: Vec<(StaticKind, usize, usize)> = Vec::new();
+        let mut water_raw: Vec<InstanceRaw> = Vec::new();
         let mut static_raw: Vec<InstanceRaw> = Vec::new();
         let tile_model = |t: &TileData| {
             let offset = glam::Vec3::new(t.centre[0] - eye.x, t.centre[1] - eye.y, -eye.z);
@@ -1922,6 +1992,22 @@ impl Renderer {
                 });
             }
         }
+        // Lakes: drawn after everything opaque (instances after the static
+        // ones, not in `static_draws`, so no other pass draws them).
+        let mut water_draws: Vec<(usize, usize)> = Vec::new();
+        if let Some(cache) = &self.water {
+            for &i in cache.resident.keys() {
+                let (offset, model) = tile_model(&cache.tiles[i]);
+                if !in_view(&view_proj, offset, &cache.tiles[i]) {
+                    continue;
+                }
+                water_draws.push((i, usize::MAX));
+                water_raw.push(InstanceRaw {
+                    model,
+                    ..building_mat
+                });
+            }
+        }
         // Buildings and hills near the shadow map's square cast shadows, even off screen.
         let main_static = static_draws.len();
         if self.shadow.is_some()
@@ -1954,6 +2040,11 @@ impl Renderer {
                 }
             }
         }
+        let water_first = static_raw.len();
+        for (k, w) in water_draws.iter_mut().enumerate() {
+            w.1 = water_first + k;
+        }
+        static_raw.extend(water_raw);
         if static_raw.len() > self.road_instance_capacity {
             self.road_instance_capacity = static_raw.len().next_power_of_two();
             self.road_instances = Self::instance_buffer(gpu, self.road_instance_capacity);
@@ -2205,6 +2296,26 @@ impl Renderer {
             let (calls, tris) = self.grass.draw(&mut pass, post_on);
             stats.draw_calls += calls;
             stats.triangles += tris;
+            if !water_draws.is_empty() {
+                pass.set_pipeline(&self.water_pipelines[post_on as usize]);
+                pass.set_bind_group(1, &self.textures.white, &[]);
+                for &(tile, slot) in &water_draws {
+                    let Some(mesh) = self.static_mesh(StaticKind::Water, tile, 0) else {
+                        continue;
+                    };
+                    let slot = slot as u64;
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.road_instances
+                            .slice(slot * stride..(slot + 1) * stride),
+                    );
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.triangles += mesh.index_count as u64 / 3;
+                }
+            }
             if frame.windscreen.is_some() {
                 pass.set_pipeline(pick(&self.glass, hdr_glass));
                 pass.set_bind_group(1, &self.textures.white, &[]);
@@ -2243,6 +2354,7 @@ enum StaticKind {
     Road,
     Building,
     Terrain,
+    Water,
 }
 
 impl Renderer {
@@ -2252,6 +2364,7 @@ impl Renderer {
             StaticKind::Road => self.roads.as_ref()?,
             StaticKind::Building => self.buildings.as_ref()?,
             StaticKind::Terrain => self.terrain.as_ref()?,
+            StaticKind::Water => self.water.as_ref()?,
         };
         cache
             .resident
@@ -2396,6 +2509,35 @@ impl Renderer {
                         .collect()
                 })
                 .unwrap_or_default()
+            },
+            range,
+            eye,
+        );
+        let water = land.clone().filter(|t| !t.water.is_empty());
+        TileCache::sync(
+            &mut self.water,
+            gpu,
+            water.as_ref().map(|_| land_id),
+            move || {
+                water
+                    .map(|t| {
+                        t.water
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(k, w)| {
+                                wp_world::terrain::build_water_tiles(
+                                    &t.field,
+                                    &t.water_owner,
+                                    k as u8,
+                                    w.level_m,
+                                )
+                                .into_iter()
+                                .map(|tile| TileData::from_water(tile, w))
+                                .collect::<Vec<_>>()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
             },
             range,
             eye,

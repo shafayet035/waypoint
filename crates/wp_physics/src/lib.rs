@@ -13,7 +13,7 @@ pub mod terrain;
 pub use contact::{Collider, Contact, Walls, box_contact, solve_contacts};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
-pub use terrain::{Footing, HeightField, Terrain};
+pub use terrain::{Footing, HeightField, Terrain, Water, WaterLevels};
 use wp_app::{App, Plugin};
 use wp_core::SimTime;
 use wp_ecs::{Component, Entity, Stage, World};

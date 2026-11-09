@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use wp_physics::HeightField;
 use wp_road::RoadNetwork;
 
-/// A scene's land shape. Heights never go below 0 (the flat plain around).
+/// A scene's land shape around the flat plain (height 0). Hills with a
+/// negative height dig hollows, which water fills up to its level.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TerrainDef {
@@ -27,6 +28,10 @@ pub struct TerrainDef {
     /// Rolling land from layered noise.
     #[serde(default)]
     pub noise: Option<NoiseDef>,
+    /// Level areas (an oasis, a town, a car park), before the hills: a
+    /// hollow placed on a flat holds a pond.
+    #[serde(default)]
+    pub flats: Vec<FlatDef>,
     /// Hand-placed hills (a negative height digs a hollow).
     #[serde(default)]
     pub hills: Vec<HillDef>,
@@ -86,6 +91,26 @@ pub struct HillDef {
     pub radius_m: f32,
     /// Height of the top, m (negative: a hollow).
     pub height_m: f32,
+}
+
+/// A level, round area that blends back into the land around it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FlatDef {
+    /// Centre (x, y), m.
+    pub position: (f32, f32),
+    /// Radius of the level part, m.
+    pub radius_m: f32,
+    /// Its height, m (absent: the land's height at the centre).
+    #[serde(default)]
+    pub height_m: Option<f32>,
+    /// Distance over which it blends into the land around, m.
+    #[serde(default = "default_flat_blend")]
+    pub blend_m: f32,
+}
+
+fn default_flat_blend() -> f32 {
+    30.0
 }
 
 fn default_cell() -> f32 {
@@ -155,6 +180,17 @@ impl TerrainDef {
                 out.push(("hills", format!("radius_m > 0, found {}", h.radius_m)));
             }
         }
+        for f in &self.flats {
+            if !(f.radius_m > 0.0 && f.blend_m >= 0.0) {
+                out.push((
+                    "flats",
+                    format!(
+                        "radius_m > 0 and blend_m ≥ 0, found {} and {}",
+                        f.radius_m, f.blend_m
+                    ),
+                ));
+            }
+        }
         out
     }
 
@@ -169,6 +205,15 @@ impl TerrainDef {
         let mut h = 0.0;
         if let Some(n) = &self.noise {
             h += fbm(n, p);
+        }
+        for flat in &self.flats {
+            let c = Vec2::from(flat.position);
+            let level = flat
+                .height_m
+                .unwrap_or_else(|| self.noise.as_ref().map_or(0.0, |n| fbm(n, c)));
+            let d = p.distance(c) - flat.radius_m;
+            let w = 1.0 - smoothstep(0.0, flat.blend_m.max(0.01), d);
+            h += (level - h) * w;
         }
         for hill in &self.hills {
             let d = p.distance(Vec2::from(hill.position)) / hill.radius_m;
@@ -187,7 +232,7 @@ impl TerrainDef {
         } else {
             1.0
         };
-        (h * fade).max(0.0)
+        h * fade
     }
 }
 
@@ -282,7 +327,13 @@ fn disc_average(def: &TerrainDef, c: Vec2, r: f32) -> f32 {
 }
 
 /// Shape the terrain: the land, levelled under `net`'s roads.
-pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>) -> HeightField {
+pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>, water: &[WaterDef]) -> HeightField {
+    // Roads stay out of water that covers all low land (no bridges yet).
+    let road_floor = water
+        .iter()
+        .filter(|w| w.at.is_none())
+        .map(|w| w.level_m + ROAD_ABOVE_WATER_M)
+        .fold(f32::MIN, f32::max);
     let (nx, ny) = def.grid();
     let origin = Vec2::from(def.centre) - Vec2::from(def.size_m) * 0.5;
     let mut field = HeightField::flat(origin, def.cell_m, nx, ny);
@@ -386,7 +437,7 @@ pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>) -> HeightField {
         let (d0, d1) = (start - heights[0], end - heights[n - 1]);
         for (k, h) in heights.iter_mut().enumerate() {
             let t = k as f32 / (n - 1) as f32;
-            *h = (*h + d0 + (d1 - d0) * t).max(0.0);
+            *h = (*h + d0 + (d1 - d0) * t).max(road_floor);
         }
         let profile = Profile { step, heights };
         // Level the band along the road.
@@ -413,9 +464,209 @@ pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>) -> HeightField {
         }
         let w = 1.0 - smoothstep(0.0, def.blend_m.max(0.01), *d);
         let h = &mut field.heights[k];
-        *h = (*h + (road_h - *h) * w).max(0.0);
+        *h += (road_h - *h) * w;
     }
     field
+}
+
+/// How far roads stay above water, m.
+pub const ROAD_ABOVE_WATER_M: f32 = 0.6;
+
+/// A body of standing water: a lake, pond or ford.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WaterDef {
+    /// Height of the surface, m. The plain is at 0, so low water sits in
+    /// hollows (terrain hills with negative height_m).
+    #[serde(default = "default_level")]
+    pub level_m: f32,
+    /// A point in the lake (x, y), m: only the hollow round it fills, so
+    /// lakes can sit up in the hills. Absent: all land below the level,
+    /// and roads are kept above it.
+    #[serde(default)]
+    pub at: Option<(f32, f32)>,
+    /// Colour of shallow water and of deep water (sRGB 0–255).
+    #[serde(default = "default_shallow")]
+    pub colour: (u8, u8, u8),
+    #[serde(default = "default_deep")]
+    pub deep_colour: (u8, u8, u8),
+    /// Depth at which the bottom can no longer be seen, m.
+    #[serde(default = "default_clarity")]
+    pub clarity_m: f32,
+    /// Ripple strength (0: a mirror).
+    #[serde(default = "default_waves")]
+    pub waves: f32,
+}
+
+fn default_level() -> f32 {
+    -0.5
+}
+fn default_shallow() -> (u8, u8, u8) {
+    (72, 168, 170)
+}
+fn default_deep() -> (u8, u8, u8) {
+    (20, 64, 96)
+}
+fn default_clarity() -> f32 {
+    3.0
+}
+fn default_waves() -> f32 {
+    1.0
+}
+
+impl WaterDef {
+    pub fn problems(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if !self.level_m.is_finite() {
+            out.push(("level_m", "a finite height".into()));
+        }
+        if !(self.clarity_m > 0.0) {
+            out.push((
+                "clarity_m",
+                format!("clarity_m > 0, found {}", self.clarity_m),
+            ));
+        }
+        if !(self.waves >= 0.0 && self.waves <= 5.0) {
+            out.push(("waves", format!("0 ≤ waves ≤ 5, found {}", self.waves)));
+        }
+        out
+    }
+}
+
+/// No water over a grid point.
+pub const DRY: u8 = u8::MAX;
+
+/// Fill the water bodies on `field`: for each grid point, the body over it
+/// (index into `bodies`, or [`DRY`]), and the surface heights. A body with
+/// `at` fills the hollow round that point (land lower than its level, joined
+/// to it); one without fills all low land. Earlier bodies win.
+pub fn flood(field: &HeightField, bodies: &[WaterDef]) -> (Vec<u8>, wp_physics::WaterLevels) {
+    let (nx, ny) = (field.nx, field.ny);
+    let mut owner = vec![DRY; nx * ny];
+    for (k, body) in bodies.iter().enumerate().take(DRY as usize) {
+        let below = |i: usize, j: usize| field.at(i, j) < body.level_m;
+        match body.at {
+            None => {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        if owner[j * nx + i] == DRY && below(i, j) {
+                            owner[j * nx + i] = k as u8;
+                        }
+                    }
+                }
+            }
+            Some(at) => {
+                let q = ((Vec2::from(at) - field.origin) / field.cell_m).round();
+                if q.x < 0.0 || q.y < 0.0 || q.x as usize >= nx || q.y as usize >= ny {
+                    continue;
+                }
+                let start = (q.x as usize, q.y as usize);
+                if !below(start.0, start.1) {
+                    continue;
+                }
+                let mut stack = vec![start];
+                while let Some((i, j)) = stack.pop() {
+                    let idx = j * nx + i;
+                    if owner[idx] != DRY || !below(i, j) {
+                        continue;
+                    }
+                    owner[idx] = k as u8;
+                    if i > 0 {
+                        stack.push((i - 1, j));
+                    }
+                    if i + 1 < nx {
+                        stack.push((i + 1, j));
+                    }
+                    if j > 0 {
+                        stack.push((i, j - 1));
+                    }
+                    if j + 1 < ny {
+                        stack.push((i, j + 1));
+                    }
+                }
+            }
+        }
+    }
+    let levels = owner
+        .iter()
+        .map(|&o| {
+            if o == DRY {
+                f32::NAN
+            } else {
+                bodies[o as usize].level_m
+            }
+        })
+        .collect();
+    let map = wp_physics::WaterLevels {
+        origin: field.origin,
+        cell_m: field.cell_m,
+        nx,
+        ny,
+        levels,
+    };
+    (owner, map)
+}
+
+/// Body `body`'s surface (at height `level`) as meshes in tiles (the land's
+/// tiling), over cells with a corner under it. Positions are relative to
+/// each tile's centre; `colors[k][0]` holds the water depth at each vertex
+/// (0 where the land is above it, at the shore).
+pub fn build_water_tiles(
+    field: &HeightField,
+    owner: &[u8],
+    body: u8,
+    level: f32,
+) -> Vec<TerrainTile> {
+    let (nx, ny) = (field.nx, field.ny);
+    let mut tiles = Vec::new();
+    let mut tj = 0;
+    while tj < ny - 1 {
+        let mut ti = 0;
+        while ti < nx - 1 {
+            let (i1, j1) = ((ti + TILE_CELLS).min(nx - 1), (tj + TILE_CELLS).min(ny - 1));
+            let centre = (field.point(ti, tj) + field.point(i1, j1)) * 0.5;
+            let mut t = TerrainTile {
+                centre: centre.to_array(),
+                min: [f32::MAX; 3],
+                max: [f32::MIN; 3],
+                ..Default::default()
+            };
+            for j in tj..j1 {
+                for i in ti..i1 {
+                    let q = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)];
+                    if !q.iter().any(|&(i, j)| owner[j * nx + i] == body) {
+                        continue;
+                    }
+                    let base = t.positions.len() as u32;
+                    for (i, j) in q {
+                        let p = field.point(i, j) - centre;
+                        t.positions.push([p.x, p.y, level]);
+                        t.normals.push([0.0, 0.0, 1.0]);
+                        t.colors
+                            .push([(level - field.at(i, j)).max(0.0), 0.0, 0.0, 1.0]);
+                    }
+                    t.indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base,
+                        base + 2,
+                        base + 3,
+                    ]);
+                }
+            }
+            if !t.indices.is_empty() {
+                for p in &t.positions {
+                    t.min = std::array::from_fn(|a| t.min[a].min(p[a]));
+                    t.max = std::array::from_fn(|a| t.max[a].max(p[a]));
+                }
+                tiles.push(t);
+            }
+            ti = i1;
+        }
+        tj = (tj + TILE_CELLS).min(ny - 1);
+    }
+    tiles
 }
 
 /// The steepest stretch of road on `field`: (rise per metre, where).
@@ -437,11 +688,15 @@ pub fn steepest_road(field: &HeightField, net: &RoadNetwork) -> Option<(f32, Vec
     best
 }
 
-/// A scene's terrain, shaped: its settings and the heights.
+/// A scene's terrain, shaped: its settings and the heights, and its water
+/// (the bodies, and which body is over each grid point: see [`flood`]).
 #[derive(Clone, Debug)]
 pub struct BuiltTerrain {
     pub def: TerrainDef,
     pub field: std::sync::Arc<HeightField>,
+    pub water: Vec<WaterDef>,
+    pub water_owner: Vec<u8>,
+    pub water_levels: Option<std::sync::Arc<wp_physics::WaterLevels>>,
 }
 
 /// The current scene's terrain, for drawing (physics reads
@@ -593,21 +848,21 @@ mod tests {
     fn land_is_hilly_and_flat_at_the_edge() {
         let d = def();
         assert!(d.problems().is_empty());
-        let f = build(&d, None);
+        let f = build(&d, None, &[]);
         let (lo, hi) = f.range();
         assert!(lo >= 0.0 && hi > 25.0, "{lo} {hi}");
         // Edge rows are flat at 0.
         assert_eq!(f.at(0, 40), 0.0);
         assert_eq!(f.at(f.nx - 1, 40), 0.0);
         // The same settings give the same land.
-        assert_eq!(f, build(&d, None));
+        assert_eq!(f, build(&d, None, &[]));
     }
 
     #[test]
     fn roads_are_level_across_and_gentle_along() {
         let d = def();
         let net = road();
-        let f = build(&d, Some(&net));
+        let f = build(&d, Some(&net), &[]);
         let r = &net.roads[0];
         let len = r.centre.length();
         let mut s = 10.0;
@@ -636,7 +891,7 @@ mod tests {
     #[test]
     fn tiles_cover_the_field() {
         let mut d = def();
-        let f = build(&d, None);
+        let f = build(&d, None, &[]);
         let smooth = build_tiles(&d, &f, Vec3::splat(0.3));
         d.faceted = true;
         let faceted = build_tiles(&d, &f, Vec3::splat(0.3));

@@ -629,6 +629,16 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Raise cell_m or shrink size_m (at most about 1.1 million grid points).",
     },
     ErrorDoc {
+        code: "WP-W012",
+        title: "A water setting is out of range",
+        fix: "Use a finite level_m, clarity_m > 0 and 0 ≤ waves ≤ 5.",
+    },
+    ErrorDoc {
+        code: "WP-W013",
+        title: "Water without terrain (warning)",
+        fix: "Add `terrain` with hollows (hills with negative height_m) that go below the water's level_m.",
+    },
+    ErrorDoc {
         code: "WP-W011",
         title: "A grass setting is out of range",
         fix: "Use 0.1–40 tufts per m², heights 0.02–3 m, draw_m 5–200, and sway, verge_m and max_grade ≥ 0.",

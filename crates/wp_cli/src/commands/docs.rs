@@ -98,7 +98,8 @@ Assertions
   Docked(dock: \"bay_1\", max_offset_m: 0.3, max_angle_deg: 3.0)   trailer rear at the dock, square, stopped
 
 Events: GearShift, AbsEngaged, AbsReleased, EscEngaged, EscReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
-Collision (bodies touching, or other: \"building\"; impact_kmh, and a dent in each: telemetry health_pct), RanRedLight, HitPedestrian.
+Collision (bodies touching, or other: \"building\"; impact_kmh, and a dent in each: telemetry health_pct), RanRedLight, HitPedestrian,
+EngineFlooded (water deeper than the vehicle's wading_depth_m reached the engine; telemetry water_depth_m, engine_flooded).
 
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;
@@ -114,7 +115,10 @@ terrain: Some((size_m: (1600.0, 1000.0), noise: Some((height_m: 8.0, wavelength_
 hills: [(position: (0.0, 0.0), radius_m: 480.0, height_m: 48.0)], faceted: false)) (hills and valleys:
 roads are levelled into the land, which blends back to its own shape over blend_m; vehicles feel the
 slopes; telemetry altitude_m and grade_pct; `wp schema scene` lists every field),
-grass: Some((density_per_m2: 8.0, height_m: 0.45)) (swaying grass near the camera, kept off roads and buildings).
+grass: Some((density_per_m2: 8.0, height_m: 0.45)) (swaying grass near the camera, kept off roads and buildings),
+water: [(level_m: -0.5)] or [(level_m: 15.0, at: Some((330.0, -200.0)))] (lakes, ponds and fords in the terrain's
+hollows; `at` fills only the hollow round that point, so lakes can sit up in the hills; terrain `flats` level an area
+first). Water drags vehicles, loosens grip and floods engines past their wading depth.
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).

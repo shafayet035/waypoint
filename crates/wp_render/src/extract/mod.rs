@@ -427,6 +427,13 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         c.eye.z += h;
                         c.target.z += h;
                         c.eye.z = c.eye.z.max(f.height(c.eye.truncate()) + 1.2);
+                        // ...nor into a lake.
+                        if let Some(level) = world
+                            .get_resource::<wp_physics::Water>()
+                            .and_then(|w| w.0.level_at(c.eye.truncate()))
+                        {
+                            c.eye.z = c.eye.z.max(level + 0.8);
+                        }
                     }
                     c
                 }

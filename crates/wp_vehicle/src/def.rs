@@ -54,6 +54,17 @@ pub struct VehicleDef {
     /// body is drawn from boxes.
     #[serde(default)]
     pub model: Option<String>,
+    /// Deepest water it can drive through before water reaches the engine's
+    /// air intake and floods it, m (a snorkel raises it). Default 0.35 m.
+    #[serde(default)]
+    pub wading_depth_m: Option<f32>,
+}
+
+impl VehicleDef {
+    /// See [`VehicleDef::wading_depth_m`].
+    pub fn wading_depth(&self) -> f32 {
+        self.wading_depth_m.unwrap_or(0.35)
+    }
 }
 
 /// Where a semi-trailer's kingpin couples to this vehicle.

@@ -152,6 +152,7 @@ pub fn build(
     net: Option<&RoadNetwork>,
     scenery: Option<&crate::scenery::Scenery>,
     land: Option<&HeightField>,
+    water: Option<&wp_physics::WaterLevels>,
 ) -> GrassMap {
     // The area: as given, else the terrain's square, else round the roads.
     let (lo, hi) = match (def.area, land, net) {
@@ -189,12 +190,17 @@ pub fn build(
         mask: vec![255; nx * ny],
     };
     let point = |i: usize, j: usize| lo + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * cell_m;
-    // Steep ground: thinning from 70 % of the limit to none at it.
+    // Steep ground: thinning from 70 % of the limit to none at it; none in
+    // water or right at its edge.
     if let Some(f) = land {
         for j in 0..ny {
             for i in 0..nx {
                 let g = f.gradient(point(i, j)).length();
-                let keep = 1.0 - smooth(def.max_grade * 0.7, def.max_grade.max(1e-3), g);
+                let p = point(i, j);
+                let dry = water
+                    .and_then(|w| w.level_at(p))
+                    .map_or(1.0, |l| smooth(l + 0.15, l + 0.45, f.height(p)));
+                let keep = (1.0 - smooth(def.max_grade * 0.7, def.max_grade.max(1e-3), g)) * dry;
                 let m = &mut map.mask[j * nx + i];
                 *m = (*m as f32 * keep) as u8;
             }
@@ -305,7 +311,7 @@ mod tests {
         )
         .unwrap();
         let net = RoadNetwork::build(&net);
-        let map = build(&def, Some(&net), None, None);
+        let map = build(&def, Some(&net), None, None, None);
         // On the road and its sidewalk: bare. Well away: full.
         assert_eq!(map.at(Vec2::new(0.0, 0.5)), 0);
         assert_eq!(map.at(Vec2::new(0.0, -5.0)), 0);

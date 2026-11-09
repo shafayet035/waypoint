@@ -1,0 +1,3 @@
+// Through the shallow ford: water with ripples, sky reflections and foam at
+// the shore, the land and grass round it (realistic look).
+(scenario: Some("ford_shallow"), at_s: 7.5, camera: Chase, width: 640, height: 360)

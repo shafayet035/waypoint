@@ -70,7 +70,87 @@ impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
+
+    /// Split triangles until no edge is longer than `max_edge` (measured
+    /// across the ground). Each round splits every long edge at its middle,
+    /// once for all triangles sharing it, and each triangle into 2, 3 or 4 by
+    /// how many of its edges were split, so no cracks open.
+    pub fn refine(&mut self, max_edge: f32) {
+        use std::collections::BTreeMap;
+        let flat_len = |p: [f32; 3], q: [f32; 3]| Vec2::new(p[0] - q[0], p[1] - q[1]).length();
+        for _ in 0..12 {
+            let mut mid: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+            let indices = std::mem::take(&mut self.indices);
+            for t in indices.chunks(3) {
+                for k in 0..3 {
+                    let (a, b) = (t[k], t[(k + 1) % 3]);
+                    let key = (a.min(b), a.max(b));
+                    if !mid.contains_key(&key)
+                        && flat_len(self.positions[a as usize], self.positions[b as usize])
+                            > max_edge
+                    {
+                        let (pa, pb) = (
+                            Vec3::from(self.positions[a as usize]),
+                            Vec3::from(self.positions[b as usize]),
+                        );
+                        let n = (Vec3::from(self.normals[a as usize])
+                            + Vec3::from(self.normals[b as usize]))
+                        .normalize_or(Vec3::Z);
+                        let m = self.vertex((pa + pb) * 0.5, n);
+                        mid.insert(key, m);
+                    }
+                }
+            }
+            if mid.is_empty() {
+                self.indices = indices;
+                return;
+            }
+            let split = |a: u32, b: u32| mid.get(&(a.min(b), a.max(b))).copied();
+            let mut out = Vec::with_capacity(indices.len() * 2);
+            for t in indices.chunks(3) {
+                // Rotate so the split edges come first: ab, then bc, then ca.
+                let tri = [t[0], t[1], t[2]];
+                let marks: Vec<bool> = (0..3)
+                    .map(|k| split(tri[k], tri[(k + 1) % 3]).is_some())
+                    .collect();
+                let count = marks.iter().filter(|m| **m).count();
+                let r = match count {
+                    0 => {
+                        out.extend_from_slice(&tri);
+                        continue;
+                    }
+                    // One split edge: rotate it to ab. Two: rotate the unsplit one to ca.
+                    1 => marks.iter().position(|m| *m).expect("one"),
+                    2 => (marks.iter().position(|m| !*m).expect("one unsplit") + 1) % 3,
+                    _ => 0,
+                };
+                let (a, b, c) = (tri[r], tri[(r + 1) % 3], tri[(r + 2) % 3]);
+                match count {
+                    1 => {
+                        let m = split(a, b).expect("split");
+                        out.extend_from_slice(&[a, m, c, m, b, c]);
+                    }
+                    2 => {
+                        let (m1, m2) = (split(a, b).expect("ab"), split(b, c).expect("bc"));
+                        out.extend_from_slice(&[m1, b, m2, a, m1, m2, a, m2, c]);
+                    }
+                    _ => {
+                        let (ab, bc, ca) = (
+                            split(a, b).expect("ab"),
+                            split(b, c).expect("bc"),
+                            split(c, a).expect("ca"),
+                        );
+                        out.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+                    }
+                }
+            }
+            self.indices = out;
+        }
+    }
 }
+
+/// Longest triangle edge when road meshes are laid on hilly ground, m.
+pub const DRAPE_EDGE_M: f32 = 2.0;
 
 /// The three road layers, each drawn with its own material.
 #[derive(Clone, Debug, Default)]
@@ -84,7 +164,12 @@ impl RoadMeshes {
     /// Lay the meshes on hilly ground: every vertex rises by the ground's
     /// `height` under it, and upward faces tilt with the ground's `gradient`
     /// (rise per metre in x and y).
+    /// Long triangles are split first (no edge over [`DRAPE_EDGE_M`]) so the
+    /// surface follows the ground between its corners.
     pub fn drape(&mut self, height: impl Fn(Vec2) -> f32, gradient: impl Fn(Vec2) -> Vec2) {
+        for m in [&mut self.asphalt, &mut self.markings, &mut self.sidewalks] {
+            m.refine(DRAPE_EDGE_M);
+        }
         for m in [&mut self.asphalt, &mut self.markings, &mut self.sidewalks] {
             for (p, n) in m.positions.iter_mut().zip(&mut m.normals) {
                 let xy = Vec2::new(p[0], p[1]);
@@ -407,6 +492,38 @@ mod tests {
     use super::*;
     use crate::def::*;
     use crate::network::RoadNetwork;
+
+    #[test]
+    fn refining_splits_long_edges_without_changing_the_surface() {
+        let mut m = Mesh::default();
+        let l = [Vec2::new(0.0, 0.0), Vec2::new(0.0, 10.0)];
+        let r = [Vec2::new(7.0, 0.0), Vec2::new(7.0, 10.0)];
+        m.strip(&l, &r, 0.0);
+        let area = |m: &Mesh| -> f32 {
+            m.indices
+                .chunks(3)
+                .map(|t| {
+                    let p = |i: u32| Vec3::from(m.positions[i as usize]);
+                    (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).z * 0.5
+                })
+                .sum()
+        };
+        let before = area(&m);
+        m.refine(2.0);
+        assert!((area(&m) - before).abs() < 1e-3, "{} vs {before}", area(&m));
+        for t in m.indices.chunks(3) {
+            for k in 0..3 {
+                let (a, b) = (
+                    m.positions[t[k] as usize],
+                    m.positions[t[(k + 1) % 3] as usize],
+                );
+                assert!(Vec2::new(a[0] - b[0], a[1] - b[1]).length() <= 2.0 + 1e-4);
+            }
+            // Still facing up (counter-clockwise from above).
+            let p = |i: u32| Vec3::from(m.positions[i as usize]);
+            assert!((p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).z > 0.0);
+        }
+    }
 
     #[test]
     fn meshes_cover_roads_and_face_up() {

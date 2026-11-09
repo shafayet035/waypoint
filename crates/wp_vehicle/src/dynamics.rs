@@ -32,6 +32,7 @@ pub fn vehicle_dynamics(world: &mut World) {
         .unwrap_or(1.0);
     let library = world.resource::<VehicleLibrary>();
     let terrain = world.get_resource::<Terrain>().map(|t| t.0.clone());
+    let water = world.get_resource::<wp_physics::Water>().map(|w| w.clone());
     // Crash damage that changes how a vehicle drives (power, steering pull).
     let mut harm: std::collections::BTreeMap<wp_ecs::Entity, Harm> = Default::default();
     world
@@ -62,11 +63,23 @@ pub fn vehicle_dynamics(world: &mut World) {
                     }
                     None => (g, Vec2::ZERO),
                 };
+                let depth = match (&terrain, &water) {
+                    (Some(field), Some(w)) => w.depth(field, pose.position),
+                    _ => 0.0,
+                };
+                // Wet tyres in water grip less (up to 40 % less once the
+                // wheels are half under).
+                let surface = if depth > 0.0 {
+                    surface * (1.0 - 0.4 * (depth / def.wheel.radius_m).min(1.0))
+                } else {
+                    surface
+                };
                 let ctx = Ctx {
                     def,
                     dt,
                     g: g_normal,
                     pull,
+                    water_depth: depth,
                     surface,
                     entity: e.to_string(),
                     harm: harm.get(&e).copied().unwrap_or_default(),
@@ -79,6 +92,27 @@ pub fn vehicle_dynamics(world: &mut World) {
             ev.send(e);
         }
     }
+}
+
+/// Water ploughing against a vehicle wading `depth` m deep, body frame, N:
+/// first the tyres (about 0.8 m² of them per metre of depth), then the body
+/// once the water rises past its floor (0.25 m), sideways over its length.
+fn water_drag(def: &VehicleDef, depth: f32, v_local: Vec2) -> Vec2 {
+    const WATER_DENSITY: f32 = 1000.0;
+    const DRAG_COEFFICIENT: f32 = 0.6;
+    const FLOOR_M: f32 = 0.25;
+    let (width, length) = def
+        .body
+        .as_ref()
+        .map_or((def.track_width_m + 0.3, def.wheelbase_m + 1.6), |b| {
+            (b.width_m, b.length_m)
+        });
+    let tyres = 0.8 * depth.min(FLOOR_M);
+    let above = (depth - FLOOR_M).max(0.0);
+    let front = tyres + width * above;
+    let side = tyres * 2.0 + length * above;
+    let q = 0.5 * WATER_DENSITY * DRAG_COEFFICIENT * v_local.length();
+    Vec2::new(-q * front * v_local.x, -q * side * v_local.y)
 }
 
 /// Below this speed (m/s) and yaw rate (rad/s) a body counts as standing:
@@ -167,6 +201,8 @@ struct Ctx<'a> {
     /// Gravity along the ground in the body frame, uphill positive (zero
     /// on the flat), m/s²: forward for nose-up, left for left-side-up.
     pull: Vec2,
+    /// Water depth where it stands, m (0 on dry land).
+    water_depth: f32,
     surface: f32,
     entity: String,
     harm: Harm,
@@ -240,6 +276,13 @@ fn step_vehicle(
 ) {
     update_steering(ctx, veh, input);
     let v_local = pose.to_local(vel.linear);
+    if ctx.water_depth > ctx.def.wading_depth() && !veh.flooded {
+        veh.flooded = true;
+        events.push(VehicleEvent::EngineFlooded {
+            entity: ctx.entity.clone(),
+            depth_m: ctx.water_depth,
+        });
+    }
     let (ax, ay) = measure_acceleration(ctx, veh, pose, vel);
     // The springs feel acceleration plus gravity's pull along a slope (a car
     // parked facing uphill sits back on its rear axle).
@@ -268,6 +311,9 @@ fn step_vehicle(
         events,
     );
     let (mut force, moment) = add_body_forces(ctx, veh, v_local, vel.angular, force, moment);
+    if ctx.water_depth > 0.0 {
+        force += water_drag(ctx.def, ctx.water_depth, v_local);
+    }
     if ctx.pull != Vec2::ZERO {
         let def = ctx.def;
         let mut gravity = -ctx.pull * def.mass_kg;
@@ -514,7 +560,7 @@ fn update_drivetrain(
         let over = v_local.x * 3.6 - limit;
         throttle *= (1.0 - over / 3.0).clamp(0.0, 1.0); // fade out over the last 3 km/h
     }
-    let engine_torque = if rpm_from_wheels >= engine.redline_rpm {
+    let engine_torque = if rpm_from_wheels >= engine.redline_rpm || veh.flooded {
         0.0
     } else if throttle > 0.02 {
         parts::curve_torque(&engine.torque_curve, veh.engine_rpm)

@@ -361,4 +361,19 @@ the land heights (R32Float, bilinear by hand), five triangle blades whose tips s
 meshes (wrapped light, sun shadows, local lights, light through blades towards the sun, fog, post). Reach × tier: Low 0.45,
 Mid 0.75, Flagship 1 (`QualityTier::grass_reach`); at most 160k tufts. No cost or change in scenes without grass. WP-W011.
 Sandbox hills: meadow (16 per m²); Red Canyon: sparse dry grass.
+Water (`terrain::WaterDef`, `wp_physics::Water`): a scene's `water: [(level_m, at, colour, deep_colour, clarity_m, waves)]`
+(needs terrain; WP-W012 values, WP-W013 warning without terrain). Terrain may now go below 0 (hills with negative height dig
+hollows; the flat plane is not drawn inside the land's square, `Globals.land_rect`), and `flats: [(position, radius_m,
+height_m, blend_m)]` level an area before the hills (an oasis, a town). `terrain::flood` assigns each grid point to a body: one
+with `at` fills the hollow joined to that point below its level (lakes up in the hills), one without fills all low land and
+keeps roads 0.6 m above it. Physics: depth = surface − ground under the centre; tyre grip × (1 − 0.4·min(depth / wheel
+radius, 1)); drag ½ρ·0.6·|v|·v over the tyres (0.8 m² per m of depth up to 0.25 m) then the body (width ahead, length
+sideways); past the vehicle's `wading_depth_m` (default 0.35; the off-roader's snorkel 0.7) the engine floods for good
+(`EngineFlooded`, `Vehicle.flooded` serialised only when true, so other hashes are unchanged). Telemetry `water_depth_m`,
+`engine_flooded`. Rendering: water tiles per body over cells with a wet corner (depth per vertex, colours in the vertex),
+`fs_water` after the opaque pass: depth-tinted body, sky gradient reflected by Fresnel through four moving ripple trains (calmer
+with distance), a tight sun glint through fine noise, broken foam where it laps the shore, premultiplied with alpha kept for
+post. Cameras stay 0.8 m above water. Road meshes on terrain are refined first (no edge over 2 m) so the land never shows
+through large junction triangles. Sandbox `scenes/lake.scene.ron`: `ford_shallow`, `pond_flood`, shot `ford`; Red Canyon:
+oasis pond (`pond` spawn, shot `canyon_oasis`).
 Not yet: testing on physical phones; running on an iOS simulator.

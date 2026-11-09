@@ -128,6 +128,9 @@ pub struct Vehicle {
     /// True while stability control is braking a wheel.
     #[serde(default, skip_serializing_if = "is_false")]
     pub esc_active: bool,
+    /// Water got into the engine's air intake: it no longer runs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flooded: bool,
 }
 
 fn is_one(x: &f32) -> bool {
@@ -163,6 +166,7 @@ impl Vehicle {
             tc_factor: 1.0,
             tc_active: false,
             esc_active: false,
+            flooded: false,
             air: def.brakes.air.as_ref().map(|a| AirState {
                 reservoir_bar: a.reservoir_max_bar,
                 chamber_bar: 0.0,
@@ -261,10 +265,16 @@ pub enum VehicleEvent {
         entity: String,
         pedestrian: String,
     },
+    /// Water deeper than the vehicle's wading depth reached its engine,
+    /// which stopped for good.
+    EngineFlooded {
+        entity: String,
+        depth_m: f32,
+    },
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 13] = [
+    pub const KINDS: [&'static str; 14] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
@@ -278,6 +288,7 @@ impl VehicleEvent {
         "Collision",
         "RanRedLight",
         "HitPedestrian",
+        "EngineFlooded",
     ];
 
     pub fn kind(&self) -> &'static str {
@@ -295,6 +306,7 @@ impl VehicleEvent {
             Self::Collision { .. } => "Collision",
             Self::RanRedLight { .. } => "RanRedLight",
             Self::HitPedestrian { .. } => "HitPedestrian",
+            Self::EngineFlooded { .. } => "EngineFlooded",
         }
     }
 
@@ -313,7 +325,8 @@ impl VehicleEvent {
             | Self::Jackknife { entity, .. }
             | Self::Collision { entity, .. }
             | Self::RanRedLight { entity, .. }
-            | Self::HitPedestrian { entity, .. } => entity,
+            | Self::HitPedestrian { entity, .. }
+            | Self::EngineFlooded { entity, .. } => entity,
         }
     }
 }
@@ -460,6 +473,10 @@ pub struct Telemetry {
     pub altitude_m: f32,
     /// Slope of the ground along the vehicle's heading, % (+ uphill).
     pub grade_pct: f32,
+    /// Water depth where the vehicle stands, m (0 on dry land).
+    pub water_depth_m: f32,
+    /// Water has flooded the engine.
+    pub engine_flooded: bool,
 }
 
 /// Sideslip angle, rad: from the heading to the velocity, + left; 0 when slow.
@@ -474,6 +491,17 @@ fn sideslip(forward: glam::Vec2, velocity: glam::Vec2) -> f32 {
         forward
     };
     along.angle_to(velocity)
+}
+
+/// Water depth at `p` in `world`, m (0 without water or terrain).
+pub fn water_depth(world: &World, p: glam::Vec2) -> f32 {
+    match (
+        world.get_resource::<wp_physics::Water>(),
+        world.get_resource::<wp_physics::Terrain>(),
+    ) {
+        (Some(w), Some(t)) => w.depth(&t.0, p),
+        _ => 0.0,
+    }
 }
 
 pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
@@ -509,5 +537,7 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         wheel_loads_n: std::array::from_fn(|i| veh.wheels[i].load),
         altitude_m: ground.map_or(0.0, |f| f.height_m),
         grade_pct: ground.map_or(0.0, |f| f.grade.x * 100.0),
+        water_depth_m: water_depth(world, pose.position),
+        engine_flooded: veh.flooded,
     })
 }

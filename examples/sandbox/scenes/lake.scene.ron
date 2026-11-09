@@ -1,0 +1,23 @@
+// Two hollows filled with water: a shallow ford (about 0.3 m at its
+// deepest) and a deep pond (about 1 m). Water slows a vehicle, loosens its
+// grip and, deeper than its wading depth, floods its engine.
+(
+  name: "lake",
+  terrain: Some((
+    size_m: (600.0, 600.0),
+    cell_m: 2.0,
+    noise: Some((height_m: 0.6, wavelength_m: 120.0, octaves: 3, seed: 5)),
+    hills: [
+      (position: (60.0, 0.0), radius_m: 40.0, height_m: -2.2),
+      (position: (60.0, 100.0), radius_m: 40.0, height_m: -0.85),
+    ],
+    edge_m: 100.0,
+    colour: Some((92, 112, 58)),
+  )),
+  water: [(level_m: -0.5)],
+  grass: Some((density_per_m2: 10.0, height_m: 0.4)),
+  spawns: [
+    (name: "pond", position: (0.0, 0.0), heading_deg: 0.0),
+    (name: "ford", position: (0.0, 100.0), heading_deg: 0.0),
+  ],
+)

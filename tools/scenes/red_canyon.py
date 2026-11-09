@@ -112,7 +112,7 @@ def main():
     # The oasis: palms and green scrub round a hollow.
     for _ in range(26):
         a = rng.uniform(0, 2 * math.pi)
-        d = rng.uniform(6, 34)
+        d = rng.uniform(16, 36)  # round the pond (about 12 m across the middle)
         p = (OASIS[0] + math.cos(a) * d, OASIS[1] + math.sin(a) * d)
         if rng.random() < 0.7:
             place("palm_a", p, 1.2, rng.uniform(0.8, 1.25), 0.25)

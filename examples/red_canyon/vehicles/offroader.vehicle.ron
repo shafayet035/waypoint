@@ -42,4 +42,6 @@
   ),
   body: Some((length_m: 4.95, width_m: 2.0, height_m: 2.45, front_overhang_m: 1.07, style: Car)),
   model: Some("assets/vehicles/offroader.glb"),
+  // The snorkel takes air in at roof height: it can ford water this deep.
+  wading_depth_m: Some(0.7),
 )

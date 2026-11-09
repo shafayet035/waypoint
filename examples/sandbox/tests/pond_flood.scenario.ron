@@ -1,0 +1,14 @@
+// Into a 1 m deep pond: past the hatchback's wading depth (0.35 m) water
+// floods the engine, and the car stalls in the water.
+(
+  scene: "scenes/lake.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "pond", driver: Cruise(kmh: 25.0, steer: 0.0)),
+  duration_s: 30.0,
+  assert: [
+    ExpectEvent("EngineFlooded"),
+    FinalPositionWithin(min: (25.0, -5.0), max: (80.0, 5.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

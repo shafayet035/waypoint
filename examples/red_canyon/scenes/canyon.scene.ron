@@ -13,7 +13,10 @@
     size_m: (1500.0, 1300.0),
     cell_m: 4.0,
     noise: Some((height_m: 26.0, wavelength_m: 240.0, octaves: 4, seed: 7, ridged: true)),
+    // The oasis: a level clearing with a hollow that holds the pond.
+    flats: [(position: (330.0, -200.0), radius_m: 42.0, height_m: Some(16.0), blend_m: 40.0)],
     hills: [
+      (position: (330.0, -200.0), radius_m: 16.0, height_m: -3.0),
       (position: (235.0, -95.0), radius_m: 110.0, height_m: 22.0),
       (position: (680.0, -120.0), radius_m: 220.0, height_m: 55.0),
       (position: (-230.0, -170.0), radius_m: 230.0, height_m: 45.0),
@@ -27,6 +30,8 @@
     rock: (172, 92, 64),
     rock_from_grade: 0.8,
   )),
+  // The oasis pond (only the hollow round `at` fills).
+  water: [(level_m: 15.0, at: Some((330.0, -200.0)), colour: (64, 176, 168), deep_colour: (18, 84, 104), clarity_m: 2.0)],
   // Sparse dry desert grass, swaying in the evening wind.
   grass: Some((
     density_per_m2: 2.5,
@@ -39,5 +44,6 @@
     (name: "trailhead", position: (16.6, 10.2), heading_deg: 38.1),
     (name: "overlook", position: (25.5, -180.1), heading_deg: 131.6),
     (name: "oasis", position: (270.7, -265.8), heading_deg: -164.1),
+    (name: "pond", position: (305.0, -229.0), heading_deg: 50.0),
   ],
 )

@@ -109,6 +109,46 @@ impl Terrain {
     }
 }
 
+/// Standing water on the terrain's grid: the surface height over each
+/// grid point under water (NaN where dry). Lakes can sit at any height.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterLevels {
+    pub origin: Vec2,
+    pub cell_m: f32,
+    pub nx: usize,
+    pub ny: usize,
+    pub levels: Vec<f32>,
+}
+
+impl WaterLevels {
+    /// Surface height of the water nearest `p`, if it is under water.
+    pub fn level_at(&self, p: Vec2) -> Option<f32> {
+        let q = ((p - self.origin) / self.cell_m).round();
+        if q.x < 0.0 || q.y < 0.0 {
+            return None;
+        }
+        let (i, j) = (q.x as usize, q.y as usize);
+        if i >= self.nx || j >= self.ny {
+            return None;
+        }
+        let l = self.levels[j * self.nx + i];
+        (!l.is_nan()).then_some(l)
+    }
+}
+
+/// The scene's standing water (lakes, ponds, fords).
+#[derive(Clone, Debug)]
+pub struct Water(pub Arc<WaterLevels>);
+
+impl Water {
+    /// Water depth at `p` on `field`, m (0 on dry land).
+    pub fn depth(&self, field: &HeightField, p: Vec2) -> f32 {
+        self.0
+            .level_at(p)
+            .map_or(0.0, |l| (l - field.height(p)).max(0.0))
+    }
+}
+
 /// How a body sits on the ground: height under its centre and the slope
 /// along and across it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

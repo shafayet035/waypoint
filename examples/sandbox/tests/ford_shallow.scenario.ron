@@ -1,0 +1,14 @@
+// Across a shallow ford at 25 km/h: the water drags (the car slows while
+// the cruise control catches up) but stays below its wading depth.
+(
+  scene: "scenes/lake.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "ford", driver: Cruise(kmh: 25.0, steer: 0.0)),
+  duration_s: 30.0,
+  assert: [
+    NoEvent("EngineFlooded"),
+    FinalPositionWithin(min: (120.0, 90.0), max: (260.0, 110.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

@@ -52,6 +52,10 @@ pub struct SceneDef {
     /// Hills and valleys (absent: flat ground). Roads are levelled into it.
     #[serde(default)]
     pub terrain: Option<terrain::TerrainDef>,
+    /// Lakes, ponds and fords: each fills low land up to its level (needs
+    /// `terrain`).
+    #[serde(default)]
+    pub water: Vec<terrain::WaterDef>,
     /// Dense grass that sways in the wind, drawn near the camera (kept off
     /// roads, sidewalks, junctions, buildings and steep ground).
     #[serde(default)]
@@ -454,6 +458,27 @@ impl SceneDef {
                 );
             }
         }
+        for w in &s.water {
+            for (field, expected) in w.problems() {
+                out.push(
+                    file.error_at("WP-W012", field, format!("water `{field}` is out of range"))
+                        .expected(expected)
+                        .help("see `wp schema scene` for each water field's meaning and units"),
+                );
+            }
+            if s.terrain.is_none() {
+                out.push(
+                    file.warning_at(
+                        "WP-W013",
+                        "water",
+                        "water without terrain has nowhere to be (the plain is flat)",
+                    )
+                    .help(
+                        "add `terrain` with hollows (hills with negative height_m) below level_m",
+                    ),
+                );
+            }
+        }
         if let Some(g) = &s.grass {
             for (field, expected) in g.problems() {
                 out.push(
@@ -504,11 +529,27 @@ pub fn apply_scene(
 ) {
     let net = roads.map(|def| std::sync::Arc::new(wp_road::RoadNetwork::build(def)));
     let land = scene.terrain.as_ref().map(|def| {
+        let field = terrain::build(def, net.as_deref(), &scene.water);
+        let (owner, levels) = if scene.water.is_empty() {
+            (Vec::new(), None)
+        } else {
+            let (o, l) = terrain::flood(&field, &scene.water);
+            (o, Some(std::sync::Arc::new(l)))
+        };
         std::sync::Arc::new(terrain::BuiltTerrain {
             def: def.clone(),
-            field: std::sync::Arc::new(terrain::build(def, net.as_deref())),
+            field: std::sync::Arc::new(field),
+            water: scene.water.clone(),
+            water_owner: owner,
+            water_levels: levels,
         })
     });
+    match land.as_ref().and_then(|t| t.water_levels.clone()) {
+        Some(levels) => world.insert_resource(wp_physics::Water(levels)),
+        None => {
+            world.remove_resource::<wp_physics::Water>();
+        }
+    }
     match &land {
         Some(t) => {
             world.insert_resource(wp_physics::Terrain(t.field.clone()));
@@ -555,6 +596,7 @@ pub fn apply_scene(
                 net.as_deref(),
                 built_scenery.as_deref(),
                 land.as_ref().map(|t| t.field.as_ref()),
+                land.as_ref().and_then(|t| t.water_levels.as_deref()),
             );
             world.insert_resource(grass::CurrentGrass(std::sync::Arc::new(
                 grass::BuiltGrass {
