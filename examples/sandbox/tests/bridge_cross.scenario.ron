@@ -1,0 +1,15 @@
+// Across the gorge bridge at 60 km/h: onto the deck, over the valley and
+// back onto the land, on its lane, never leaving the ground.
+(
+  scene: "scenes/gorge.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "west", driver: FollowRoute(to_road: "east_road", kmh: 60.0)),
+  duration_s: 60.0,
+  assert: [
+    RouteFollowed(max_offset_m: 0.4),
+    NoEvent("Airborne"),
+    NoEvent("Collision"),
+    NoNaN,
+    Deterministic,
+  ],
+)

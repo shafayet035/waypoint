@@ -1,0 +1,26 @@
+// Two plateaus 18 m up with a valley between them and a pond at its foot;
+// the road crosses on a 140 m bridge (deck, side walls, pillars).
+(
+  name: "gorge",
+  roads: Some("roads/gorge.road.ron"),
+  terrain: Some((
+    size_m: (700.0, 400.0),
+    cell_m: 3.0,
+    noise: Some((height_m: 2.0, wavelength_m: 90.0, octaves: 3, seed: 9)),
+    flats: [
+      (position: (-180.0, 0.0), radius_m: 115.0, height_m: Some(18.0), blend_m: 32.0),
+      (position: (180.0, 0.0), radius_m: 115.0, height_m: Some(18.0), blend_m: 32.0),
+    ],
+    hills: [(position: (0.0, 0.0), radius_m: 45.0, height_m: -5.0)],
+    edge_m: 60.0,
+    colour: Some((92, 112, 58)),
+    rock: (124, 112, 98),
+  )),
+  water: [(level_m: -1.0, at: Some((0.0, 0.0)))],
+  grass: Some((density_per_m2: 8.0, height_m: 0.4)),
+  spawns: [
+    (name: "west", position: (-230.0, -1.75), heading_deg: 0.0),
+    (name: "span", position: (-25.0, -1.75), heading_deg: 0.0),
+    (name: "valley", position: (-20.0, -60.0), heading_deg: 70.0),
+  ],
+)

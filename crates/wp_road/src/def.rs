@@ -138,6 +138,11 @@ pub struct RoadDef {
     /// Sidewalk width on each side, m (0 for none).
     #[serde(default)]
     pub sidewalk_m: f32,
+    /// A bridge: on hilly terrain the road runs straight between its ends
+    /// over whatever lies below (a river, a gorge), on a deck with side walls
+    /// and pillars, instead of being laid on the land.
+    #[serde(default)]
+    pub bridge: bool,
 }
 
 fn one() -> u8 {
@@ -358,10 +363,23 @@ impl RoadNetworkDef {
                 if degree(&r.from) < 2 || degree(&r.to) < 2 {
                     continue; // a dead end is allowed to be one
                 }
-                let joined = built.lanes.iter().enumerate().any(|(l, lane)| {
-                    matches!(lane.kind, crate::network::LaneKind::Road { road, .. } if road == ri)
-                        && main.contains(&l)
-                });
+                let of_road = |lane: &crate::network::Lane| matches!(lane.kind, crate::network::LaneKind::Road { road, .. } if road == ri);
+                let in_loop = built
+                    .lanes
+                    .iter()
+                    .enumerate()
+                    .any(|(l, lane)| of_road(lane) && main.contains(&l));
+                // A road on a line between dead ends is in no loop; it is
+                // still joined if every lane of it leads on and is led into.
+                let through = built
+                    .lanes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| of_road(l))
+                    .all(|(l, lane)| {
+                        !lane.next.is_empty() && built.lanes.iter().any(|o| o.next.contains(&l))
+                    });
+                let joined = in_loop || through;
                 if !joined {
                     out.push(
                         file.warning_at(

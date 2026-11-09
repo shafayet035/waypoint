@@ -821,6 +821,7 @@ pub fn import(xml: &str, name: &str) -> Result<(RoadNetworkDef, ImportStats), St
                 lane_width_m: piece.profile.lane_width_m.clamp(2.0, 6.0),
                 speed_limit_kmh: road.speed_kmh.unwrap_or(50.0).clamp(5.0, 200.0),
                 sidewalk_m: piece.profile.sidewalk_m.min(5.0),
+                bridge: false,
             };
             if from == to {
                 // A loop back to the same node: split it in two.

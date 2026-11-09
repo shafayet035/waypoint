@@ -415,6 +415,7 @@ pub fn import_with_buildings(
                         lane_width_m: lane_w,
                         speed_limit_kmh: speed,
                         sidewalk_m: 0.0,
+                        bridge: false,
                     });
                     part += 1;
                 }

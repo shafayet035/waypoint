@@ -324,6 +324,9 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
             l.position.z += f.height(l.position.truncate());
         }
     }
+    if let Some(f) = field {
+        bridge_items(&mut items, f, focus_point(world));
+    }
     let trailers = world.get_resource::<TrailerLibrary>();
     world
         .query::<(&Pose, &Trailer)>()
@@ -500,6 +503,89 @@ fn on_ground(pose: &Pose, f: wp_physics::Footing) -> Mat4 {
         * Mat4::from_rotation_x(s.y.asin())
         * Mat4::from_rotation_z(-pose.heading)
         * Mat4::from_translation(-p)
+}
+
+/// Bridges drawn within this distance of the focus, m.
+const BRIDGE_DRAW_M: f32 = 600.0;
+
+/// Bridges: a concrete deck under the road, a side wall along each edge and
+/// pillars down to the land, in pieces about 8 m long.
+fn bridge_items(items: &mut Vec<DrawItem>, field: &wp_physics::HeightField, focus: Vec2) {
+    const THICKNESS: f32 = 0.8;
+    const PIECE: usize = 4; // deck points (2 m apart) per piece
+    const PILLAR_EVERY: usize = 12;
+    let concrete = Vec3::new(0.36, 0.35, 0.33);
+    let (wall_w, wall_h) = wp_world::terrain::PARAPET_M;
+    let mut part = |transform: Mat4, color: Vec3| {
+        items.push(DrawItem {
+            mesh: MeshId::Cube,
+            transform,
+            color,
+            roughness: 0.9,
+            metallic: 0.0,
+            emissive: 0.0,
+        });
+    };
+    for d in &field.decks.list {
+        let n = d.points.len();
+        if n < 2 || d.points.iter().all(|p| p.distance(focus) > BRIDGE_DRAW_M) {
+            continue;
+        }
+        let mut k = 0;
+        while k + 1 < n {
+            let e = (k + PIECE).min(n - 1);
+            let (a, b) = (d.points[k], d.points[e]);
+            let (ha, hb) = (d.heights[k], d.heights[e]);
+            let run = a.distance(b).max(0.01);
+            let dir = (b - a) / run;
+            let mid = (a + b) * 0.5;
+            let frame = Mat4::from_translation(mid.extend((ha + hb) * 0.5))
+                * Mat4::from_rotation_z(dir.y.atan2(dir.x))
+                * Mat4::from_rotation_y(-((hb - ha) / run).atan());
+            let length = (run * run + (hb - ha) * (hb - ha)).sqrt() + 0.05;
+            let width = 2.0 * (d.half_width + wall_w);
+            part(
+                frame
+                    * Mat4::from_translation(Vec3::new(0.0, 0.0, -THICKNESS * 0.5 - 0.03))
+                    * Mat4::from_scale(Vec3::new(length, width, THICKNESS)),
+                concrete,
+            );
+            for side in [1.0f32, -1.0] {
+                part(
+                    frame
+                        * Mat4::from_translation(Vec3::new(
+                            0.0,
+                            side * (d.half_width + wall_w * 0.5),
+                            wall_h * 0.5,
+                        ))
+                        * Mat4::from_scale(Vec3::new(length, wall_w, wall_h)),
+                    concrete * 1.15,
+                );
+            }
+            k = e;
+        }
+        // Pillars down to the land, clear of the ends.
+        let mut k = PILLAR_EVERY / 2;
+        while k + PILLAR_EVERY / 2 < n {
+            let p = d.points[k];
+            let top = d.heights[k] - THICKNESS;
+            let land = field.land_height(p);
+            if top - land > 1.0 {
+                let dir = (d.points[k + 1] - d.points[k - 1]).normalize_or(Vec2::X);
+                part(
+                    Mat4::from_translation(p.extend((top + land) * 0.5 - 0.5))
+                        * Mat4::from_rotation_z(dir.y.atan2(dir.x))
+                        * Mat4::from_scale(Vec3::new(
+                            1.4,
+                            (d.half_width * 2.0 - 1.5).max(1.0),
+                            top - land + 1.0,
+                        )),
+                    concrete * 0.9,
+                );
+            }
+            k += PILLAR_EVERY;
+        }
+    }
 }
 
 /// Where a vehicle stands: on the ground, or in the air at its own height

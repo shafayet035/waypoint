@@ -1,0 +1,3 @@
+// The gorge bridge from the valley: deck, side walls and pillars over the
+// pond, the plateaus either side.
+(scene: Some("scenes/gorge.scene.ron"), spawn: Some("valley"), vehicle: Some("hatchback"), at_s: 0.5, camera: Chase, width: 640, height: 360)

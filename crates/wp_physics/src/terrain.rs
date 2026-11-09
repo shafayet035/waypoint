@@ -16,6 +16,72 @@ pub struct HeightField {
     pub ny: usize,
     /// Row-major, x fastest: `heights[j * nx + i]` is the point `(i, j)`.
     pub heights: Vec<f32>,
+    /// Bridge decks over the land (see [`Deck`]).
+    pub decks: Decks,
+}
+
+/// A bridge deck: a strip `half_width` either side of a centreline, at its
+/// own heights (one per point). Wherever it is, the ground is the deck.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Deck {
+    pub points: Vec<Vec2>,
+    pub heights: Vec<f32>,
+    pub half_width: f32,
+}
+
+/// Bridge decks with a grid of which deck segments touch each 16 m cell.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Decks {
+    pub list: Vec<Deck>,
+    cells: std::collections::BTreeMap<(i32, i32), Vec<(u32, u32)>>,
+}
+
+/// Cell size of the deck lookup grid, m.
+const DECK_CELL_M: f32 = 16.0;
+
+impl Decks {
+    pub fn add(&mut self, deck: Deck) {
+        let k = self.list.len() as u32;
+        for s in 0..deck.points.len().saturating_sub(1) {
+            let (a, b) = (deck.points[s], deck.points[s + 1]);
+            let lo = (a.min(b) - Vec2::splat(deck.half_width)) / DECK_CELL_M;
+            let hi = (a.max(b) + Vec2::splat(deck.half_width)) / DECK_CELL_M;
+            for j in lo.y.floor() as i32..=hi.y.floor() as i32 {
+                for i in lo.x.floor() as i32..=hi.x.floor() as i32 {
+                    self.cells.entry((i, j)).or_default().push((k, s as u32));
+                }
+            }
+        }
+        self.list.push(deck);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    /// Deck height at `p`, if a deck is there (the highest, if several).
+    pub fn height(&self, p: Vec2) -> Option<f32> {
+        if self.list.is_empty() {
+            return None;
+        }
+        let key = (
+            (p.x / DECK_CELL_M).floor() as i32,
+            (p.y / DECK_CELL_M).floor() as i32,
+        );
+        let mut best: Option<f32> = None;
+        for &(k, s) in self.cells.get(&key)? {
+            let d = &self.list[k as usize];
+            let (a, b) = (d.points[s as usize], d.points[s as usize + 1]);
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            if p.distance(a + ab * t) <= d.half_width {
+                let h =
+                    d.heights[s as usize] + (d.heights[s as usize + 1] - d.heights[s as usize]) * t;
+                best = Some(best.map_or(h, |b: f32| b.max(h)));
+            }
+        }
+        best
+    }
 }
 
 impl HeightField {
@@ -27,6 +93,7 @@ impl HeightField {
             nx,
             ny,
             heights: vec![0.0; nx * ny],
+            decks: Decks::default(),
         }
     }
 
@@ -60,8 +127,17 @@ impl HeightField {
         Some((i, j, q.x - i as f32, q.y - j as f32))
     }
 
-    /// Ground height at `p`, m.
+    /// Ground height at `p`, m: a bridge deck where there is one, else the land.
     pub fn height(&self, p: Vec2) -> f32 {
+        let land = self.land_height(p);
+        match self.decks.height(p) {
+            Some(d) => d.max(land),
+            None => land,
+        }
+    }
+
+    /// Height of the land itself at `p` (under any bridge), m.
+    pub fn land_height(&self, p: Vec2) -> f32 {
         match self.locate(p) {
             Some((i, j, u, v)) => {
                 let (a, b) = (self.at(i, j), self.at(i + 1, j));
@@ -74,8 +150,19 @@ impl HeightField {
         }
     }
 
-    /// Slope at `p`: (dh/dx, dh/dy), rise per metre.
+    /// Slope at `p`: (dh/dx, dh/dy), rise per metre (on a deck, its slope).
     pub fn gradient(&self, p: Vec2) -> Vec2 {
+        if self.decks.height(p).is_some() {
+            const E: f32 = 0.5;
+            let dx = self.height(p + Vec2::X * E) - self.height(p - Vec2::X * E);
+            let dy = self.height(p + Vec2::Y * E) - self.height(p - Vec2::Y * E);
+            return Vec2::new(dx, dy) / (2.0 * E);
+        }
+        self.land_gradient(p)
+    }
+
+    /// Slope of the land itself at `p`.
+    pub fn land_gradient(&self, p: Vec2) -> Vec2 {
         match self.locate(p) {
             Some((i, j, u, v)) => {
                 let (a, b) = (self.at(i, j), self.at(i + 1, j));

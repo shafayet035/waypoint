@@ -1,0 +1,15 @@
+// Steering into the bridge's side wall: the car hits it and stays on the
+// deck instead of falling into the valley.
+(
+  scene: "scenes/gorge.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "span", driver: Script([(at_s: 0.0, throttle: 0.5, steer: -0.5)])),
+  duration_s: 6.0,
+  assert: [
+    ExpectEvent("Collision"),
+    NoEvent("Airborne"),
+    FinalPositionWithin(min: (-70.0, -6.0), max: (70.0, 6.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

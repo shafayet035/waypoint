@@ -345,8 +345,8 @@ normals tilted) never show it through; vehicles and trailers tilt with the groun
 it, buildings on the lowest ground under their outline, cameras follow up and down and stay above the land; the flat plane
 sits 12 cm lower. Telemetry: `altitude_m`, `grade_pct`. WP-W009 (values), WP-W010 (grid too big). Flat scenes are unchanged
 (every hash, replay and picture). Sandbox: `scenes/hills.scene.ron` (a 10 % pass); gates `hill_road`, `hill_start`,
-`hill_rollback`, `bus_hill`, shot `hills`; Red Canyon has faceted red hills. Not yet: bridges and tunnels (one height per point),
-wet-road reflections on slopes (mirrored in z = 0).
+`hill_rollback`, `bus_hill`, shot `hills`; Red Canyon has faceted red hills. Not yet: tunnels and driving under bridges (one
+ground height per point), wet-road reflections on slopes (mirrored in z = 0).
 Static friction on slopes: the tyre model makes grip from sliding, so a braked vehicle used to creep downhill (9 cm in 30 s on
 10 %). A body standing still (under 0.2 m/s and 0.05 rad/s) now has gravity's pull held by its tyres up to what they can:
 along, brake torque / radius plus rolling resistance per wheel (each capped at μ·load); across, μ·total load. Vehicles and
@@ -384,4 +384,14 @@ it lands when it meets the ground (load spike from the closing speed over 0.12 s
 only for flights of 0.1 s or more (the crest flickers do not count); telemetry `airborne`. Sandbox `scenes/jump.scene.ron`
 (a 2.5 m bump, take-off from about 43 km/h): `jump_fast` (90 km/h: one 0.6 s jump, no spin), `jump_slow` (30 km/h: stays
 down), shot `jump`.
+Bridges: a road with `bridge: true` (on terrain) runs straight between its end nodes' heights (clamped above water) instead of
+following the land; only its first and last 12 m (`ABUTMENT_M`) level the land. Each becomes a `wp_physics::Deck` (centreline
+every 2 m, heights, half width = carriageway + sidewalk + 0.5 m) in `HeightField::decks` (16 m lookup grid): `height(p)` is the
+deck where there is one (else the land; `land_height`/`land_gradient` for the land itself), so physics, road draping, telemetry
+and water depth all see the deck, and a car that left the deck would fall to the land. The land under a deck is cut 0.9 m below
+it (not at the ends); no grass under decks. Side walls (0.3 × 0.9 m, `terrain::parapets`) are solid `Walls` labelled "bridge".
+Drawn as cubes (`extract::bridge_items`): a 0.8 m concrete slab in ~8 m pieces following the deck, walls, and pillars every
+24 m down to the land. WP-N012 now also accepts a road whose lanes all lead on and are led into (a line between dead ends has no
+loop). Sandbox `scenes/gorge.scene.ron` (plateaus 18 m up, a 140 m bridge over a pond): `bridge_cross` (60 km/h, 0.01 m off the
+lane centre), `bridge_wall` (steered into the wall: collision, stays on the deck), shot `bridge`.
 Not yet: testing on physical phones; running on an iOS simulator.

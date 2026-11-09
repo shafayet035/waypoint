@@ -585,6 +585,17 @@ pub fn apply_scene(
             world.remove_resource::<wp_physics::Walls>();
         }
     }
+    // Bridge side walls are solid.
+    if let Some(t) = &land
+        && !t.field.decks.is_empty()
+    {
+        let rails = terrain::parapets(&t.field.decks);
+        let mut walls = world
+            .remove_resource::<wp_physics::Walls>()
+            .unwrap_or_default();
+        walls.add(rails.iter().map(|r| r.as_slice()), "bridge");
+        world.insert_resource(walls);
+    }
     let built_scenery = world
         .get_resource::<scenery::CurrentScenery>()
         .filter(|_| scenery.is_some())

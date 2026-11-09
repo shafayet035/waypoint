@@ -371,6 +371,7 @@ pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>, water: &[WaterDef]) ->
         }
     };
 
+    let mut decks: Vec<wp_physics::Deck> = Vec::new();
     // Node heights: the land averaged round each node (shared by every road
     // that meets there, so they join level).
     let node_count = net
@@ -437,17 +438,42 @@ pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>, water: &[WaterDef]) ->
         let (d0, d1) = (start - heights[0], end - heights[n - 1]);
         for (k, h) in heights.iter_mut().enumerate() {
             let t = k as f32 / (n - 1) as f32;
-            *h = (*h + d0 + (d1 - d0) * t).max(road_floor);
+            *h = if r.def.bridge {
+                // A bridge runs straight from end to end.
+                start + (end - start) * t
+            } else {
+                *h + d0 + (d1 - d0) * t
+            }
+            .max(road_floor);
         }
         let profile = Profile { step, heights };
-        // Level the band along the road.
+        // Level the band along the road (a bridge only at its ends, where
+        // it meets the land).
         let samples = c.resample(def.cell_m.min(PROFILE_STEP_M));
         let mut s = 0.0;
         for k in 1..samples.points.len() {
             let (a, b) = (samples.points[k - 1], samples.points[k]);
             let seg = a.distance(b);
-            mark(&field, a, b, profile.at(s), profile.at(s + seg), half);
+            if !r.def.bridge || s < ABUTMENT_M || s + seg > len - ABUTMENT_M {
+                mark(&field, a, b, profile.at(s), profile.at(s + seg), half);
+            }
             s += seg;
+        }
+        if r.def.bridge {
+            let pts = c.resample(2.0).points;
+            let mut s = 0.0;
+            let mut hs = Vec::with_capacity(pts.len());
+            for (k, p) in pts.iter().enumerate() {
+                if k > 0 {
+                    s += p.distance(pts[k - 1]);
+                }
+                hs.push(profile.at(s));
+            }
+            decks.push(wp_physics::Deck {
+                points: pts,
+                heights: hs,
+                half_width: half - def.shoulder_m + DECK_EDGE_M,
+            });
         }
     }
     // Junction areas sit level at the node height.
@@ -466,8 +492,81 @@ pub fn build(def: &TerrainDef, net: Option<&RoadNetwork>, water: &[WaterDef]) ->
         let h = &mut field.heights[k];
         *h += (road_h - *h) * w;
     }
+    // The land stays under each deck (cut down where it would show
+    // through), away from its ends, where deck and land meet level.
+    for d in &decks {
+        let reach = d.half_width + 2.0;
+        let total: f32 = d.points.windows(2).map(|w| w[0].distance(w[1])).sum();
+        let mut s = 0.0;
+        for w in d.points.windows(2).zip(d.heights.windows(2)) {
+            let ((a, b), (ha, hb)) = ((w.0[0], w.0[1]), (w.1[0], w.1[1]));
+            let along = s;
+            s += a.distance(b);
+            if along < ABUTMENT_M || s > total - ABUTMENT_M {
+                continue;
+            }
+            let lo = a.min(b) - Vec2::splat(reach);
+            let hi = a.max(b) + Vec2::splat(reach);
+            let i0 = ((lo.x - origin.x) / def.cell_m).floor().max(0.0) as usize;
+            let j0 = ((lo.y - origin.y) / def.cell_m).floor().max(0.0) as usize;
+            let i1 = (((hi.x - origin.x) / def.cell_m).ceil().max(0.0) as usize).min(nx - 1);
+            let j1 = (((hi.y - origin.y) / def.cell_m).ceil().max(0.0) as usize).min(ny - 1);
+            let ab = b - a;
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let p = field.point(i, j);
+                    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                    if p.distance(a + ab * t) <= reach {
+                        let top = ha + (hb - ha) * t - DECK_CLEARANCE_M;
+                        let h = &mut field.heights[j * nx + i];
+                        *h = h.min(top);
+                    }
+                }
+            }
+        }
+    }
+    for d in decks {
+        field.decks.add(d);
+    }
     field
 }
+
+/// The land under a bridge deck stays at least this far below it, m.
+pub const DECK_CLEARANCE_M: f32 = 0.9;
+
+/// Thickness of a bridge's side walls, m, and their height above the deck.
+pub const PARAPET_M: (f32, f32) = (0.3, 0.9);
+
+/// A bridge's side walls as thin boxes (counter-clockwise outlines), one per
+/// deck segment and side, just outside the deck.
+pub fn parapets(decks: &wp_physics::Decks) -> Vec<[Vec2; 4]> {
+    let mut out = Vec::new();
+    for d in &decks.list {
+        for w in d.points.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let n = (b - a).normalize_or(Vec2::X).perp();
+            for side in [1.0f32, -1.0] {
+                let (i, o) = (
+                    n * side * d.half_width,
+                    n * side * (d.half_width + PARAPET_M.0),
+                );
+                let mut r = [a + i, b + i, b + o, a + o];
+                // Counter-clockwise seen from above.
+                let area: f32 = (0..4).map(|k| r[k].perp_dot(r[(k + 1) % 4])).sum();
+                if area < 0.0 {
+                    r.reverse();
+                }
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+/// Length of a bridge's ends laid on the land (its abutments), m.
+pub const ABUTMENT_M: f32 = 12.0;
+/// A deck reaches this far past the road's edge (under its side walls), m.
+pub const DECK_EDGE_M: f32 = 0.5;
 
 /// How far roads stay above water, m.
 pub const ROAD_ABOVE_WATER_M: f32 = 0.6;
@@ -735,7 +834,7 @@ pub fn build_tiles(def: &TerrainDef, field: &HeightField, ground: Vec3) -> Vec<T
     let (nx, ny) = (field.nx, field.ny);
     let mut tiles = Vec::new();
     let normal_at = |i: usize, j: usize| {
-        let g = field.gradient(field.point(i, j) + Vec2::splat(0.01));
+        let g = field.land_gradient(field.point(i, j) + Vec2::splat(0.01));
         Vec3::new(-g.x, -g.y, 1.0).normalize()
     };
     let tint = |n: Vec3, p: Vec2| -> [f32; 4] {

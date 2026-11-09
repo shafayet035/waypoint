@@ -195,11 +195,16 @@ pub fn build(
     if let Some(f) = land {
         for j in 0..ny {
             for i in 0..nx {
-                let g = f.gradient(point(i, j)).length();
+                let g = f.land_gradient(point(i, j)).length();
                 let p = point(i, j);
+                // None under bridges.
+                if f.decks.height(p).is_some() {
+                    map.mask[j * nx + i] = 0;
+                    continue;
+                }
                 let dry = water
                     .and_then(|w| w.level_at(p))
-                    .map_or(1.0, |l| smooth(l + 0.15, l + 0.45, f.height(p)));
+                    .map_or(1.0, |l| smooth(l + 0.15, l + 0.45, f.land_height(p)));
                 let keep = (1.0 - smooth(def.max_grade * 0.7, def.max_grade.max(1e-3), g)) * dry;
                 let m = &mut map.mask[j * nx + i];
                 *m = (*m as f32 * keep) as u8;

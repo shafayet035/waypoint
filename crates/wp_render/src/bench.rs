@@ -118,6 +118,7 @@ fn roads() -> RoadNetwork {
                     lane_width_m: 3.5,
                     speed_limit_kmh: 50.0,
                     sidewalk_m: 3.0,
+                    bridge: false,
                 });
             };
             if i < 1 {

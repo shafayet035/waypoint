@@ -1,0 +1,18 @@
+// A road across a gorge: on the land over each plateau, on a 90 m bridge
+// over the valley between them.
+(
+  name: "gorge",
+  drive_side: Right,
+  nodes: [
+    (id: "west", position: (-250.0, 0.0)),
+    (id: "west_edge", position: (-70.0, 0.0)),
+    (id: "east_edge", position: (70.0, 0.0)),
+    (id: "east", position: (250.0, 0.0)),
+  ],
+  roads: [
+    (id: "west_road", from: "west", to: "west_edge", speed_limit_kmh: 70.0),
+    (id: "gorge_bridge", name: Some("Gorge Bridge"), from: "west_edge", to: "east_edge",
+     speed_limit_kmh: 70.0, bridge: true),
+    (id: "east_road", from: "east_edge", to: "east", speed_limit_kmh: 70.0),
+  ],
+)

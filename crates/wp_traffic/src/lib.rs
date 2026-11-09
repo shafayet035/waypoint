@@ -1542,6 +1542,7 @@ mod tests {
             lane_width_m: 3.5,
             speed_limit_kmh: 50.0,
             sidewalk_m: 0.0,
+            bridge: false,
         };
         RoadNetwork::build(&RoadNetworkDef {
             stops: Vec::new(),

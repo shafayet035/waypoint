@@ -120,6 +120,7 @@ grass: Some((density_per_m2: 8.0, height_m: 0.45)) (swaying grass near the camer
 water: [(level_m: -0.5)] or [(level_m: 15.0, at: Some((330.0, -200.0)))] (lakes, ponds and fords in the terrain's
 hollows; `at` fills only the hollow round that point, so lakes can sit up in the hills; terrain `flats` level an area
 first). Water drags vehicles, loosens grip and floods engines past their wading depth.
+Roads with `bridge: true` cross gorges and rivers on a deck with side walls and pillars (terrain scenes).
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).
