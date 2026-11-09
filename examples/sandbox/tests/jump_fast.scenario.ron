@@ -1,0 +1,16 @@
+// Over the bump at 90 km/h: airborne over the crest, a landing beyond, and
+// no spin or rollover.
+(
+  scene: "scenes/jump.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "run_up", driver: Cruise(kmh: 90.0, steer: 0.0)),
+  duration_s: 14.0,
+  assert: [
+    ExpectEvent("Airborne"),
+    ExpectEvent("Landed"),
+    NoEvent("RolledOver"),
+    MaxSideslipDeg(5.0),
+    NoNaN,
+    Deterministic,
+  ],
+)

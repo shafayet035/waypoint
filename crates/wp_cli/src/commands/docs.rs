@@ -99,7 +99,8 @@ Assertions
 
 Events: GearShift, AbsEngaged, AbsReleased, EscEngaged, EscReleased, WheelLift, WheelLanded, LowAirPressure, RolledOver, Jackknife,
 Collision (bodies touching, or other: \"building\"; impact_kmh, and a dent in each: telemetry health_pct), RanRedLight, HitPedestrian,
-EngineFlooded (water deeper than the vehicle's wading_depth_m reached the engine; telemetry water_depth_m, engine_flooded).
+EngineFlooded (water deeper than the vehicle's wading_depth_m reached the engine; telemetry water_depth_m, engine_flooded),
+Airborne / Landed (over a crest on hilly terrain, flights of 0.1 s or more; Landed has air_s and impact_ms; telemetry airborne).
 
 Scenes: traffic: Some((count: 12, vehicles: [\"hatchback\"], radius_m: Some(300.0))) (radius: keep traffic
 near the player on big maps), weather: Some((rain: 0.8)) (wet roads: grip down to 70 %; drivers slow;

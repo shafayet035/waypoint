@@ -1,0 +1,13 @@
+// Over the same bump at 30 km/h: the wheels stay on the ground.
+(
+  scene: "scenes/jump.scene.ron",
+  seed: 1,
+  player: (vehicle: "hatchback", spawn: "run_up", driver: Cruise(kmh: 30.0, steer: 0.0)),
+  duration_s: 30.0,
+  assert: [
+    NoEvent("Airborne"),
+    FinalPositionWithin(min: (100.0, -3.0), max: (300.0, 3.0)),
+    NoNaN,
+    Deterministic,
+  ],
+)

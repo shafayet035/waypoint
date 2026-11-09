@@ -155,6 +155,9 @@ impl Water {
 pub struct Footing {
     /// Ground height under the centre, m.
     pub height_m: f32,
+    /// Mean ground height under the contact points, m (what the body rides
+    /// on: it smooths the grid's kinks over the wheelbase).
+    pub contacts_m: f32,
     /// Rise per metre forward (nose up positive) and to the left (left side
     /// up positive), measured between the body's contact points.
     pub grade: Vec2,
@@ -192,6 +195,7 @@ impl Footing {
         let width = (2.0 * half_width).max(0.1);
         Footing {
             height_m: field.height(position),
+            contacts_m: (fl + fr + rl + rr) * 0.25,
             grade: Vec2::new(
                 ((fl + fr) - (rl + rr)) * 0.5 / length,
                 ((fl + rl) - (fr + rr)) * 0.5 / width,

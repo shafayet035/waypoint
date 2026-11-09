@@ -346,7 +346,7 @@ it, buildings on the lowest ground under their outline, cameras follow up and do
 sits 12 cm lower. Telemetry: `altitude_m`, `grade_pct`. WP-W009 (values), WP-W010 (grid too big). Flat scenes are unchanged
 (every hash, replay and picture). Sandbox: `scenes/hills.scene.ron` (a 10 % pass); gates `hill_road`, `hill_start`,
 `hill_rollback`, `bus_hill`, shot `hills`; Red Canyon has faceted red hills. Not yet: bridges and tunnels (one height per point),
-jumps (wheels never leave the ground), wet-road reflections on slopes (mirrored in z = 0).
+wet-road reflections on slopes (mirrored in z = 0).
 Static friction on slopes: the tyre model makes grip from sliding, so a braked vehicle used to creep downhill (9 cm in 30 s on
 10 %). A body standing still (under 0.2 m/s and 0.05 rad/s) now has gravity's pull held by its tyres up to what they can:
 along, brake torque / radius plus rolling resistance per wheel (each capped at μ·load); across, μ·total load. Vehicles and
@@ -376,4 +376,12 @@ with distance), a tight sun glint through fine noise, broken foam where it laps 
 post. Cameras stay 0.8 m above water. Road meshes on terrain are refined first (no edge over 2 m) so the land never shows
 through large junction triangles. Sandbox `scenes/lake.scene.ron`: `ford_shallow`, `pond_flood`, shot `ford`; Red Canyon:
 oasis pond (`pond` spawn, shot `canyon_oasis`).
+Jumps (`Vehicle.vertical`, only on terrain, so flat-scene hashes are unchanged): the body rides on the mean ground height under
+its four contact points (`Footing::contacts_m`, smoothing the grid's kinks over the wheelbase); the vertical acceleration the
+ground imposes (filtered over 0.1 s, like a suspension) scales the weight pressing down (× 0–3: heavier in dips, lighter over
+crests). Past −1 g above 5 m/s the vehicle leaves the ground: a projectile with no tyre forces or slope pull, tilted as it left;
+it lands when it meets the ground (load spike from the closing speed over 0.12 s). `Airborne`/`Landed { air_s, impact_ms }`
+only for flights of 0.1 s or more (the crest flickers do not count); telemetry `airborne`. Sandbox `scenes/jump.scene.ron`
+(a 2.5 m bump, take-off from about 43 km/h): `jump_fast` (90 km/h: one 0.6 s jump, no spin), `jump_slow` (30 km/h: stays
+down), shot `jump`.
 Not yet: testing on physical phones; running on an iOS simulator.

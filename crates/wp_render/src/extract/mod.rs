@@ -254,7 +254,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 headlights.then_some(&mut lights),
             );
             if let Some(f) = field {
-                let m = on_ground(pose, wp_vehicle::dynamics::footing(def, pose, f));
+                let m = on_ground(pose, vehicle_footing(def, pose, veh, f));
                 place(&mut items[first_item..], &mut lights[first_light..], m);
             }
         });
@@ -383,7 +383,7 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                         .is_none_or(|r| r.0.drive_side == wp_road::DriveSide::Right);
                     let (eye, fov) = cab_eye(&def, left_seat);
                     let ground = field.map_or(Mat4::IDENTITY, |f| {
-                        on_ground(&pose, wp_vehicle::dynamics::footing(&def, &pose, f))
+                        on_ground(&pose, vehicle_footing(&def, &pose, &veh, f))
                     });
                     let body = ground * body_matrix(&def, &pose, &veh);
                     vehicle::cab_items(&mut items, &def, body, eye, veh.steer_angle, headlights);
@@ -422,8 +422,12 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
                 None => {
                     let mut c = mode.camera(&pose, len + towed * 0.6);
                     if let Some(f) = field {
-                        // Follow the car up and down hills; never into one.
-                        let h = f.height(pose.position);
+                        // Follow the car up and down hills (and into the air); never into one.
+                        let h = world
+                            .get::<Vehicle>(e)
+                            .and_then(|v| v.vertical)
+                            .filter(|v| v.airborne)
+                            .map_or_else(|| f.height(pose.position), |v| v.z_m);
                         c.eye.z += h;
                         c.target.z += h;
                         c.eye.z = c.eye.z.max(f.height(c.eye.truncate()) + 1.2);
@@ -496,6 +500,22 @@ fn on_ground(pose: &Pose, f: wp_physics::Footing) -> Mat4 {
         * Mat4::from_rotation_x(s.y.asin())
         * Mat4::from_rotation_z(-pose.heading)
         * Mat4::from_translation(-p)
+}
+
+/// Where a vehicle stands: on the ground, or in the air at its own height
+/// (tilted as the ground under it, which it left).
+fn vehicle_footing(
+    def: &VehicleDef,
+    pose: &Pose,
+    veh: &Vehicle,
+    field: &wp_physics::HeightField,
+) -> wp_physics::Footing {
+    let mut f = wp_vehicle::dynamics::footing(def, pose, field);
+    if let Some(v) = veh.vertical.filter(|v| v.airborne) {
+        f.height_m = v.z_m;
+        f.grade = glam::Vec2::from(v.grade);
+    }
+    f
 }
 
 /// Apply `m` to draw items and lights built for flat ground.

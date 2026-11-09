@@ -131,6 +131,33 @@ pub struct Vehicle {
     /// Water got into the engine's air intake: it no longer runs.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flooded: bool,
+    /// Up-and-down motion over hilly ground (absent on flat scenes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical: Option<Vertical>,
+}
+
+/// A vehicle's vertical motion on terrain: it follows the ground, pressed
+/// into dips and lightened over crests, and leaves it when a crest would
+/// need more than gravity to hold it down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Vertical {
+    /// Height of the body's ground point (under its centre), m.
+    pub z_m: f32,
+    /// Vertical speed, m/s (+ up).
+    pub vz: f32,
+    /// Ground height under the centre at the last substep, m.
+    pub ground_m: f32,
+    /// Filtered vertical acceleration the ground imposes, m/s².
+    pub accel: f32,
+    /// In the air: no tyre forces until it lands.
+    pub airborne: bool,
+    /// Time in the air so far, s.
+    #[serde(default)]
+    pub air_s: f32,
+    /// Ground slope under it (along, across) when it last touched the
+    /// ground: how it is tilted in the air.
+    #[serde(default)]
+    pub grade: [f32; 2],
 }
 
 fn is_one(x: &f32) -> bool {
@@ -167,6 +194,7 @@ impl Vehicle {
             tc_active: false,
             esc_active: false,
             flooded: false,
+            vertical: None,
             air: def.brakes.air.as_ref().map(|a| AirState {
                 reservoir_bar: a.reservoir_max_bar,
                 chamber_bar: 0.0,
@@ -271,10 +299,23 @@ pub enum VehicleEvent {
         entity: String,
         depth_m: f32,
     },
+    /// All wheels left the ground over a crest.
+    Airborne {
+        entity: String,
+        speed_kmh: f32,
+    },
+    /// Back on the ground after a jump.
+    Landed {
+        entity: String,
+        /// Time in the air, s.
+        air_s: f32,
+        /// Speed into the ground, m/s.
+        impact_ms: f32,
+    },
 }
 
 impl VehicleEvent {
-    pub const KINDS: [&'static str; 14] = [
+    pub const KINDS: [&'static str; 16] = [
         "GearShift",
         "AbsEngaged",
         "AbsReleased",
@@ -289,6 +330,8 @@ impl VehicleEvent {
         "RanRedLight",
         "HitPedestrian",
         "EngineFlooded",
+        "Airborne",
+        "Landed",
     ];
 
     pub fn kind(&self) -> &'static str {
@@ -307,6 +350,8 @@ impl VehicleEvent {
             Self::RanRedLight { .. } => "RanRedLight",
             Self::HitPedestrian { .. } => "HitPedestrian",
             Self::EngineFlooded { .. } => "EngineFlooded",
+            Self::Airborne { .. } => "Airborne",
+            Self::Landed { .. } => "Landed",
         }
     }
 
@@ -326,7 +371,9 @@ impl VehicleEvent {
             | Self::Collision { entity, .. }
             | Self::RanRedLight { entity, .. }
             | Self::HitPedestrian { entity, .. }
-            | Self::EngineFlooded { entity, .. } => entity,
+            | Self::EngineFlooded { entity, .. }
+            | Self::Airborne { entity, .. }
+            | Self::Landed { entity, .. } => entity,
         }
     }
 }
@@ -477,6 +524,8 @@ pub struct Telemetry {
     pub water_depth_m: f32,
     /// Water has flooded the engine.
     pub engine_flooded: bool,
+    /// All wheels are off the ground.
+    pub airborne: bool,
 }
 
 /// Sideslip angle, rad: from the heading to the velocity, + left; 0 when slow.
@@ -539,5 +588,6 @@ pub fn telemetry(world: &World, e: Entity) -> Option<Telemetry> {
         grade_pct: ground.map_or(0.0, |f| f.grade.x * 100.0),
         water_depth_m: water_depth(world, pose.position),
         engine_flooded: veh.flooded,
+        airborne: veh.vertical.is_some_and(|v| v.airborne),
     })
 }

@@ -55,11 +55,19 @@ pub fn vehicle_dynamics(world: &mut World) {
         .for_each(|e, (veh, input, pose, vel, body)| {
             if let Some(def) = library.0.get(&veh.model) {
                 // On a slope only part of the weight presses into the ground;
-                // the rest pulls the vehicle downhill.
+                // the rest pulls the vehicle downhill. Over crests and dips
+                // the ground's vertical acceleration lightens or loads it, and
+                // in the air nothing presses at all.
                 let (g_normal, pull) = match &terrain {
                     Some(field) => {
                         let f = footing(def, pose, field);
-                        (g * f.normal_share(), f.sines() * g)
+                        let speed = vel.linear.length();
+                        let k = update_vertical(veh, &f, g, dt, speed, &e, &mut local_events);
+                        if k == 0.0 {
+                            (0.0, Vec2::ZERO)
+                        } else {
+                            (g * f.normal_share() * k, f.sines() * g)
+                        }
                     }
                     None => (g, Vec2::ZERO),
                 };
@@ -131,6 +139,92 @@ pub(crate) fn standing(v_local: Vec2, yaw_rate: f32) -> bool {
 pub(crate) fn unheld(gravity: Vec2, hold: Vec2) -> Vec2 {
     let part = |f: f32, h: f32| f.signum() * (f.abs() - h).max(0.0);
     Vec2::new(part(gravity.x, hold.x), part(gravity.y, hold.y))
+}
+
+/// Time constant of the filter on the ground's vertical acceleration, s
+/// (the grid's bilinear cells have kinks the suspension would smooth).
+const VERTICAL_FILTER_S: f32 = 0.1;
+/// Most extra load the ground's push can add (× weight).
+const MAX_LOAD_FACTOR: f32 = 3.0;
+/// Shortest time in the air that counts as a jump (events), s.
+const MIN_JUMP_S: f32 = 0.1;
+
+/// Vertical motion over the ground under the centre (`ground`, m): follow
+/// it, or fly and land. Returns the load factor: 1 on level ground, more in
+/// dips and on landing, less over crests, 0 in the air.
+fn update_vertical(
+    veh: &mut Vehicle,
+    footing: &Footing,
+    g: f32,
+    dt: f32,
+    speed: f32,
+    entity: &wp_ecs::Entity,
+    events: &mut Vec<VehicleEvent>,
+) -> f32 {
+    let ground = footing.contacts_m;
+    let v = veh.vertical.get_or_insert(crate::Vertical {
+        z_m: ground,
+        ground_m: ground,
+        ..Default::default()
+    });
+    // Placed somewhere new (a reset or a teleport): start on the ground.
+    if (ground - v.ground_m).abs() > 2.0 && !v.airborne {
+        *v = crate::Vertical {
+            z_m: ground,
+            ground_m: ground,
+            ..Default::default()
+        };
+    }
+    let ground_vz = (ground - v.ground_m) / dt;
+    v.ground_m = ground;
+    if v.airborne {
+        let was = v.air_s;
+        v.air_s += dt;
+        v.vz -= g * dt;
+        v.z_m += v.vz * dt;
+        // Report a jump once it is one (not a skip of a few milliseconds).
+        if was < MIN_JUMP_S && v.air_s >= MIN_JUMP_S {
+            events.push(VehicleEvent::Airborne {
+                entity: entity.to_string(),
+                speed_kmh: speed * 3.6,
+            });
+        }
+        if v.z_m > ground {
+            return 0.0;
+        }
+        // Landing: the suspension takes the closing speed over about 0.12 s.
+        let impact = (ground_vz - v.vz).max(0.0);
+        if v.air_s >= MIN_JUMP_S {
+            events.push(VehicleEvent::Landed {
+                entity: entity.to_string(),
+                air_s: v.air_s,
+                impact_ms: impact,
+            });
+        }
+        *v = crate::Vertical {
+            z_m: ground,
+            vz: ground_vz,
+            ground_m: ground,
+            accel: (impact / 0.12).min((MAX_LOAD_FACTOR - 1.0) * g),
+            airborne: false,
+            air_s: 0.0,
+            grade: footing.grade.to_array(),
+        };
+        return (1.0 + v.accel / g).clamp(0.0, MAX_LOAD_FACTOR);
+    }
+    let raw = (ground_vz - v.vz) / dt;
+    v.accel += (raw - v.accel) * dt / (VERTICAL_FILTER_S + dt);
+    v.vz = ground_vz;
+    v.z_m = ground;
+    v.grade = footing.grade.to_array();
+    let factor = 1.0 + v.accel / g;
+    if factor < 0.0 && speed > 5.0 {
+        // The crest falls away faster than gravity can pull it down.
+        v.airborne = true;
+        v.air_s = 0.0;
+        return 0.0;
+    }
+    factor.clamp(0.0, MAX_LOAD_FACTOR)
 }
 
 /// How a vehicle stands on `field`: contact points at its wheels.
@@ -292,7 +386,11 @@ fn step_vehicle(
         (ax + ctx.pull.x, ay + ctx.pull.y)
     };
     let roll = update_body_motion(ctx, veh, ax, ay);
-    let loads = wheel_loads(ctx, veh, &roll, ax, ay, events);
+    let loads = if veh.vertical.is_some_and(|v| v.airborne) {
+        [0.0; 4]
+    } else {
+        wheel_loads(ctx, veh, &roll, ax, ay, events)
+    };
     let esc_torque = stability_control(ctx, veh, v_local, vel.angular, events);
     traction_control(ctx, veh, input, v_local);
     let drive = update_drivetrain(ctx, veh, input, v_local, events);

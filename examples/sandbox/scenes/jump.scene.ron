@@ -1,0 +1,14 @@
+// A sharp grassy bump on open ground: taken fast, a car leaves the ground
+// over its crest and lands beyond; taken slowly, it stays down.
+(
+  name: "jump",
+  terrain: Some((
+    size_m: (600.0, 300.0),
+    cell_m: 2.0,
+    hills: [(position: (80.0, 0.0), radius_m: 14.0, height_m: 2.5)],
+    edge_m: 60.0,
+    colour: Some((92, 112, 58)),
+  )),
+  grass: Some((density_per_m2: 10.0, height_m: 0.35)),
+  spawns: [(name: "run_up", position: (-120.0, 0.0), heading_deg: 0.0)],
+)

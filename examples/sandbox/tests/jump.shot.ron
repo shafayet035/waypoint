@@ -1,0 +1,3 @@
+// Mid-jump over the grassy bump at 90 km/h: the car in the air, level as
+// it left the crest, its shadow on the grass below.
+(scenario: Some("jump_fast"), at_s: 11.45, camera: Side, width: 640, height: 360)
