@@ -80,6 +80,10 @@ fn styled_light(x: f32) -> f32 {
     return x;
 }
 
+// Cheap shading for budget phones (the Low tier): no detail maps, one
+// shadow sample, no wet-road streaks. Set per pipeline.
+override CHEAP: bool = false;
+
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var shadow_map: texture_depth_2d;
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
@@ -150,6 +154,12 @@ fn sun_shadow(rel: vec3<f32>, n: vec3<f32>) -> f32 {
         return 1.0;
     }
     let t = g.shadow_params.x;
+    if (CHEAP) {
+        // One (hardware-filtered) sample.
+        let one = textureSampleCompareLevel(shadow_map, shadow_sampler, uv, ndc.z - 0.0008);
+        let edge = max(abs(ndc.x), abs(ndc.y));
+        return mix(one, 1.0, smoothstep(0.8, 1.0, edge));
+    }
     var sum = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
@@ -365,7 +375,30 @@ fn vs_ground(@builtin(vertex_index) i: u32) -> GroundOut {
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
     );
-    let c = corners[i] * 2000.0;
+    var c = corners[i % 6u] * 2000.0;
+    // Round hilly land (land_rect not empty): four strips framing it, so
+    // nothing is drawn (or discarded) where the land is. Discarding would
+    // switch off early depth tests on tiled phone GPUs for the whole pass.
+    if (g.land_rect.x <= g.land_rect.z) {
+        let lo = clamp(g.land_rect.xy - g.camera_pos.xy, vec2<f32>(-2000.0), vec2<f32>(2000.0));
+        let hi = clamp(g.land_rect.zw - g.camera_pos.xy, vec2<f32>(-2000.0), vec2<f32>(2000.0));
+        let u = corners[i % 6u] * 0.5 + vec2<f32>(0.5);
+        let piece = i / 6u;
+        var a = vec2<f32>(-2000.0);
+        var b = vec2<f32>(2000.0);
+        if (piece == 0u) {
+            b.y = lo.y;
+        } else if (piece == 1u) {
+            a.y = hi.y;
+        } else if (piece == 2u) {
+            a.y = lo.y;
+            b = vec2<f32>(lo.x, hi.y);
+        } else {
+            a = vec2<f32>(hi.x, lo.y);
+            b.y = hi.y;
+        }
+        c = mix(a, b, u);
+    }
     var out: GroundOut;
     // look.w: the plane's height (below any hilly land; 0 otherwise).
     out.rel = vec3<f32>(c, g.look.w - g.camera_pos.z);
@@ -418,10 +451,6 @@ fn blob_shadows(p: vec2<f32>) -> f32 {
 @fragment
 fn fs_ground(in: GroundOut) -> @location(0) vec4<f32> {
     let p = in.world.xy;
-    // Hilly land is drawn there instead (its hollows go below the plane).
-    if (all(p > g.land_rect.xy) && all(p < g.land_rect.zw)) {
-        discard;
-    }
     // Asphalt: smooth large-scale variation plus fine aggregate that fades with distance.
     let coarse = value_noise(p * 0.15) * 0.5 + value_noise(p * 0.6) * 0.5;
     let fine_fade = clamp(1.0 - length(fwidth(p)) * 8.0, 0.0, 1.0);
@@ -559,7 +588,10 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
     var out: MeshOut;
     out.pos = g.view_proj * world;
     out.rel = world.xyz;
-    out.normal = normalize(normal_m * v.normal);
+    // A zero normal (faceted land) is left zero: the fragment shader takes
+    // the face's own normal from the screen.
+    let nn = normal_m * v.normal;
+    out.normal = select(vec3<f32>(0.0), normalize(nn), dot(nn, nn) > 1e-10);
     let hub = vec3<f32>(0.55, 0.56, 0.58);
     out.color = mix(inst.color.rgb * srgb_to_linear(v.color.rgb), hub, v.tint);
     var m = inst.material;
@@ -574,12 +606,19 @@ fn vs_mesh(v: VertexIn, inst: InstanceIn) -> MeshOut {
 }
 
 fn shade_mesh(in: MeshOut) -> vec3<f32> {
-    // Sampled first, in uniform control flow.
+    // Sampled first, in uniform control flow (CHEAP is a pipeline constant).
     let albedo_map = in.color * textureSample(base_tex, base_sampler, in.uv).rgb;
-    let normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
-    let mr = textureSample(mr_tex, base_sampler, in.uv);
-    let glow = textureSample(emissive_tex, base_sampler, in.uv).rgb;
-    let ao = mix(1.0, textureSample(occlusion_tex, base_sampler, in.uv).r, mat.params.y);
+    var normal_map = vec3<f32>(0.5, 0.5, 1.0);
+    var mr = vec4<f32>(1.0);
+    var glow = vec3<f32>(0.0);
+    var ao_map = 1.0;
+    if (!CHEAP) {
+        normal_map = textureSample(normal_tex, base_sampler, in.uv).rgb;
+        mr = textureSample(mr_tex, base_sampler, in.uv);
+        glow = textureSample(emissive_tex, base_sampler, in.uv).rgb;
+        ao_map = textureSample(occlusion_tex, base_sampler, in.uv).r;
+    }
+    let ao = mix(1.0, ao_map, mat.params.y);
 
     // Building walls: windows in bays and storeys (facade.x > 0). The
     // cell size in screen space filters them, so far facades stay calm.
@@ -606,8 +645,14 @@ fn shade_mesh(in: MeshOut) -> vec3<f32> {
     let window_glow = mix(room * (0.18 + 0.22 * tone), vec3<f32>(1.0, 0.9, 0.75) * 0.5, select(0.0, 1.0, shopfront))
         * (glass * lit * g.shadow_params.z);
 
-    let n_geo = normalize(in.normal);
-    let n = perturb_normal(n_geo, in.rel, in.uv, normal_map, mat.params.x);
+    // Faceted surfaces (zero normal): each face's normal, from the screen.
+    var facet = normalize(cross(dpdx(in.rel), dpdy(in.rel)));
+    facet = select(facet, -facet, facet.z < 0.0);
+    let n_geo = select(facet, normalize(in.normal), dot(in.normal, in.normal) > 1e-6);
+    var n = n_geo;
+    if (!CHEAP) {
+        n = perturb_normal(n_geo, in.rel, in.uv, normal_map, mat.params.x);
+    }
     let l = g.sun_dir.xyz;
     let v = normalize(-in.rel);
     var rough = mix(clamp(in.material.x * mr.g, 0.02, 1.0), 0.06, glass);
@@ -652,7 +697,7 @@ fn shade_mesh(in: MeshOut) -> vec3<f32> {
     // Glow: the emissive map's colour if there is one, else the surface's.
     col += mix(albedo_wet, glow, mat.params.z) * in.material.z;
     col += window_glow;
-    if (wet > 0.0) {
+    if (wet > 0.0 && !CHEAP) {
         col += wet_streaks(in.rel, n_geo, v, mix(mix(0.12, 0.05, wet), 0.012, puddle)) * wet;
     }
     col = apply_fog(col, in.rel);

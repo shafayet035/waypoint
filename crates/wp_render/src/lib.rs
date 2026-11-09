@@ -26,6 +26,7 @@ use glam::Mat3;
 use wp_core::Diagnostic;
 use wp_rhi::{Gpu, OffscreenTarget, wgpu};
 
+mod gpu_timer;
 mod grass;
 mod post;
 mod upscale;
@@ -161,7 +162,8 @@ impl TileData {
         }
     }
 
-    fn from_terrain(t: wp_world::terrain::TerrainTile) -> Self {
+    /// Land tiles: one layer per level of detail.
+    fn from_land(t: wp_world::terrain::LandTile) -> Self {
         let srgb = |c: f32| {
             let c = c.clamp(0.0, 1.0);
             let s = if c <= 0.003_130_8 {
@@ -171,25 +173,29 @@ impl TileData {
             };
             (s * 255.0).round() as u8
         };
-        let vertices = (0..t.positions.len())
-            .map(|i| {
-                let c = t.colors[i];
-                mesh::Vertex {
-                    position: t.positions[i],
-                    normal: t.normals[i],
-                    color: [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255],
-                    ..Default::default()
-                }
+        let layers = t
+            .levels
+            .into_iter()
+            .map(|m| mesh::MeshData {
+                vertices: (0..m.positions.len())
+                    .map(|i| {
+                        let c = m.colors[i];
+                        mesh::Vertex {
+                            position: m.positions[i],
+                            normal: m.normals[i],
+                            color: [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255],
+                            ..Default::default()
+                        }
+                    })
+                    .collect(),
+                indices: m.indices,
             })
             .collect();
         Self {
             centre: t.centre,
             min: t.min,
             max: t.max,
-            layers: vec![mesh::MeshData {
-                vertices,
-                indices: t.indices,
-            }],
+            layers,
         }
     }
 
@@ -861,6 +867,8 @@ fn buffer_init(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) 
 
 pub struct Renderer {
     format: wgpu::TextureFormat,
+    /// Samples per pixel (edge smoothing): 4, 2 or 1.
+    samples: u32,
     width: u32,
     height: u32,
     globals: wgpu::Buffer,
@@ -910,6 +918,11 @@ pub struct Renderer {
     terrain: Option<TileCache>,
     /// Swaying grass near the camera.
     grass: grass::Grass,
+    /// GPU time per stage, when turned on ([`Renderer::set_gpu_timing`]).
+    timer: Option<gpu_timer::GpuTimer>,
+    /// Parts of the frame left out, for finding what is slow
+    /// ([`Renderer::set_skip`]).
+    skip: Vec<String>,
     road_instances: wgpu::Buffer,
     road_instance_capacity: usize,
     /// Keep road tiles within this distance of the camera (m) and build
@@ -937,6 +950,39 @@ impl Renderer {
     /// `format` is the target's colour format; use an sRGB format so the
     /// shader's linear output is encoded correctly.
     pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
+        Self::with_samples(gpu, format, width, height, MSAA_SAMPLES, false)
+    }
+
+    /// [`Renderer::new`] with `samples` per pixel for smoothing edges (4, 2
+    /// or 1: none; fewer is much cheaper on phone GPUs that draw in tiles),
+    /// and `cheap` shading for budget phones (no detail maps, one shadow
+    /// sample, no wet-road streaks; the shader's `CHEAP` constant).
+    pub fn with_samples(
+        gpu: &Gpu,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        samples: u32,
+        cheap: bool,
+    ) -> Self {
+        let constants: &[(&str, f64)] = &[("CHEAP", if cheap { 1.0 } else { 0.0 })];
+        // 1 and 4 work everywhere; 2 only where the GPU offers it for every
+        // format drawn (else 4).
+        let two = gpu
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+            && [format, post::HDR_FORMAT, DEPTH_FORMAT].iter().all(|f| {
+                gpu.adapter
+                    .get_texture_format_features(*f)
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2)
+            });
+        let samples = match samples {
+            0 | 1 => 1,
+            2 | 3 if two => 2,
+            _ => 4,
+        };
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("waypoint"),
@@ -1055,6 +1101,8 @@ impl Renderer {
             &main_layout,
             &textures.layout,
             [format, post::HDR_FORMAT],
+            samples,
+            constants,
         );
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("waypoint"),
@@ -1103,7 +1151,10 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants,
+                        ..Default::default()
+                    },
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target,
                         blend,
@@ -1140,7 +1191,7 @@ impl Renderer {
             wgpu::CompareFunction::Always,
             None,
             None,
-            (format, MSAA_SAMPLES),
+            (format, samples),
         );
         let ground = pipeline(
             "ground",
@@ -1151,7 +1202,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             None,
-            (format, MSAA_SAMPLES),
+            (format, samples),
         );
         let meshes_pipeline = pipeline(
             "meshes",
@@ -1162,7 +1213,7 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             Some(wgpu::Face::Back),
             None,
-            (format, MSAA_SAMPLES),
+            (format, samples),
         );
         // Rain on the windscreen: blended over the scene, hidden behind the
         // cab (steering wheel, dashboard), writing no depth.
@@ -1175,12 +1226,12 @@ impl Renderer {
             wgpu::CompareFunction::Greater,
             None,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            (format, MSAA_SAMPLES),
+            (format, samples),
         );
 
         // The same scene pipelines writing linear colour (and distance) for
         // the post-processing chain of stylised looks.
-        let hdr_target = (post::HDR_FORMAT, MSAA_SAMPLES);
+        let hdr_target = (post::HDR_FORMAT, samples);
         // Water: blended over what is under it (premultiplied colour), and
         // the alpha channel left alone (it holds distance for post).
         let water_blend = Some(wgpu::BlendState {
@@ -1195,7 +1246,7 @@ impl Renderer {
                 operation: wgpu::BlendOperation::Add,
             },
         });
-        let water_pipelines = [(format, MSAA_SAMPLES), hdr_target].map(|target| {
+        let water_pipelines = [(format, samples), hdr_target].map(|target| {
             pipeline(
                 "water",
                 "vs_mesh",
@@ -1310,9 +1361,10 @@ impl Renderer {
         let road_instances = Self::instance_buffer(gpu, road_instance_capacity);
         let instance_capacity = 256;
         let instances = Self::instance_buffer(gpu, instance_capacity);
-        let (msaa, depth) = Self::attachments(gpu, format, width, height);
+        let (msaa, depth) = Self::attachments(gpu, format, width, height, samples);
         let mut renderer = Self {
             format,
+            samples,
             width,
             height,
             globals,
@@ -1355,6 +1407,8 @@ impl Renderer {
             buildings: None,
             terrain: None,
             grass,
+            timer: None,
+            skip: Vec::new(),
             stream_range: None,
             models: None,
             textures,
@@ -1630,6 +1684,34 @@ impl Renderer {
     /// Render at a quality tier: internal height, sun shadow map, local
     /// lights, model detail and texture size (not streaming, which only
     /// windows use).
+    /// Measure GPU time per stage (if the GPU has timestamps); read it with
+    /// [`Renderer::gpu_times`].
+    /// Leave parts of the frame out, to find what costs the time (profiling
+    /// only): any of sky, ground, terrain, roads, buildings, water, grass,
+    /// items (vehicles, trees, props), post.
+    pub fn set_skip(&mut self, parts: &[&str]) {
+        self.skip = parts.iter().map(|p| p.to_string()).collect();
+    }
+
+    fn skips(&self, part: &str) -> bool {
+        !self.skip.is_empty() && self.skip.iter().any(|s| s == part)
+    }
+
+    pub fn set_gpu_timing(&mut self, gpu: &Gpu, on: bool) {
+        self.timer = if on {
+            gpu_timer::GpuTimer::new(gpu)
+        } else {
+            None
+        };
+    }
+
+    /// Average GPU ms per stage since the last call (empty when not timing):
+    /// each stage is named by where it ends (shadow, reflection, opaque, grass,
+    /// water, scene, post, upscale).
+    pub fn gpu_times(&mut self) -> Vec<(&'static str, f32)> {
+        self.timer.as_mut().map_or_else(Vec::new, |t| t.report())
+    }
+
     pub fn set_quality(&mut self, gpu: &Gpu, q: wp_world::QualityTier) {
         self.set_max_height(gpu, Some(q.max_height()));
         let (size, extent_m) = q.shadow_map();
@@ -1672,7 +1754,7 @@ impl Renderer {
         if (iw, ih) != (self.width, self.height) {
             self.width = iw;
             self.height = ih;
-            (self.msaa, self.depth) = Self::attachments(gpu, self.format, iw, ih);
+            (self.msaa, self.depth) = Self::attachments(gpu, self.format, iw, ih, self.samples);
             self.sync_reflection(gpu);
         }
         if (iw, ih) == (w, h) {
@@ -1699,6 +1781,7 @@ impl Renderer {
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        samples: u32,
     ) -> (wgpu::TextureView, wgpu::TextureView) {
         let make = |label: &str, format: wgpu::TextureFormat| {
             gpu.device
@@ -1710,7 +1793,7 @@ impl Renderer {
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
-                    sample_count: MSAA_SAMPLES,
+                    sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1969,7 +2052,7 @@ impl Renderer {
                 if !in_view(&view_proj, offset, &cache.tiles[i]) {
                     continue;
                 }
-                static_draws.push((StaticKind::Terrain, i, 0));
+                static_draws.push((StaticKind::Terrain, i, land_level(&cache.tiles[i], eye)));
                 static_raw.push(InstanceRaw {
                     model,
                     material: [0.92, 0.0, 0.0, 0.0],
@@ -2017,7 +2100,7 @@ impl Renderer {
             for &i in cache.resident.keys() {
                 let (offset, model) = tile_model(&cache.tiles[i]);
                 if in_view(&light, offset, &cache.tiles[i]) {
-                    static_draws.push((StaticKind::Terrain, i, 0));
+                    static_draws.push((StaticKind::Terrain, i, land_level(&cache.tiles[i], eye)));
                     static_raw.push(InstanceRaw {
                         model,
                         ..building_mat
@@ -2067,12 +2150,12 @@ impl Renderer {
             ..Default::default()
         };
         // Stylised looks draw into the post chain's linear buffer.
-        let post_on = frame.look.post();
+        let post_on = frame.look.post() && !self.skips("post");
         if post_on {
             let size = (self.width, self.height);
             match &mut self.post {
                 Some(p) => p.resize(gpu, size),
-                None => self.post = Some(post::Post::new(gpu, self.format, size)),
+                None => self.post = Some(post::Post::new(gpu, self.format, size, self.samples)),
             }
         }
         let mut encoder = gpu
@@ -2080,6 +2163,11 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        let mut timer = self.timer.take();
+        if let Some(t) = timer.as_mut() {
+            t.begin(gpu);
+            t.mark(&mut encoder, "start");
+        }
         if self.shadow.is_some() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"),
@@ -2132,6 +2220,11 @@ impl Renderer {
                     stats.draw_calls += 1;
                 }
             }
+        }
+        if let Some(t) = timer.as_mut()
+            && self.shadow.is_some()
+        {
+            t.mark(&mut encoder, "shadow");
         }
         if mirror && let Some(r) = &self.reflection {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2208,23 +2301,36 @@ impl Renderer {
                 first += count;
             }
         }
+        if let Some(t) = timer.as_mut()
+            && mirror
         {
+            t.mark(&mut encoder, "reflection");
+        }
+        {
+            let resolved = match (&self.post, post_on, &self.upscaler) {
+                (Some(p), true, _) => &p.hdr,
+                (_, _, Some(u)) => &u.view,
+                _ => target,
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: match (&self.post, post_on) {
-                        (Some(p), true) => &p.msaa,
-                        _ => &self.msaa,
+                    // With several samples, draw into the multisampled
+                    // buffer and resolve; with one, straight into the target.
+                    view: match (self.samples > 1, &self.post, post_on) {
+                        (true, Some(p), true) => &p.msaa,
+                        (true, _, _) => &self.msaa,
+                        (false, _, _) => resolved,
                     },
                     depth_slice: None,
-                    resolve_target: Some(match (&self.post, post_on, &self.upscaler) {
-                        (Some(p), true, _) => &p.hdr,
-                        (_, _, Some(u)) => &u.view,
-                        _ => target,
-                    }),
+                    resolve_target: (self.samples > 1).then_some(resolved),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Discard,
+                        store: if self.samples > 1 {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2243,13 +2349,27 @@ impl Renderer {
             pass.set_bind_group(1, &self.textures.white, &[]);
             let [hdr_sky, hdr_ground, hdr_meshes, hdr_glass] = &self.hdr_pipelines;
             let pick = |plain, linear| if post_on { linear } else { plain };
-            pass.set_pipeline(pick(&self.sky, hdr_sky));
-            pass.draw(0..3, 0..1);
-            pass.set_pipeline(pick(&self.ground, hdr_ground));
-            pass.draw(0..6, 0..1);
+            if !self.skips("sky") {
+                pass.set_pipeline(pick(&self.sky, hdr_sky));
+                pass.draw(0..3, 0..1);
+            }
+            if !self.skips("ground") {
+                pass.set_pipeline(pick(&self.ground, hdr_ground));
+                // Round hilly land the plane is four strips framing it.
+                pass.draw(0..if frame.terrain.is_some() { 24 } else { 6 }, 0..1);
+            }
             pass.set_pipeline(pick(&self.meshes_pipeline, hdr_meshes));
             let stride = std::mem::size_of::<InstanceRaw>() as u64;
             for (slot, &(kind, tile, layer)) in static_draws.iter().enumerate().take(main_static) {
+                let part = match kind {
+                    StaticKind::Road => "roads",
+                    StaticKind::Building => "buildings",
+                    StaticKind::Terrain => "terrain",
+                    StaticKind::Water => "water",
+                };
+                if self.skips(part) {
+                    continue;
+                }
                 let Some(mesh) = self.static_mesh(kind, tile, layer) else {
                     continue;
                 };
@@ -2269,6 +2389,10 @@ impl Renderer {
             let mut first = 0u64;
             for (id, list) in &groups {
                 let count = list.len() as u64;
+                if self.skips("items") {
+                    first += count;
+                    continue;
+                }
                 let Some(mesh) = self.mesh(*id) else {
                     continue;
                 };
@@ -2293,10 +2417,20 @@ impl Renderer {
                 stats.triangles += mesh.index_count as u64 / 3 * count;
                 first += count;
             }
-            let (calls, tris) = self.grass.draw(&mut pass, post_on);
+            if let Some(t) = timer.as_mut() {
+                t.mark_in_pass(&mut pass, "opaque");
+            }
+            let (calls, tris) = if self.skips("grass") {
+                (0, 0)
+            } else {
+                self.grass.draw(&mut pass, post_on)
+            };
+            if let Some(t) = timer.as_mut() {
+                t.mark_in_pass(&mut pass, "grass");
+            }
             stats.draw_calls += calls;
             stats.triangles += tris;
-            if !water_draws.is_empty() {
+            if !water_draws.is_empty() && !self.skips("water") {
                 pass.set_pipeline(&self.water_pipelines[post_on as usize]);
                 pass.set_bind_group(1, &self.textures.white, &[]);
                 for &(tile, slot) in &water_draws {
@@ -2316,6 +2450,11 @@ impl Renderer {
                     stats.triangles += mesh.index_count as u64 / 3;
                 }
             }
+            if let Some(t) = timer.as_mut()
+                && !water_draws.is_empty()
+            {
+                t.mark_in_pass(&mut pass, "water");
+            }
             if frame.windscreen.is_some() {
                 pass.set_pipeline(pick(&self.glass, hdr_glass));
                 pass.set_bind_group(1, &self.textures.white, &[]);
@@ -2323,6 +2462,9 @@ impl Renderer {
                 stats.draw_calls += 1;
                 stats.triangles += 2;
             }
+        }
+        if let Some(t) = timer.as_mut() {
+            t.mark(&mut encoder, "scene");
         }
         if post_on && let Some(p) = &self.post {
             let look = &frame.look;
@@ -2339,11 +2481,24 @@ impl Renderer {
             };
             let out = self.upscaler.as_ref().map_or(target, |u| &u.view);
             p.encode(gpu, &mut encoder, out, params);
+            if let Some(t) = timer.as_mut() {
+                t.mark(&mut encoder, "post");
+            }
         }
         if let Some(u) = &self.upscaler {
             u.encode(&mut encoder, target);
+            if let Some(t) = timer.as_mut() {
+                t.mark(&mut encoder, "upscale");
+            }
+        }
+        if let Some(t) = timer.as_mut() {
+            t.resolve(&mut encoder);
         }
         gpu.queue.submit([encoder.finish()]);
+        if let Some(t) = timer.as_mut() {
+            t.submitted();
+        }
+        self.timer = timer;
         self.stats = stats;
     }
 }
@@ -2556,7 +2711,7 @@ impl Renderer {
                 land.map(|t| {
                     wp_world::terrain::build_tiles(&t.def, &t.field, ground)
                         .into_iter()
-                        .map(TileData::from_terrain)
+                        .map(TileData::from_land)
                         .collect()
                 })
                 .unwrap_or_default()
@@ -2616,6 +2771,22 @@ fn light_view_proj(
         -f.z + 200.0,
     );
     proj * view * glam::Mat4::from_translation(eye)
+}
+
+/// Which level of detail of a land tile to draw from `eye`: full detail
+/// within 120 m of it, every other grid point within 350 m, then every fourth.
+fn land_level(t: &TileData, eye: glam::Vec3) -> usize {
+    let lo = glam::Vec2::new(t.centre[0] + t.min[0], t.centre[1] + t.min[1]);
+    let hi = glam::Vec2::new(t.centre[0] + t.max[0], t.centre[1] + t.max[1]);
+    let d = eye.truncate().clamp(lo, hi).distance(eye.truncate());
+    let level = if d < 120.0 {
+        0
+    } else if d < 350.0 {
+        1
+    } else {
+        2
+    };
+    level.min(t.layers.len().saturating_sub(1))
 }
 
 /// Whether a tile at `offset` from the camera can be on screen: false

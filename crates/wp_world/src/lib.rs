@@ -125,6 +125,18 @@ impl QualityTier {
         }
     }
     /// Street reflections in wet roads (a mirrored pass at half size).
+    /// Samples per pixel for smoothing edges. Phone GPUs draw in tiles, and
+    /// several samples of high-precision colour shrink the tiles until every
+    /// triangle is handled many times over: on a budget phone (Adreno 610)
+    /// 4× cost most of the frame.
+    pub fn msaa_samples(self) -> u32 {
+        match self {
+            QualityTier::Low => 1,
+            QualityTier::Mid => 2,
+            QualityTier::Flagship => 4,
+        }
+    }
+
     /// Share of a scene's grass reach drawn.
     pub fn grass_reach(self) -> f32 {
         match self {

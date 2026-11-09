@@ -70,7 +70,14 @@ impl Gpu {
             | wgpu::Features::TEXTURE_COMPRESSION_BC;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("waypoint"),
-            required_features: adapter.features() & compression,
+            // Timestamps (for measuring GPU time per stage), where offered.
+            required_features: adapter.features()
+                & (compression
+                    | wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+                    // 2× multisampling of some formats is only offered through it.
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
             required_limits: limits,
             ..Default::default()
         }))

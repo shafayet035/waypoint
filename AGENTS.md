@@ -394,4 +394,19 @@ Drawn as cubes (`extract::bridge_items`): a 0.8 m concrete slab in ~8 m pieces f
 24 m down to the land. WP-N012 now also accepts a road whose lanes all lead on and are led into (a line between dead ends has no
 loop). Sandbox `scenes/gorge.scene.ron` (plateaus 18 m up, a 140 m bridge over a pond): `bridge_cross` (60 km/h, 0.01 m off the
 lane centre), `bridge_wall` (steered into the wall: collision, stays on the deck), shot `bridge`.
-Not yet: testing on physical phones; running on an iOS simulator.
+First physical phone (Xiaomi Redmi Note 13, Snapdragon 685 / Adreno 610, Android 15, 6 GB; the Low tier): Red Canyon went from
+~107 ms frames (75 ms at the governor's lowest step) to ~17 ms at 840×378 with shadows (`frame …` lines in `adb logcat -s waypoint`
+every 5 s break each frame into sim / extract / wait for GPU / render / present plus GPU ms per stage from timestamp queries where
+the GPU has them, `gpu_timer.rs`; Metal has no in-encoder timestamps). What it took: (1) the APK now ships the NDK's
+libc++_shared.so (Luau and the Basis transcoder need it; it crashed at launch on real phones); (2) the player keeps the screen
+on; (3) phones draw straight into a smaller surface the display hardware scales (`HARDWARE_SCALING`: tier height × governor
+scale) instead of a GPU upscale pass that cost 23 ms at 2400×1080; (4) MSAA per tier (`QualityTier::msaa_samples`: Low 1, Mid 2
+where offered, else 4; Flagship 4; `Renderer::with_samples`); (5) the ground plane round hilly land is four strips framing it
+instead of a full quad that discarded fragments under the land: on Adreno a discard switches off early depth (LRZ) for the
+whole pass, so everything after it was shaded hidden or not (44 → 14 ms); (6) land tiles share vertices, faceting comes from
+screen-space derivatives (zero normals), and each tile has three levels of detail (every 1st/2nd/4th grid point within
+120/350 m/beyond, with skirts); (7) a `CHEAP` shader constant for the Low tier: base colour only (no normal/metal-rough/
+emissive/occlusion samples), one hardware-filtered shadow sample, no wet streaks (33 → 17 ms). Profiling switch: `adb shell
+setprop debug.waypoint.skip terrain,grass` (WP_SKIP elsewhere) leaves parts out live (sky, ground, terrain, roads, buildings,
+water, grass, items, post). Xiaomi phones need Developer options "Install via USB" (and "Stay awake" helps).
+Not yet: an iOS simulator run.

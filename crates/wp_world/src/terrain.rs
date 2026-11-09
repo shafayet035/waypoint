@@ -818,21 +818,47 @@ pub struct TerrainTile {
 
 /// Cells per tile side: tiles are about 400 m at 4 m cells.
 const TILE_CELLS: usize = 100;
-
 /// How far the land mesh sits below the heights, m: roads and everything
 /// on them are drawn on the true heights, so the land never shows through
 /// them where its flat triangles bulge over the bilinear surface.
 pub const MESH_DROP_M: f32 = 0.06;
 
+/// Grid steps of the land's levels of detail (every point, every 2nd, every 4th).
+pub const LAND_LEVELS: [usize; 3] = [1, 2, 4];
+/// How far a tile's edges hang down, per grid step, so coarser neighbours
+/// leave no gaps, m.
+const SKIRT_M: f32 = 1.5;
+
+/// One level of detail of a land tile. Vertices are shared between
+/// triangles; a faceted land has zero normals, and the renderer takes each
+/// face's normal from the screen (so a low-poly look costs no extra vertices).
+#[derive(Clone, Debug, Default)]
+pub struct LandMesh {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    /// Per-vertex colour (linear RGB, alpha 1).
+    pub colors: Vec<[f32; 4]>,
+    pub indices: Vec<u32>,
+}
+
+/// A square piece of the land at each level of detail ([`LAND_LEVELS`]),
+/// positions relative to `centre`.
+#[derive(Clone, Debug, Default)]
+pub struct LandTile {
+    pub centre: [f32; 2],
+    pub levels: Vec<LandMesh>,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
 /// The land as meshes in tiles, coloured from its own colour (else `ground`,
 /// the look's ground colour, linear) to `rock` on steep slopes.
-pub fn build_tiles(def: &TerrainDef, field: &HeightField, ground: Vec3) -> Vec<TerrainTile> {
+pub fn build_tiles(def: &TerrainDef, field: &HeightField, ground: Vec3) -> Vec<LandTile> {
     let rock = Vec3::from(crate::srgb([def.rock.0, def.rock.1, def.rock.2]));
     let ground = def
         .colour
         .map_or(ground, |c| Vec3::from(crate::srgb([c.0, c.1, c.2])));
     let (nx, ny) = (field.nx, field.ny);
-    let mut tiles = Vec::new();
     let normal_at = |i: usize, j: usize| {
         let g = field.land_gradient(field.point(i, j) + Vec2::splat(0.01));
         Vec3::new(-g.x, -g.y, 1.0).normalize()
@@ -845,74 +871,100 @@ pub fn build_tiles(def: &TerrainDef, field: &HeightField, ground: Vec3) -> Vec<T
         let c = ground.lerp(rock, r) * m;
         [c.x, c.y, c.z, 1.0]
     };
+    let mut tiles = Vec::new();
     let mut tj = 0;
     while tj < ny - 1 {
         let mut ti = 0;
         while ti < nx - 1 {
             let (i1, j1) = ((ti + TILE_CELLS).min(nx - 1), (tj + TILE_CELLS).min(ny - 1));
-            let a = field.point(ti, tj);
-            let b = field.point(i1, j1);
-            let centre = (a + b) * 0.5;
-            let mut t = TerrainTile {
+            let centre = (field.point(ti, tj) + field.point(i1, j1)) * 0.5;
+            let mut tile = LandTile {
                 centre: centre.to_array(),
                 min: [f32::MAX; 3],
                 max: [f32::MIN; 3],
                 ..Default::default()
             };
-            let local = |i: usize, j: usize| {
-                let p = field.point(i, j) - centre;
-                [p.x, p.y, field.at(i, j) - MESH_DROP_M]
-            };
-            if def.faceted {
-                // Three vertices per triangle, each with the face's normal.
-                for j in tj..j1 {
-                    for i in ti..i1 {
-                        let q = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)];
+            for step in LAND_LEVELS {
+                // Grid lines of this level, always including the tile's edges.
+                let line = |a: usize, b: usize| -> Vec<usize> {
+                    let mut v: Vec<usize> = (a..b).step_by(step).collect();
+                    v.push(b);
+                    v
+                };
+                let (is, js) = (line(ti, i1), line(tj, j1));
+                let w = is.len();
+                let mut m = LandMesh::default();
+                let vertex = |m: &mut LandMesh, i: usize, j: usize, drop: f32| {
+                    let p = field.point(i, j) - centre;
+                    let n = normal_at(i, j);
+                    m.positions
+                        .push([p.x, p.y, field.at(i, j) - MESH_DROP_M - drop]);
+                    m.normals
+                        .push(if def.faceted { [0.0; 3] } else { n.to_array() });
+                    m.colors.push(tint(n, field.point(i, j)));
+                    m.positions.len() as u32 - 1
+                };
+                for &j in &js {
+                    for &i in &is {
+                        vertex(&mut m, i, j, 0.0);
+                    }
+                }
+                for b in 0..js.len() - 1 {
+                    for a in 0..w - 1 {
+                        let k = (b * w + a) as u32;
+                        let w = w as u32;
                         // Alternate the diagonal for a less regular look.
-                        let tris = if (i + j) % 2 == 0 {
-                            [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]
+                        if (a + b) % 2 == 0 {
+                            m.indices.extend_from_slice(&[
+                                k,
+                                k + 1,
+                                k + w + 1,
+                                k,
+                                k + w + 1,
+                                k + w,
+                            ]);
                         } else {
-                            [[q[0], q[1], q[3]], [q[1], q[2], q[3]]]
-                        };
-                        for tri in tris {
-                            let p: Vec<Vec3> =
-                                tri.iter().map(|&(i, j)| Vec3::from(local(i, j))).collect();
-                            let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or(Vec3::Z);
-                            let mid = (p[0] + p[1] + p[2]) / 3.0;
-                            let c = tint(n, mid.truncate() + centre);
-                            for v in &p {
-                                t.indices.push(t.positions.len() as u32);
-                                t.positions.push(v.to_array());
-                                t.normals.push(n.to_array());
-                                t.colors.push(c);
-                            }
+                            m.indices.extend_from_slice(&[
+                                k,
+                                k + 1,
+                                k + w,
+                                k + 1,
+                                k + w + 1,
+                                k + w,
+                            ]);
                         }
                     }
                 }
-            } else {
-                let w = i1 - ti + 1;
-                for j in tj..=j1 {
-                    for i in ti..=i1 {
-                        let n = normal_at(i, j);
-                        t.positions.push(local(i, j));
-                        t.normals.push(n.to_array());
-                        t.colors.push(tint(n, field.point(i, j)));
+                // Skirts along the four edges (both faces), hiding cracks
+                // where a neighbour is drawn coarser.
+                let edges: [Vec<(usize, usize)>; 4] = [
+                    is.iter().map(|&i| (i, tj)).collect(),
+                    is.iter().map(|&i| (i, j1)).collect(),
+                    js.iter().map(|&j| (ti, j)).collect(),
+                    js.iter().map(|&j| (i1, j)).collect(),
+                ];
+                for edge in edges {
+                    let top: Vec<u32> = edge
+                        .iter()
+                        .map(|&(i, j)| vertex(&mut m, i, j, 0.0))
+                        .collect();
+                    let low: Vec<u32> = edge
+                        .iter()
+                        .map(|&(i, j)| vertex(&mut m, i, j, SKIRT_M * step as f32))
+                        .collect();
+                    for k in 0..edge.len() - 1 {
+                        let (a, b, c, d) = (top[k], top[k + 1], low[k + 1], low[k]);
+                        m.indices
+                            .extend_from_slice(&[a, b, c, a, c, d, a, c, b, a, d, c]);
                     }
                 }
-                for j in 0..(j1 - tj) {
-                    for i in 0..(i1 - ti) {
-                        let k = (j * w + i) as u32;
-                        let w = w as u32;
-                        t.indices
-                            .extend_from_slice(&[k, k + 1, k + w + 1, k, k + w + 1, k + w]);
-                    }
+                for p in &m.positions {
+                    tile.min = std::array::from_fn(|a| tile.min[a].min(p[a]));
+                    tile.max = std::array::from_fn(|a| tile.max[a].max(p[a]));
                 }
+                tile.levels.push(m);
             }
-            for p in &t.positions {
-                t.min = std::array::from_fn(|a| t.min[a].min(p[a]));
-                t.max = std::array::from_fn(|a| t.max[a].max(p[a]));
-            }
-            tiles.push(t);
+            tiles.push(tile);
             ti = i1;
         }
         tj = (tj + TILE_CELLS).min(ny - 1);
@@ -994,10 +1046,23 @@ mod tests {
         let smooth = build_tiles(&d, &f, Vec3::splat(0.3));
         d.faceted = true;
         let faceted = build_tiles(&d, &f, Vec3::splat(0.3));
-        let tris = |t: &[TerrainTile]| t.iter().map(|t| t.indices.len() / 3).sum::<usize>();
+        // Level 0 covers every cell (two triangles each), plus skirts.
+        let ground_tris = |t: &[LandTile], level: usize| {
+            t.iter()
+                .map(|t| {
+                    let m = &t.levels[level];
+                    m.indices.len() / 3
+                })
+                .sum::<usize>()
+        };
         let cells = (f.nx - 1) * (f.ny - 1);
-        assert_eq!(tris(&smooth), cells * 2);
-        assert_eq!(tris(&faceted), cells * 2);
+        assert!(ground_tris(&smooth, 0) >= cells * 2);
+        assert_eq!(ground_tris(&smooth, 0), ground_tris(&faceted, 0));
+        // Coarser levels have about a quarter, then a sixteenth, of the triangles.
+        assert!(ground_tris(&smooth, 1) * 3 < ground_tris(&smooth, 0));
+        assert!(ground_tris(&smooth, 2) * 3 < ground_tris(&smooth, 1));
         assert_eq!(smooth.len(), 4);
+        // Faceted land has zero normals (the renderer takes them per face).
+        assert!(faceted[0].levels[0].normals.iter().all(|n| *n == [0.0; 3]));
     }
 }

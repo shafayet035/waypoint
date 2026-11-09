@@ -147,6 +147,11 @@ mod android {
             Err(e) => return log(&format!("error: {e}")),
         };
         log(&format!("playing {}", root.display()));
+        // A game being played keeps the screen on.
+        app.set_window_flags(
+            winit::platform::android::activity::WindowManagerFlags::KEEP_SCREEN_ON,
+            winit::platform::android::activity::WindowManagerFlags::empty(),
+        );
         let data = root.parent().map(std::path::Path::to_path_buf);
         let result = super::play(&root, data.as_deref(), None, None, |session, opts| {
             wp_platform::run_windowed_android(app, session, opts)

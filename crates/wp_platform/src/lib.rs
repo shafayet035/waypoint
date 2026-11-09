@@ -83,6 +83,30 @@ pub struct WindowSummary {
 }
 
 /// A line in the platform's log: logcat (tag `waypoint`) on Android, else stderr.
+/// Parts of the frame to leave out while profiling (comma-separated).
+fn debug_skip() -> String {
+    #[cfg(target_os = "android")]
+    {
+        unsafe extern "C" {
+            fn __system_property_get(
+                name: *const std::ffi::c_char,
+                value: *mut std::ffi::c_char,
+            ) -> i32;
+        }
+        let mut buf = [0 as std::ffi::c_char; 92];
+        let n = unsafe { __system_property_get(c"debug.waypoint.skip".as_ptr(), buf.as_mut_ptr()) };
+        if n > 0 {
+            let bytes: Vec<u8> = buf[..n as usize].iter().map(|c| *c as u8).collect();
+            return String::from_utf8_lossy(&bytes).into_owned();
+        }
+        String::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        std::env::var("WP_SKIP").unwrap_or_default()
+    }
+}
+
 fn log_line(msg: &str) {
     #[cfg(target_os = "android")]
     {
@@ -164,6 +188,7 @@ fn run_with_event_loop(
         frames: 0,
         ticks: 0,
         last_title: Instant::now(),
+        profile: ([0.0; 5], 0, Instant::now()),
         audio: None,
         look: (0.0, 0.0),
         drag: None,
@@ -230,6 +255,37 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     gpu: Gpu,
     renderer: Renderer,
+}
+
+/// On phones the display hardware scales the picture up to the screen for
+/// free, so the engine draws straight into a smaller surface (the tier's
+/// height, times the governor's scale) instead of upscaling on the GPU,
+/// which cost a budget phone a third of its frame.
+const HARDWARE_SCALING: bool = cfg!(any(target_os = "android", target_os = "ios"));
+
+impl Gfx {
+    /// Size the surface for the window: on phones capped to `tier`'s height
+    /// and scaled by `scale`; elsewhere the window's size.
+    fn fit(&mut self, tier: Option<wp_world::QualityTier>, scale: f32) {
+        let size = self.window.inner_size();
+        let (w, h) = (size.width.max(1), size.height.max(1));
+        let (w, h) = if HARDWARE_SCALING {
+            let cap = tier.map_or(h, |t| t.max_height()).min(h);
+            let k = cap as f32 / h as f32 * scale.clamp(0.25, 1.0);
+            (
+                ((w as f32 * k).round() as u32).max(1),
+                ((h as f32 * k).round() as u32).max(1),
+            )
+        } else {
+            (w, h)
+        };
+        if (w, h) != (self.config.width, self.config.height) {
+            self.config.width = w;
+            self.config.height = h;
+            self.surface.configure(&self.gpu.device, &self.config);
+        }
+        self.renderer.resize(&self.gpu, w, h);
+    }
 }
 
 #[derive(Default)]
@@ -329,6 +385,10 @@ struct Handler {
     frames: u64,
     ticks: u64,
     last_title: Instant,
+    /// Where frame time goes (ms summed since the last report): simulation,
+    /// extraction, waiting for a surface texture (the GPU is behind),
+    /// rendering (encode + submit), presenting; and the frames counted.
+    profile: ([f64; 5], u32, Instant),
     /// Engine sound, if a sound device opened.
     audio: Option<audio::EngineAudio>,
     /// Head turn in the cab (yaw, pitch), rad, and the mouse drag driving it.
@@ -359,6 +419,11 @@ impl Handler {
             Diagnostic::error("WP-R004", format!("cannot render to the window: {e}"))
         })?;
         let gpu = Gpu::for_surface(instance, &surface)?;
+        let info = gpu.info();
+        log_line(&format!(
+            "gpu: {} ({}, {})",
+            info.name, info.backend, info.device_type
+        ));
         let size = window.inner_size();
         let mut config = surface
             .get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1))
@@ -368,18 +433,42 @@ impl Handler {
             config.format = *srgb;
         }
         surface.configure(&gpu.device, &config);
-        let mut renderer = Renderer::new(&gpu, config.format, config.width, config.height);
+        let samples = self
+            .opts
+            .quality
+            .map_or(wp_render::MSAA_SAMPLES, |q| q.msaa_samples());
+        let cheap = self.opts.quality == Some(wp_world::QualityTier::Low);
+        let mut renderer = Renderer::with_samples(
+            &gpu,
+            config.format,
+            config.width,
+            config.height,
+            samples,
+            cheap,
+        );
+        // GPU time per stage goes into the frame report (logged every 5 s).
+        renderer.set_gpu_timing(&gpu, true);
         if let Some(q) = self.opts.quality {
             renderer.set_quality(&gpu, q);
             renderer.set_streaming(Some(q.view_distance_m()));
         }
-        Ok(Gfx {
+        let mut gfx = Gfx {
             window,
             surface,
             config,
             gpu,
             renderer,
-        })
+        };
+        if HARDWARE_SCALING {
+            // The surface is the size to draw at: no GPU upscaling.
+            gfx.renderer.set_max_height(&gfx.gpu, None);
+            gfx.fit(self.opts.quality, 1.0);
+            log_line(&format!(
+                "drawing at {}×{} (the display scales it to the screen)",
+                gfx.config.width, gfx.config.height
+            ));
+        }
+        Ok(gfx)
     }
 
     fn key(&mut self, event: &KeyEvent, event_loop: &ActiveEventLoop) {
@@ -495,6 +584,13 @@ impl Handler {
         self.last = now;
         self.serve_control();
         let tick_dt = self.session.app.time().dt() as f64;
+        let mut lap = Instant::now();
+        let mut split = |slot: usize, prof: &mut [f64; 5]| {
+            let t = Instant::now();
+            prof[slot] += (t - lap).as_secs_f64() * 1000.0;
+            lap = t;
+        };
+        let mut prof = [0.0f64; 5];
         if !self.session.paused {
             self.accumulator += real_dt;
             let mut steps = 0;
@@ -552,6 +648,7 @@ impl Handler {
             None => {}
         }
         self.look = (self.look.0.clamp(-2.4, 2.4), self.look.1.clamp(-0.6, 0.6));
+        split(0, &mut prof);
         let frame = extract_view(
             &self.session.app.world,
             self.camera,
@@ -560,6 +657,7 @@ impl Handler {
                 look: self.look,
             },
         );
+        split(1, &mut prof);
         let Some(gfx) = self.gfx.as_mut() else { return };
         if let (Some(gov), Some(tier)) = (self.governor.as_mut(), self.opts.quality) {
             // The OS's heat state, every two seconds (or the test override).
@@ -575,7 +673,21 @@ impl Handler {
                     .unwrap_or_default();
             }
             if let Some(level) = gov.update(real_dt as f32 * 1000.0, self.heat) {
-                gfx.renderer.apply_step(&gfx.gpu, tier, gov.step());
+                let step = gov.step();
+                if HARDWARE_SCALING {
+                    // Smaller surface, not a GPU upscale.
+                    gfx.renderer.apply_step(
+                        &gfx.gpu,
+                        tier,
+                        wp_render::governor::Step {
+                            render_scale: 1.0,
+                            ..step
+                        },
+                    );
+                    gfx.fit(Some(tier), step.render_scale);
+                } else {
+                    gfx.renderer.apply_step(&gfx.gpu, tier, step);
+                }
                 log_line(&format!(
                     "render step {level} ({:?} heat, {:.1} ms frames): {:?}",
                     self.heat,
@@ -584,14 +696,18 @@ impl Handler {
                 ));
             }
         }
+        split(1, &mut prof);
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)
             | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
+                split(2, &mut prof);
                 let view = tex
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 gfx.renderer.render(&gfx.gpu, &frame, &view);
+                split(3, &mut prof);
                 gfx.gpu.queue.present(tex);
+                split(4, &mut prof);
                 self.frames += 1;
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -600,6 +716,62 @@ impl Handler {
             _ => {}
         }
 
+        // Profiling: parts of the frame to leave out (`adb shell setprop
+        // debug.waypoint.skip grass,post` on Android, WP_SKIP elsewhere).
+        if self.profile.1.is_multiple_of(60) {
+            let skip = debug_skip();
+            let parts: Vec<&str> = skip
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .collect();
+            gfx.renderer.set_skip(&parts);
+        }
+        // Every 5 s: where the time went, per frame.
+        let (sum, n, since) = &mut self.profile;
+        for (s, p) in sum.iter_mut().zip(prof) {
+            *s += p;
+        }
+        *n += 1;
+        if since.elapsed().as_secs_f32() > 5.0 {
+            let k = (*n).max(1) as f64;
+            let stats = gfx.renderer.stats();
+            let gpu_ms: String = gfx
+                .renderer
+                .gpu_times()
+                .iter()
+                .map(|(l, ms)| format!(" {l} {ms:.1}"))
+                .collect();
+            log_line(&format!(
+                "frame {:.1} ms: sim {:.1}, extract {:.1}, wait gpu {:.1}, render {:.1}, present {:.1} ({} draws, {}k tris, {}×{}{}); gpu ms:{}",
+                since.elapsed().as_secs_f64() * 1000.0 / k,
+                sum[0] / k,
+                sum[1] / k,
+                sum[2] / k,
+                sum[3] / k,
+                sum[4] / k,
+                stats.draw_calls,
+                stats.triangles / 1000,
+                gfx.renderer.internal_size().0,
+                gfx.renderer.internal_size().1,
+                {
+                    let s = debug_skip();
+                    if s.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", skipping {s}")
+                    }
+                },
+                if gpu_ms.is_empty() {
+                    " n/a".to_string()
+                } else {
+                    gpu_ms
+                }
+            ));
+            *sum = [0.0; 5];
+            *n = 0;
+            *since = Instant::now();
+        }
         if self.last_title.elapsed().as_secs_f32() > 0.2 {
             self.last_title = Instant::now();
             let w = &self.session.app.world;
@@ -681,10 +853,18 @@ impl ApplicationHandler for Handler {
                     && size.width > 0
                     && size.height > 0
                 {
-                    g.config.width = size.width;
-                    g.config.height = size.height;
-                    g.surface.configure(&g.gpu.device, &g.config);
-                    g.renderer.resize(&g.gpu, size.width, size.height);
+                    if HARDWARE_SCALING {
+                        let scale = self
+                            .governor
+                            .as_ref()
+                            .map_or(1.0, |gov| gov.step().render_scale);
+                        g.fit(self.opts.quality, scale);
+                    } else {
+                        g.config.width = size.width;
+                        g.config.height = size.height;
+                        g.surface.configure(&g.gpu.device, &g.config);
+                        g.renderer.resize(&g.gpu, size.width, size.height);
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => self.key(&event, event_loop),

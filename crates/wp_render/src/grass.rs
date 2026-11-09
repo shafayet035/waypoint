@@ -45,6 +45,8 @@ impl Grass {
         main_layout: &wgpu::BindGroupLayout,
         material_layout: &wgpu::BindGroupLayout,
         formats: [wgpu::TextureFormat; 2],
+        samples: u32,
+        constants: &[(&str, f64)],
     ) -> Self {
         let device = &gpu.device;
         let tex = |binding| wgpu::BindGroupLayoutEntry {
@@ -101,13 +103,16 @@ impl Grass {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: crate::MSAA_SAMPLES,
+                    count: samples,
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_grass"),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants,
+                        ..Default::default()
+                    },
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,

@@ -33,6 +33,8 @@ pub(crate) struct Post {
     down_levels: Vec<wgpu::TextureView>,
     up_levels: Vec<wgpu::TextureView>,
     size: (u32, u32),
+    /// Samples per pixel of the scene (1: drawn straight into `hdr`).
+    samples: u32,
     /// A 1×1 texture for unused bindings.
     blank: wgpu::TextureView,
 }
@@ -61,7 +63,12 @@ fn texture(gpu: &Gpu, label: &str, w: u32, h: u32, samples: u32) -> wgpu::Textur
 }
 
 impl Post {
-    pub(crate) fn new(gpu: &Gpu, output: wgpu::TextureFormat, size: (u32, u32)) -> Self {
+    pub(crate) fn new(
+        gpu: &Gpu,
+        output: wgpu::TextureFormat,
+        size: (u32, u32),
+        samples: u32,
+    ) -> Self {
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("post"),
@@ -155,11 +162,18 @@ impl Post {
             layout,
             sampler,
             params,
-            msaa: texture(gpu, "post msaa", 1, 1, crate::MSAA_SAMPLES),
+            msaa: texture(
+                gpu,
+                "post msaa",
+                1,
+                1,
+                if samples > 1 { samples } else { 4 },
+            ),
             hdr: texture(gpu, "post hdr", 1, 1, 1),
             down_levels: Vec::new(),
             up_levels: Vec::new(),
             size: (0, 0),
+            samples,
             blank: texture(gpu, "post blank", 1, 1, 1),
         };
         post.resize(gpu, size);
@@ -172,7 +186,10 @@ impl Post {
             return;
         }
         self.size = size;
-        self.msaa = texture(gpu, "post msaa", size.0, size.1, crate::MSAA_SAMPLES);
+        // Unused with one sample (the scene is drawn straight into `hdr`).
+        let (mw, mh) = if self.samples > 1 { size } else { (1, 1) };
+        let n = if self.samples > 1 { self.samples } else { 4 };
+        self.msaa = texture(gpu, "post msaa", mw, mh, n);
         self.hdr = texture(gpu, "post hdr", size.0, size.1, 1);
         let level = |k: usize| ((size.0 >> (k + 1)).max(1), (size.1 >> (k + 1)).max(1));
         self.down_levels = (0..LEVELS)

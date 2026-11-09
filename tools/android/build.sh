@@ -45,6 +45,11 @@ STAGE="$OUT/stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/arm64-v8a" "$STAGE/assets/game"
 cp "target/$TARGET/release/libwp_player.so" "$STAGE/lib/arm64-v8a/"
+# C++ code (Luau, the Basis transcoder) links the NDK's shared C++ runtime:
+# ship it next to the game's library, or the app cannot start.
+if "$TC/llvm-readelf" -d "$STAGE/lib/arm64-v8a/libwp_player.so" | grep -q "libc++_shared.so"; then
+  cp "$TC/../sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$STAGE/lib/arm64-v8a/"
+fi
 
 # Game data as assets, packed for the tier, plus the file list the player uses to unpack them.
 cargo build -p wp_cli
