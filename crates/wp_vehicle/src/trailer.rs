@@ -438,7 +438,16 @@ fn step_trailer(
     }
     force += -0.5 * 1.225 * def.aero.drag_area_m2 * v_local.length() * v_local;
     if pull != Vec2::ZERO {
-        force -= pull * m;
+        let mut gravity = -pull * m;
+        if crate::dynamics::standing(v_local, vel.angular) {
+            // Static friction (see `dynamics::unheld`).
+            let weight_on_axles = per_axle * n_axles as f32;
+            let along = ((brake_per_wheel * (2 * n_axles) as f32) / radius
+                + def.tyre.rolling_resistance * weight_on_axles)
+                .min(peak_mu * weight_on_axles);
+            gravity = crate::dynamics::unheld(gravity, Vec2::new(along, peak_mu * weight_on_axles));
+        }
+        force += gravity;
     }
     body.apply_force(pose.to_world(force));
     body.apply_torque(moment);

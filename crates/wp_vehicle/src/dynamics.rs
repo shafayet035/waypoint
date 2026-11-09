@@ -81,6 +81,24 @@ pub fn vehicle_dynamics(world: &mut World) {
     }
 }
 
+/// Below this speed (m/s) and yaw rate (rad/s) a body counts as standing:
+/// on a slope, static friction then holds it (see [`unheld`]).
+const STANDING_MPS: f32 = 0.2;
+const STANDING_YAW: f32 = 0.05;
+
+pub(crate) fn standing(v_local: Vec2, yaw_rate: f32) -> bool {
+    v_local.length() < STANDING_MPS && yaw_rate.abs() < STANDING_YAW
+}
+
+/// Static friction on a slope. The tyre model makes grip from sliding, so
+/// alone it would let a braked vehicle creep downhill; a standing body's
+/// tyres instead hold gravity's pull (`gravity`, N, body frame) up to what
+/// they can (`hold`: along, across, N). Returns the part they do not hold.
+pub(crate) fn unheld(gravity: Vec2, hold: Vec2) -> Vec2 {
+    let part = |f: f32, h: f32| f.signum() * (f.abs() - h).max(0.0);
+    Vec2::new(part(gravity.x, hold.x), part(gravity.y, hold.y))
+}
+
 /// How a vehicle stands on `field`: contact points at its wheels.
 pub fn footing(def: &VehicleDef, pose: &Pose, field: &wp_physics::HeightField) -> Footing {
     Footing::on(
@@ -251,7 +269,21 @@ fn step_vehicle(
     );
     let (mut force, moment) = add_body_forces(ctx, veh, v_local, vel.angular, force, moment);
     if ctx.pull != Vec2::ZERO {
-        force -= ctx.pull * ctx.def.mass_kg;
+        let def = ctx.def;
+        let mut gravity = -ctx.pull * def.mass_kg;
+        if standing(v_local, vel.angular) {
+            // Braked (and rolling) tyres hold it along; any tyre holds it across.
+            let peak = def.tyre.friction * ctx.surface;
+            let along: f32 = (0..4)
+                .map(|i| {
+                    (brake_torque[i] / def.wheel.radius_m + def.tyre.rolling_resistance * loads[i])
+                        .min(peak * loads[i])
+                })
+                .sum();
+            let across = peak * loads.iter().sum::<f32>();
+            gravity = unheld(gravity, Vec2::new(along, across));
+        }
+        force += gravity;
     }
     body.apply_force(pose.to_world(force));
     body.apply_torque(moment);
@@ -867,6 +899,15 @@ mod tests {
             speed_along(&app, e).abs() < 0.05,
             "{}",
             speed_along(&app, e)
+        );
+        // ...and keeps holding it: no creeping downhill.
+        let x0 = app.world.get::<wp_physics::Pose>(e).unwrap().position;
+        drive(&mut app, e, held, 30.0);
+        let x1 = app.world.get::<wp_physics::Pose>(e).unwrap().position;
+        assert!(
+            x0.distance(x1) < 0.005,
+            "crept {} m in 30 s",
+            x0.distance(x1)
         );
         // Weight moves onto the rear wheels facing uphill (about m·g·sinθ·h/L).
         let (mut flat, f) = app_with(&def);

@@ -346,6 +346,9 @@ it, buildings on the lowest ground under their outline, cameras follow up and do
 sits 12 cm lower. Telemetry: `altitude_m`, `grade_pct`. WP-W009 (values), WP-W010 (grid too big). Flat scenes are unchanged
 (every hash, replay and picture). Sandbox: `scenes/hills.scene.ron` (a 10 % pass); gates `hill_road`, `hill_start`,
 `hill_rollback`, `bus_hill`, shot `hills`; Red Canyon has faceted red hills. Not yet: bridges and tunnels (one height per point),
-jumps (wheels never leave the ground), wet-road reflections on slopes (mirrored in z = 0), a stopped vehicle held on a slope
-by its brakes creeps (about 1 cm/s: the tyre model has no static friction).
+jumps (wheels never leave the ground), wet-road reflections on slopes (mirrored in z = 0).
+Static friction on slopes: the tyre model makes grip from sliding, so a braked vehicle used to creep downhill (9 cm in 30 s on
+10 %). A body standing still (under 0.2 m/s and 0.05 rad/s) now has gravity's pull held by its tyres up to what they can:
+along, brake torque / radius plus rolling resistance per wheel (each capped at μ·load); across, μ·total load. Vehicles and
+trailers; flat scenes unchanged.
 Not yet: testing on physical phones; running on an iOS simulator.
