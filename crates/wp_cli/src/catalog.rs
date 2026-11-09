@@ -629,6 +629,11 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Raise cell_m or shrink size_m (at most about 1.1 million grid points).",
     },
     ErrorDoc {
+        code: "WP-W011",
+        title: "A grass setting is out of range",
+        fix: "Use 0.1–40 tufts per m², heights 0.02–3 m, draw_m 5–200, and sway, verge_m and max_grade ≥ 0.",
+    },
+    ErrorDoc {
         code: "WP-Y001",
         title: "A replay refers to a scenario, scene, vehicle or mission that does not exist",
         fix: "Re-record it (`wp replay record --scenario <name>` or `wp run --record`), or restore what it refers to.",

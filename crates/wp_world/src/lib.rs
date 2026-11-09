@@ -1,6 +1,7 @@
 //! Scenes. M0 scenes are a flat ground plane with named spawn points; roads,
 //! tiles and streaming arrive with `wp_road` and world streaming in M2–M3.
 
+pub mod grass;
 mod look;
 pub mod scenery;
 pub mod terrain;
@@ -51,6 +52,10 @@ pub struct SceneDef {
     /// Hills and valleys (absent: flat ground). Roads are levelled into it.
     #[serde(default)]
     pub terrain: Option<terrain::TerrainDef>,
+    /// Dense grass that sways in the wind, drawn near the camera (kept off
+    /// roads, sidewalks, junctions, buildings and steep ground).
+    #[serde(default)]
+    pub grass: Option<grass::GrassDef>,
 }
 
 /// A scene's clock.
@@ -116,6 +121,14 @@ impl QualityTier {
         }
     }
     /// Street reflections in wet roads (a mirrored pass at half size).
+    /// Share of a scene's grass reach drawn.
+    pub fn grass_reach(self) -> f32 {
+        match self {
+            QualityTier::Low => 0.45,
+            QualityTier::Mid => 0.75,
+            QualityTier::Flagship => 1.0,
+        }
+    }
     pub fn reflections(self) -> bool {
         self != Self::Low
     }
@@ -441,6 +454,15 @@ impl SceneDef {
                 );
             }
         }
+        if let Some(g) = &s.grass {
+            for (field, expected) in g.problems() {
+                out.push(
+                    file.error_at("WP-W011", field, format!("grass `{field}` is out of range"))
+                        .expected(expected)
+                        .help("see `wp schema scene` for each grass field's meaning and units"),
+                );
+            }
+        }
         for (i, sp) in s.spawns.iter().enumerate() {
             if s.spawns[..i].iter().any(|o| o.name == sp.name) {
                 out.push(
@@ -520,6 +542,29 @@ pub fn apply_scene(
         None => {
             world.remove_resource::<scenery::CurrentScenery>();
             world.remove_resource::<wp_physics::Walls>();
+        }
+    }
+    let built_scenery = world
+        .get_resource::<scenery::CurrentScenery>()
+        .filter(|_| scenery.is_some())
+        .map(|s| s.0.clone());
+    match &scene.grass {
+        Some(def) => {
+            let map = grass::build(
+                def,
+                net.as_deref(),
+                built_scenery.as_deref(),
+                land.as_ref().map(|t| t.field.as_ref()),
+            );
+            world.insert_resource(grass::CurrentGrass(std::sync::Arc::new(
+                grass::BuiltGrass {
+                    def: def.clone(),
+                    map,
+                },
+            )));
+        }
+        None => {
+            world.remove_resource::<grass::CurrentGrass>();
         }
     }
     match net {

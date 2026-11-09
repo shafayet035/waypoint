@@ -27,6 +27,14 @@
     rock: (172, 92, 64),
     rock_from_grade: 0.8,
   )),
+  // Sparse dry desert grass, swaying in the evening wind.
+  grass: Some((
+    density_per_m2: 2.5,
+    height_m: 0.35,
+    colour: (150, 112, 62),
+    tip_colour: (232, 196, 120),
+    max_grade: 0.5,
+  )),
   spawns: [
     (name: "trailhead", position: (16.6, 10.2), heading_deg: 38.1),
     (name: "overlook", position: (25.5, -180.1), heading_deg: 131.6),

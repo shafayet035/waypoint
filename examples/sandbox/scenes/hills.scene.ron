@@ -13,6 +13,8 @@
     colour: Some((92, 112, 58)),   // grass
     rock: (118, 110, 98),
   )),
+  // Meadow grass round the road, swaying in the wind.
+  grass: Some((density_per_m2: 16.0, height_m: 0.45)),
   spawns: [
     (name: "west", position: (-560.0, -1.75), heading_deg: 0.0),
     (name: "slope", position: (-190.0, -1.75), heading_deg: 0.0),

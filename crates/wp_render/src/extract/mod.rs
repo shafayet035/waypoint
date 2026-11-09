@@ -131,6 +131,8 @@ pub struct FrameView {
     pub windscreen: Option<Windscreen>,
     /// The scene's hills and valleys, if it has any.
     pub terrain: Option<std::sync::Arc<wp_world::terrain::BuiltTerrain>>,
+    /// The scene's grass, if it has any.
+    pub grass: Option<std::sync::Arc<wp_world::grass::BuiltGrass>>,
 }
 
 /// The entity the camera follows: the player, else the first vehicle.
@@ -469,6 +471,9 @@ pub fn extract_view(world: &World, mode: CameraMode, view: &ViewOptions) -> Fram
         look,
         windscreen,
         terrain: land.map(|t| t.0.clone()),
+        grass: world
+            .get_resource::<wp_world::grass::CurrentGrass>()
+            .map(|g| g.0.clone()),
     }
 }
 

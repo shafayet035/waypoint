@@ -184,6 +184,7 @@ pub fn scene() -> FrameView {
         look: wp_world::Look::default(),
         windscreen: None,
         terrain: None,
+        grass: None,
     }
 }
 

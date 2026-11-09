@@ -26,6 +26,7 @@ use glam::Mat3;
 use wp_core::Diagnostic;
 use wp_rhi::{Gpu, OffscreenTarget, wgpu};
 
+mod grass;
 mod post;
 mod upscale;
 
@@ -874,6 +875,8 @@ pub struct Renderer {
     buildings: Option<TileCache>,
     /// The land's mesh (hilly scenes), in tiles like the roads.
     terrain: Option<TileCache>,
+    /// Swaying grass near the camera.
+    grass: grass::Grass,
     road_instances: wgpu::Buffer,
     road_instance_capacity: usize,
     /// Keep road tiles within this distance of the camera (m) and build
@@ -904,7 +907,14 @@ impl Renderer {
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("waypoint"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("shader.wgsl"),
+                    "\n",
+                    include_str!("grass.wgsl")
+                )
+                .into(),
+            ),
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -1006,6 +1016,13 @@ impl Renderer {
             (&no_reflection, &reflection_sampler),
         );
         let textures = Textures::new(gpu);
+        let grass = grass::Grass::new(
+            gpu,
+            &shader,
+            &main_layout,
+            &textures.layout,
+            [format, post::HDR_FORMAT],
+        );
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("waypoint"),
             bind_group_layouts: &[Some(&main_layout), Some(&textures.layout)],
@@ -1275,6 +1292,7 @@ impl Renderer {
             road_instance_capacity,
             buildings: None,
             terrain: None,
+            grass,
             stream_range: None,
             models: None,
             textures,
@@ -1558,6 +1576,7 @@ impl Renderer {
         self.set_lod_bias(q.lod_bias());
         self.set_max_texture_size(q.max_texture_px());
         self.set_reflections(gpu, q.reflections().then_some(REFLECTION_SCALE));
+        self.grass.reach_scale = q.grass_reach();
     }
 
     pub fn set_streaming(&mut self, range_m: Option<f32>) {
@@ -1836,6 +1855,8 @@ impl Renderer {
         }
 
         self.update_tiles(gpu, frame, eye);
+        self.grass
+            .update(gpu, frame.grass.as_ref(), frame.terrain.as_ref());
         // Static tiles to draw (resident and in view), placed relative to the
         // camera: roads with three instances each (asphalt, markings,
         // sidewalks), buildings with one. `static_draws[k]` uses instance k.
@@ -2181,6 +2202,9 @@ impl Renderer {
                 stats.triangles += mesh.index_count as u64 / 3 * count;
                 first += count;
             }
+            let (calls, tris) = self.grass.draw(&mut pass, post_on);
+            stats.draw_calls += calls;
+            stats.triangles += tris;
             if frame.windscreen.is_some() {
                 pass.set_pipeline(pick(&self.glass, hdr_glass));
                 pass.set_bind_group(1, &self.textures.white, &[]);

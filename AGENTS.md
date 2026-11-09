@@ -351,4 +351,14 @@ Static friction on slopes: the tyre model makes grip from sliding, so a braked v
 10 %). A body standing still (under 0.2 m/s and 0.05 rad/s) now has gravity's pull held by its tyres up to what they can:
 along, brake torque / radius plus rolling resistance per wheel (each capped at μ·load); across, μ·total load. Vehicles and
 trailers; flat scenes unchanged.
+Grass (`wp_world::grass`, `wp_render::grass` + `grass.wgsl`): a scene's `grass: Some((density_per_m2, height_m, colour,
+tip_colour, draw_m, sway, verge_m, max_grade, area))`. `grass::build` makes a mask on a 1 m grid (coarser past 4M cells) over the
+area (else the terrain's square, else 150 m round the roads): bare on roads, sidewalks, junctions and lane connectors plus
+`verge_m` (0.7 m soft edge) and inside buildings, thinning on ground steeper than 70–100 % of `max_grade`. The GPU places the
+tufts: one instanced draw, instance k = a cell of a square grid round the camera snapped to world cells (stable as the camera
+moves; PCG hash per cell, not sin, which goes coarse far from the origin), kept by mask × clump noise × distance fade, rooted on
+the land heights (R32Float, bilinear by hand), five triangle blades whose tips sway with simulated time (shots repeat). Lit like
+meshes (wrapped light, sun shadows, local lights, light through blades towards the sun, fog, post). Reach × tier: Low 0.45,
+Mid 0.75, Flagship 1 (`QualityTier::grass_reach`); at most 160k tufts. No cost or change in scenes without grass. WP-W011.
+Sandbox hills: meadow (16 per m²); Red Canyon: sparse dry grass.
 Not yet: testing on physical phones; running on an iOS simulator.

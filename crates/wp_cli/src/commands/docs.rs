@@ -113,7 +113,8 @@ scenery: Some(\"scenery/town.scenery.ron\") (buildings: `wp docs scenery`),
 terrain: Some((size_m: (1600.0, 1000.0), noise: Some((height_m: 8.0, wavelength_m: 180.0)),
 hills: [(position: (0.0, 0.0), radius_m: 480.0, height_m: 48.0)], faceted: false)) (hills and valleys:
 roads are levelled into the land, which blends back to its own shape over blend_m; vehicles feel the
-slopes; telemetry altitude_m and grade_pct; `wp schema scene` lists every field).
+slopes; telemetry altitude_m and grade_pct; `wp schema scene` lists every field),
+grass: Some((density_per_m2: 8.0, height_m: 0.45)) (swaying grass near the camera, kept off roads and buildings).
 
 Junction control (road files, on a node): control: Signals((green_s: 20.0, amber_s: 3.0, all_red_s: 2.0))
 or control: Priority(major: [\"high_street\"]); default Auto (take turns).
